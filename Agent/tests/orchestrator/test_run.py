@@ -194,3 +194,20 @@ async def test_crash_then_resume_completes_without_duplicates(db_sessionmaker, t
     assert outcome.state == "review_ready"
     cids = [f.canonical_id for f in await findings(db_sessionmaker, run_id)]
     assert len(cids) == len(set(cids)) >= 3
+
+
+async def test_last_satisfaction_drives_the_explore_ratio(db_sessionmaker, tmp_path):
+    from tf_db.models import Direction, RunFeedback
+
+    orch = await build(db_sessionmaker, tmp_path, World())
+    first = await orch.create_run("testy", SETTINGS)
+    async with db_sessionmaker() as s:
+        run = await s.get(Run, first)
+        run.state = "review_ready"
+        s.add(RunFeedback(run_id=first, satisfaction=9))
+        for i in range(3):
+            s.add(Direction(character_id=run.character_id, key=f"d{i}", label="x", alpha=2, beta=1))
+        await s.commit()
+    second = await orch.create_run("testy", SETTINGS)
+    async with db_sessionmaker() as s:
+        assert (await s.get(Run, second)).explore_ratio_used == pytest.approx(0.25)

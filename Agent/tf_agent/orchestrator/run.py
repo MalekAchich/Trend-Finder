@@ -37,6 +37,7 @@ from tf_db.models import (
     FindingScore,
     Round,
     Run,
+    RunFeedback,
     ScopeClaim,
     Seed,
     TasteProfile,
@@ -94,8 +95,11 @@ class Orchestrator:
 
     # ---------- run lifecycle ----------
     async def _last_satisfaction(self, character_id: uuid.UUID) -> int | None:
-        """Overall satisfaction of the character's latest rated run (Plan 4 feedback); None until then."""
-        return None
+        """Overall satisfaction the owner gave the character's most recent rated run (D-18)."""
+        async with self._sm() as s:
+            return (await s.execute(select(RunFeedback.satisfaction).join(Run, Run.id == RunFeedback.run_id).where(
+                Run.character_id == character_id).order_by(RunFeedback.updated_at.desc()).limit(1))
+                    ).scalar_one_or_none()
 
     async def create_run(self, slug: str, settings: RunSettings) -> uuid.UUID:
         ch = await load_character(self._sm, slug)
