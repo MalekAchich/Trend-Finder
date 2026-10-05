@@ -118,6 +118,7 @@ def test_ytdlp_restricts_extractors():
     with pytest.raises(ToolFailure):
         asyncio.run(YtDlp(extractor=capture).metadata(TT))
     assert seen["allowed_extractors"] and all("generic" not in p for p in seen["allowed_extractors"])
+    assert seen["noprogress"] is True  # progress bars must never leak into CLI/API output
 
 
 # ---- I4: concurrent upserts never deadlock; sink failures never lose a search ----

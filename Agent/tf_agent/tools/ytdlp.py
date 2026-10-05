@@ -98,7 +98,8 @@ class YtDlp:
         self._pool = ThreadPoolExecutor(max_workers=max_parallel, thread_name_prefix="yt-dlp")
 
     def _opts(self, **extra: Any) -> dict[str, Any]:
-        opts: dict[str, Any] = {"quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 20,
+        opts: dict[str, Any] = {"quiet": True, "no_warnings": True, "noprogress": True, "noplaylist": True,
+                                "socket_timeout": 20,
                                 "allowed_extractors": ALLOWED_EXTRACTORS}
         if self.cookies_file:
             opts["cookiefile"] = str(self.cookies_file)
