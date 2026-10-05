@@ -21,6 +21,7 @@ from tf_backend.services import build_services, close_services
 
 app = typer.Typer(no_args_is_help=True, help="Trend Finder command line")
 login_app = typer.Typer(no_args_is_help=True, help="Log in to a model provider")
+seed_app = typer.Typer(no_args_is_help=True, help="Manage a character's seed videos")
 
 
 @app.callback()
@@ -29,6 +30,7 @@ def main() -> None:
 
 
 app.add_typer(login_app, name="login")
+app.add_typer(seed_app, name="seed")
 
 
 def alembic_config() -> Config:
@@ -227,3 +229,50 @@ async def _analyze(url: str) -> None:
         typer.echo(f"  transcript ({r.transcript['language']}): {r.transcript['text'][:160]}")
     if r.contact_sheet_path:
         typer.echo(f"  contact sheet: {r.contact_sheet_path}")
+
+
+@app.command("sync-characters")
+def sync_characters_cmd() -> None:
+    """Import/refresh characters from the characters folder (new version only when something changed)."""
+    asyncio.run(_sync_characters())
+
+
+async def _sync_characters() -> None:
+    from tf_agent.characters.sync import sync_characters
+    from tf_db.session import make_engine, make_sessionmaker
+
+    settings = AppSettings()
+    engine = make_engine(settings.database_url)
+    try:
+        for r in await sync_characters(settings.characters_dir, make_sessionmaker(engine)):
+            typer.echo(f"{r.slug}: version {r.version}{' (updated)' if r.changed else ' (unchanged)'}")
+    finally:
+        await engine.dispose()
+
+
+@seed_app.command("add")
+def seed_add(slug: str, url: str) -> None:
+    """Add a seed video (an example of the direction you want) to a character."""
+    asyncio.run(_seed_add(slug, url))
+
+
+async def _seed_add(slug: str, url: str) -> None:
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from tf_agent.characters.sync import load_character
+    from tf_agent.tools.normalize import canonical_id
+    from tf_db.models import Seed
+    from tf_db.session import make_engine, make_sessionmaker
+
+    settings = AppSettings()
+    engine = make_engine(settings.database_url)
+    try:
+        sm = make_sessionmaker(engine)
+        ch = await load_character(sm, slug)
+        async with sm() as s:
+            await s.execute(pg_insert(Seed).values(character_id=ch.character_id, url=url, canonical_id=canonical_id(url),
+                                                   source="cli").on_conflict_do_nothing())
+            await s.commit()
+    finally:
+        await engine.dispose()
+    typer.echo(f"seed added to {slug}: {url}")

@@ -17,6 +17,7 @@ class AppSettings(BaseSettings):
     chatgpt_models_cache: Path = Path("secrets/chatgpt-models.json")
     per_provider_concurrency: int = 4
     searxng_url: str = "http://127.0.0.1:8888"
+    characters_dir: Path = Path("../AI Influencers Characters")
     media_dir: Path = Path("media")
     media_quota_gb: float = 5.0
     whisper_model: str = "small"
