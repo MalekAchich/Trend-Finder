@@ -28,10 +28,12 @@ class PlatformConfig:
     jitter_s: float = 0.0
 
 
+# Spacing per platform call (yt-dlp metadata / search). Anonymous mode has no account to lose, and the circuit
+# breaker backs off on 429s, so TikTok runs at 1–2 s per call instead of the 3–6 s meant for logged-in browsers.
 DEFAULT_PLATFORMS: dict[str, PlatformConfig] = {
-    "tiktok": PlatformConfig(3.0, 3.0),
+    "tiktok": PlatformConfig(1.0, 1.0),
     "instagram": PlatformConfig(5.0, 5.0),
-    "youtube": PlatformConfig(1.0, 0.5),
+    "youtube": PlatformConfig(0.3, 0.3),
     "web": PlatformConfig(1.0),
 }
 
@@ -78,6 +80,10 @@ class PlatformRegistry:
         log.info("platform %s failure: %s", platform, reason)
         self._breakers[platform].record_failure()
         await self._persist(platform)
+
+    def configure_mode(self, platform: str, mode: Mode) -> None:
+        """Set a platform's access mode at startup (persisted with the next health change)."""
+        self._modes[platform] = mode
 
     async def set_mode(self, platform: str, mode: Mode) -> None:
         self._modes[platform] = mode
