@@ -289,3 +289,171 @@ async def _seed_add(slug: str, url: str) -> None:
     finally:
         await engine.dispose()
     typer.echo(f"seed added to {slug}: {url}")
+
+
+def _parse_run_id(raw: str):
+    import uuid
+
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        typer.echo("that is not a valid run id (use `tf runs` to list them)", err=True)
+        raise typer.Exit(2) from None
+
+
+def _event_line(e: dict) -> str | None:
+    p = e["payload"]
+    kind = e["type"]
+    if kind == "run.state":
+        extra = f" — {p['stop_reason']}" if p.get("stop_reason") else ""
+        return f"● run {p['state']}{extra}"
+    if kind == "plan.created":
+        return f"◆ round {p['round']}: {p['tasks']} tasks ({p['explore']} explore / {p['exploit']} exploit). {p['summary'][:160]}"
+    if kind == "task.finished":
+        if p.get("failed"):
+            return f"  ✗ {p['type']} failed: {str(p['failed'])[:120]}"
+        return f"  ✓ {p['type']}: {len(p.get('accepted', []))} accepted, {len(p.get('rejected', []))} rejected, {p.get('leads', 0)} leads ({p.get('provider')})"
+    if kind == "round.finished":
+        return f"◆ round {p['round']} done: {p['new_analyzed']} analyzed"
+    return None
+
+
+async def _follow(orchestrator, run_id, stop) -> None:
+    after = 0
+    while True:
+        for e in await orchestrator.blackboard.events_after(run_id, after):
+            after = e["id"]
+            line = _event_line(e)
+            if line:
+                typer.echo(line)
+        if stop.is_set():
+            return
+        await asyncio.sleep(2)
+
+
+async def _execute(runtime, run_id) -> None:
+    stop = asyncio.Event()
+    follower = asyncio.create_task(_follow(runtime.orchestrator, run_id, stop))
+    try:
+        outcome = await runtime.orchestrator.execute(run_id)
+    finally:
+        stop.set()
+        await follower
+    typer.echo(f"\nrun {run_id}: {outcome.state} — {outcome.stop_reason} ({outcome.findings_analyzed} analyzed)")
+    await _print_trends(runtime.services.sessionmaker, run_id, 10)
+
+
+@app.command()
+def run(
+    slug: str = typer.Argument(..., help="character slug, e.g. nicolaiz"),
+    rounds: int = typer.Option(3, min=1, max=10),
+    tasks: int = typer.Option(12, min=1, max=16, help="tasks per round"),
+    target: int = typer.Option(20, min=1, help="stop once this many findings score ≥ --good"),
+    good: float = typer.Option(60.0, help="score that counts toward the target"),
+    platforms: str = typer.Option("tiktok,youtube,instagram"),
+    minutes: float = typer.Option(60.0, help="wall-clock limit"),
+    workers: int = typer.Option(8, min=1, max=16),
+) -> None:
+    """Start a multi-agent trend-finding run for a character."""
+    asyncio.run(_run(slug, rounds, tasks, target, good, platforms, minutes, workers))
+
+
+async def _run(slug, rounds, tasks, target, good, platforms, minutes, workers) -> None:
+    from tf_agent.orchestrator.run import RunSettings
+    from tf_backend.runtime import build_runtime
+
+    runtime = await build_runtime()
+    try:
+        settings = RunSettings(platforms=[p.strip() for p in platforms.split(",") if p.strip()], rounds=rounds,
+                               tasks_per_round=tasks, target_findings=target, good_score=good,
+                               wall_clock_s=minutes * 60, workers=workers)
+        run_id = await runtime.orchestrator.create_run(slug, settings)
+        typer.echo(f"run {run_id} started (resume with `tf resume {run_id}` if interrupted)")
+        await _execute(runtime, run_id)
+    finally:
+        await runtime.close()
+
+
+@app.command()
+def resume(run_id: str) -> None:
+    """Resume an interrupted run where it left off."""
+    rid = _parse_run_id(run_id)
+
+    async def go() -> None:
+        from tf_backend.runtime import build_runtime
+
+        runtime = await build_runtime()
+        try:
+            await _execute(runtime, rid)
+        finally:
+            await runtime.close()
+
+    asyncio.run(go())
+
+
+@app.command()
+def runs(limit: int = typer.Option(10, min=1, max=100)) -> None:
+    """List recent runs."""
+    async def go() -> None:
+        from sqlalchemy import select
+
+        from tf_db.models import Character, Run
+        from tf_db.session import make_engine, make_sessionmaker
+
+        engine = make_engine(AppSettings().database_url)
+        try:
+            async with make_sessionmaker(engine)() as s:
+                rows = (await s.execute(select(Run, Character.slug).join(Character, Character.id == Run.character_id)
+                                        .order_by(Run.started_at.desc()).limit(limit))).all()
+        finally:
+            await engine.dispose()
+        for r, slug in rows:
+            typer.echo(f"{r.id}  {slug:<12} {r.state:<13} round {r.current_round}  {r.started_at:%Y-%m-%d %H:%M}  "
+                       f"{r.stop_reason or ''}")
+
+    asyncio.run(go())
+
+
+async def _print_trends(sessionmaker, run_id, top: int) -> None:
+    from sqlalchemy import select
+
+    from tf_db.models import Finding, FindingScore, TrendCluster, Video, VideoAnalysis
+
+    async with sessionmaker() as s:
+        rows = (await s.execute(
+            select(TrendCluster, FindingScore, Video, VideoAnalysis)
+            .join(Finding, Finding.id == TrendCluster.best_finding_id)
+            .join(FindingScore, FindingScore.finding_id == Finding.id)
+            .join(Video, Video.canonical_id == Finding.canonical_id)
+            .outerjoin(VideoAnalysis, VideoAnalysis.canonical_id == Finding.canonical_id)
+            .where(TrendCluster.run_id == run_id).order_by(TrendCluster.rank).limit(top))).all()
+    if not rows:
+        typer.echo("no trend cards for this run")
+        return
+    for c, sc, v, a in rows:
+        flag = "  ⚠ models disagree" if sc.disagreement else ""
+        typer.echo(f"\n#{c.rank}  overall {c.overall:.0f}  (fit {sc.fit or 0:.0f} · kling {sc.feasibility or 0:.0f} · "
+                   f"momentum {sc.momentum or 0:.0f} · fresh {sc.freshness or 0:.0f}){flag}")
+        typer.echo(f"    {v.url}   [{c.member_count} version(s)] {c.label or ''}")
+        if sc.adaptation_idea:
+            typer.echo(f"    idea: {sc.adaptation_idea[:220]}")
+        if a is not None and a.best_clean_segment:
+            seg = a.best_clean_segment
+            typer.echo(f"    motion window: {seg['start_s']:.1f}s → {seg['end_s']:.1f}s   sheet: {a.contact_sheet_path}")
+
+
+@app.command()
+def trends(run_id: str, top: int = typer.Option(20, min=1, max=100)) -> None:
+    """Show a run's ranked trend cards."""
+    rid = _parse_run_id(run_id)
+
+    async def go() -> None:
+        from tf_db.session import make_engine, make_sessionmaker
+
+        engine = make_engine(AppSettings().database_url)
+        try:
+            await _print_trends(make_sessionmaker(engine), rid, top)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())

@@ -16,3 +16,14 @@ def test_search_rejects_unknown_platform():
 def test_character_commands_exist():
     out = CliRunner().invoke(app, ["--help"]).output
     assert "sync-characters" in out and "seed" in out
+
+
+def test_run_commands_exist():
+    out = CliRunner().invoke(app, ["--help"]).output
+    for name in ("run", "resume", "runs", "trends"):
+        assert name in out
+
+
+def test_trends_rejects_a_bad_run_id():
+    result = CliRunner().invoke(app, ["trends", "not-a-uuid"])
+    assert result.exit_code == 2 and "run id" in result.output

@@ -61,3 +61,25 @@ def make_client(adapters: dict[str, FakeAdapter], roles: dict | None = None, con
     ledger = ListLedger()
     client = ModelClient(adapters, RoleRouter(roles, registry), governor, ledger, sleep=_no_sleep)
     return client, governor, ledger
+
+
+# ---- run fixtures (Plan 3) ----
+async def create_test_run(sessionmaker, n_tasks: int = 1, slug: str = "nicolaiz"):
+    """Character + version + run (+ scout tasks) for DB tests. Returns (character_id, run_id, task_ids)."""
+    from tf_db.models import Character, CharacterVersion, Run, Task
+
+    async with sessionmaker() as s:
+        c = Character(slug=slug, name=slug.title(), folder_path="/x")
+        s.add(c)
+        await s.flush()
+        v = CharacterVersion(character_id=c.id, version=1, profile_md="p", front_matter={},
+                             canonical_image_path="/i.png", content_hash="h")
+        s.add(v)
+        await s.flush()
+        r = Run(character_id=c.id, character_version_id=v.id, state="running")
+        s.add(r)
+        await s.flush()
+        tasks = [Task(run_id=r.id, task_type="scout", platform="tiktok") for _ in range(n_tasks)]
+        s.add_all(tasks)
+        await s.commit()
+        return c.id, r.id, [t.id for t in tasks]
