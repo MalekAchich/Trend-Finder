@@ -39,7 +39,8 @@ def test_clean_segments_break_on_cuts_and_unclean_frames():
 
 @pytest.fixture(scope="module")
 def analyzer():
-    return PoseAnalyzer()
+    with PoseAnalyzer() as pa:
+        yield pa
 
 
 async def frames_of(path, tmp_path, name):
@@ -66,3 +67,13 @@ async def test_camera_motion_static_vs_pan(person_clips, tmp_path):
     pan, per_frame = camera_motion([p for _, p in await frames_of(person_clips["pan"], tmp_path, "p")])
     assert still < 0.05 and pan > still + 0.1
     assert len(per_frame) == len(list((tmp_path / "p").glob("*.jpg")))
+
+
+async def test_pose_analyzer_closes_explicitly(person_clips, tmp_path):
+    """MediaPipe deadlocks if its landmarker is only closed by the GC at shutdown: owners must close explicitly."""
+    frames = [p for _, p in await frames_of(person_clips["one"], tmp_path, "c")]
+    with PoseAnalyzer() as pa:
+        assert pa.analyze(frames).single_person_ratio >= 0.8
+        assert pa._landmarker is not None
+    assert pa._landmarker is None
+    pa.close()  # idempotent

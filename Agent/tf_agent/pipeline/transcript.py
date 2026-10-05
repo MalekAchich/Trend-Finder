@@ -1,10 +1,22 @@
 """Local speech transcription with faster-whisper (CPU int8, VAD) — loaded lazily, once per process."""
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+import numpy as np
+
+SAMPLE_RATE = 16000
+
+
+def decode_audio(path: Path) -> np.ndarray:
+    """16 kHz mono float32 via ffmpeg (avoids faster-whisper's PyAV decoder, which breaks across PyAV versions)."""
+    out = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(path), "-vn", "-ac", "1", "-ar",
+                          str(SAMPLE_RATE), "-f", "s16le", "-"], capture_output=True, timeout=300, check=True).stdout
+    return np.frombuffer(out, dtype=np.int16).astype(np.float32) / 32768.0
 
 
 @dataclass
@@ -39,7 +51,13 @@ class Transcriber:
     def transcribe(self, path: Path, has_audio: bool, duration_s: float) -> Transcript:
         if not has_audio:
             return Transcript()
-        segments, info = self._get().transcribe(str(path), vad_filter=True, beam_size=1)
+        try:
+            audio = decode_audio(path)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            return Transcript()  # undecodable audio track: treat as no speech
+        if audio.size == 0:
+            return Transcript()
+        segments, info = self._get().transcribe(audio, vad_filter=True, beam_size=1)
         segs = [{"start": round(float(s.start), 2), "end": round(float(s.end), 2), "text": s.text.strip()}
                 for s in segments if s.text.strip()]
         if not segs:

@@ -24,12 +24,12 @@ class MediaRetention:
     def can_download(self) -> bool:
         return self.usage() < self.quota_bytes * DOWNLOAD_STOP_FRACTION
 
-    def enforce(self) -> int:
+    def enforce(self, extra_protected: Iterable[Path] = ()) -> int:
         """Delete oldest unprotected evictable files until usage ≤ quota. Returns bytes freed."""
         usage = self.usage()
         if usage <= self.quota_bytes:
             return 0
-        protected = {Path(p).resolve() for p in self._protected()}
+        protected = {Path(p).resolve() for p in [*self._protected(), *extra_protected]}
         candidates = sorted((p for p in self._files(EVICTABLE_DIRS) if p.resolve() not in protected),
                             key=lambda p: p.stat().st_mtime)
         freed = 0

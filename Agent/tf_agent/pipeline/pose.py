@@ -57,6 +57,19 @@ class PoseAnalyzer:
         self.num_poses = num_poses
         self._landmarker = None
 
+    def close(self) -> None:
+        """Release the MediaPipe landmarker. Must be called by owners: MediaPipe deadlocks when its __del__
+        runs late during interpreter shutdown."""
+        if self._landmarker is not None:
+            landmarker, self._landmarker = self._landmarker, None
+            landmarker.close()
+
+    def __enter__(self) -> PoseAnalyzer:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     def _get(self):
         if self._landmarker is None:
             from mediapipe.tasks.python.core.base_options import BaseOptions

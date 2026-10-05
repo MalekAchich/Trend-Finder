@@ -39,20 +39,20 @@ def test_no_audio_never_loads_the_model(tmp_path):
     assert (t.language, t.text, t.speech_ratio, t.segments) == (None, "", 0.0, [])
 
 
-def test_transcript_text_language_and_speech_ratio(tmp_path):
+def test_transcript_text_language_and_speech_ratio(clips):
     fake = FakeWhisper([Seg(0.0, 1.0, " hi "), Seg(2.0, 2.5, "there")])
-    t = Transcriber(model_factory=lambda: fake).transcribe(tmp_path / "x.mp4", has_audio=True, duration_s=3.0)
+    t = Transcriber(model_factory=lambda: fake).transcribe(clips["av"], has_audio=True, duration_s=3.0)
     assert t.text == "hi there" and t.language == "en" and t.speech_ratio == pytest.approx(0.5)
     assert t.segments == [{"start": 0.0, "end": 1.0, "text": "hi"}, {"start": 2.0, "end": 2.5, "text": "there"}]
     assert fake.calls[0][1]["vad_filter"] is True
 
 
-def test_music_only_has_no_language(tmp_path):
-    t = Transcriber(model_factory=lambda: FakeWhisper([])).transcribe(tmp_path / "x.mp4", has_audio=True, duration_s=3)
+def test_music_only_has_no_language(clips):
+    t = Transcriber(model_factory=lambda: FakeWhisper([])).transcribe(clips["av"], has_audio=True, duration_s=3)
     assert t.language is None and t.speech_ratio == 0.0
 
 
-def test_model_is_loaded_once(tmp_path):
+def test_model_is_loaded_once(clips):
     loads = []
 
     def factory():
@@ -61,7 +61,7 @@ def test_model_is_loaded_once(tmp_path):
 
     tr = Transcriber(model_factory=factory)
     for _ in range(3):
-        tr.transcribe(tmp_path / "x.mp4", has_audio=True, duration_s=3)
+        tr.transcribe(clips["av"], has_audio=True, duration_s=3)
     assert len(loads) == 1
 
 
@@ -100,3 +100,21 @@ def test_can_download_stops_at_95_percent(tmp_path):
     assert r.can_download()
     make_file(tmp_path / "sheets" / "t.jpg", 20, 1)
     assert not r.can_download()
+
+
+def test_audio_is_decoded_with_ffmpeg_not_pyav(clips):
+    import numpy as np
+
+    fake = FakeWhisper([Seg(0.0, 1.0, "tone")])
+    Transcriber(model_factory=lambda: fake).transcribe(clips["av"], has_audio=True, duration_s=3.0)
+    audio = fake.calls[0][0]
+    assert isinstance(audio, np.ndarray) and audio.dtype == np.float32
+    assert abs(len(audio) - 3 * 16000) < 1600 and 0.05 < float(np.abs(audio).max()) <= 1.0
+
+
+def test_undecodable_audio_means_no_speech(tmp_path):
+    bad = tmp_path / "bad.mp4"
+    bad.write_bytes(b"garbage")
+    fake = FakeWhisper([Seg(0.0, 1.0, "never")])
+    assert Transcriber(model_factory=lambda: fake).transcribe(bad, has_audio=True, duration_s=3).text == ""
+    assert fake.calls == []

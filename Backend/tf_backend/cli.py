@@ -158,3 +158,72 @@ async def _demo(provider: str, question: str) -> None:
     typer.echo(f"{res.status} via {res.provider}/{res.model} in {res.steps} steps: {res.result or res.error}")
     if res.status != "succeeded":
         raise typer.Exit(1)
+
+
+PLATFORM_SEARCH = {"tiktok": "tiktok_search", "instagram": "instagram_search", "shorts": "shorts_search"}
+
+
+@app.command()
+def search(
+    platform: str = typer.Argument(..., help="tiktok, instagram or shorts"),
+    query: str = typer.Argument(..., help="search words"),
+    max_results: int = typer.Option(10, "--max", min=1, max=30),
+    recent: str | None = typer.Option(None, help="day, week, month or year"),
+) -> None:
+    """Discover videos on one platform (no account needed; Instagram is discovery-only)."""
+    if platform not in PLATFORM_SEARCH:
+        typer.echo("platform must be one of: tiktok, instagram, shorts", err=True)
+        raise typer.Exit(2)
+    asyncio.run(_search(platform, query, max_results, recent))
+
+
+async def _search(platform: str, query: str, max_results: int, recent: str | None) -> None:
+    from tf_agent.tools.agent_tools import compact_discovery
+    from tf_agent.tools.factory import build_tool_stack
+    from tf_db.session import make_engine, make_sessionmaker
+
+    settings = AppSettings()
+    engine = make_engine(settings.database_url)
+    try:
+        stack = build_tool_stack(settings, make_sessionmaker(engine))
+        res = await getattr(stack.platforms, PLATFORM_SEARCH[platform])(query, max_results, recent)
+        typer.echo(compact_discovery(res.to_dict()))
+    finally:
+        await engine.dispose()
+
+
+@app.command()
+def analyze(url: str = typer.Argument(..., help="TikTok, Instagram or YouTube video URL")) -> None:
+    """Download and analyse one video: contact sheet, pose-based Kling feasibility, transcript."""
+    asyncio.run(_analyze(url))
+
+
+async def _analyze(url: str) -> None:
+    from tf_agent.pipeline.analyze import thread_runner
+    from tf_agent.pipeline.pose import PoseAnalyzer
+    from tf_agent.pipeline.transcript import Transcriber
+    from tf_agent.tools.factory import build_analyzer, build_tool_stack
+    from tf_db.session import make_engine, make_sessionmaker
+
+    settings = AppSettings()
+    engine = make_engine(settings.database_url)
+    try:
+        stack = build_tool_stack(settings, make_sessionmaker(engine))
+        item = await stack.platforms.get_video(url)
+        runner = thread_runner(PoseAnalyzer(), Transcriber(settings.whisper_model))
+        try:
+            r = await build_analyzer(settings, stack, runner).analyze(item)
+        finally:
+            runner.close()
+    finally:
+        await engine.dispose()
+    typer.echo(f"{r.canonical_id}: feasibility={r.feasibility} filtered={r.filtered_reason or 'no'}")
+    if r.best_clean_segment:
+        typer.echo(f"  best clean segment: {r.best_clean_segment['start_s']:.1f}s → {r.best_clean_segment['end_s']:.1f}s")
+    if r.pose:
+        typer.echo(f"  single person {r.pose['single_person_ratio']:.0%}, body visible {r.pose['body_visibility']:.0%},"
+                   f" camera motion {r.camera_motion}, cuts {len(r.cuts)}")
+    if r.transcript and r.transcript.get("text"):
+        typer.echo(f"  transcript ({r.transcript['language']}): {r.transcript['text'][:160]}")
+    if r.contact_sheet_path:
+        typer.echo(f"  contact sheet: {r.contact_sheet_path}")
