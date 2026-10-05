@@ -1,0 +1,20 @@
+name: trendfinder
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: tf
+      POSTGRES_PASSWORD: tf
+      POSTGRES_DB: trendfinder
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - tf_pgdata:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tf -d trendfinder"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+volumes:
+  tf_pgdata: {}

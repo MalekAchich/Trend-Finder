@@ -1,1 +1,2 @@
-"""Root pytest config. Shared DB fixtures are registered in Task 2."""
+"""Root pytest config: shared DB fixtures for Database/, Agent/ and Backend/ tests."""
+pytest_plugins = ["tf_db.pytest_plugin"]

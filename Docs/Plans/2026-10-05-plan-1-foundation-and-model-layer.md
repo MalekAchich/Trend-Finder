@@ -115,8 +115,8 @@ Frontend/dist/
 
 `.env.example`:
 ```dotenv
-DATABASE_URL=postgresql+asyncpg://tf:tf@localhost:5432/trendfinder
-DATABASE_URL_TEST=postgresql+asyncpg://tf:tf@localhost:5432/trendfinder_test
+DATABASE_URL=postgresql+asyncpg://tf:tf@localhost:5433/trendfinder
+DATABASE_URL_TEST=postgresql+asyncpg://tf:tf@localhost:5433/trendfinder_test
 CLAUDE_BIN=claude
 CHATGPT_AUTH_FILE=secrets/chatgpt-auth.json
 PER_PROVIDER_CONCURRENCY=4
@@ -318,7 +318,7 @@ services:
       POSTGRES_PASSWORD: tf
       POSTGRES_DB: trendfinder
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - tf_pgdata:/var/lib/postgresql/data
       - ./init:/docker-entrypoint-initdb.d:ro
@@ -472,8 +472,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class DbSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://tf:tf@localhost:5432/trendfinder"
-    database_url_test: str = "postgresql+asyncpg://tf:tf@localhost:5432/trendfinder_test"
+    database_url: str = "postgresql+asyncpg://tf:tf@localhost:5433/trendfinder"
+    database_url_test: str = "postgresql+asyncpg://tf:tf@localhost:5433/trendfinder_test"
 ```
 
 `Database/tf_db/ids.py`:
@@ -705,6 +705,7 @@ pytest_plugins = ["tf_db.pytest_plugin"]
 [alembic]
 script_location = %(here)s/migrations
 prepend_sys_path = .
+path_separator = os
 
 [loggers]
 keys = root,sqlalchemy,alembic
@@ -4382,7 +4383,7 @@ class AppSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://tf:tf@localhost:5432/trendfinder"
+    database_url: str = "postgresql+asyncpg://tf:tf@localhost:5433/trendfinder"
     config_dir: Path = Path("config")
     claude_bin: str = "claude"
     claude_runtime_dir: Path = Path(tempfile.gettempdir()) / "tf-claude"

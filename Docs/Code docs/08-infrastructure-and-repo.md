@@ -66,7 +66,7 @@ The backend and frontend run natively (D-25).
 ## Environment (`.env`)
 
 ```
-DATABASE_URL=postgresql+asyncpg://tf:tf@localhost:5432/trendfinder
+DATABASE_URL=postgresql+asyncpg://tf:tf@localhost:5433/trendfinder
 SEARXNG_URL=http://localhost:8888
 CHARACTERS_DIR=../AI Influencers Characters
 MEDIA_DIR=./media
