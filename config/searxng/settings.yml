@@ -1,6 +1,6 @@
+# SearXNG for Trend Finder (local only, bound to 127.0.0.1). The secret comes from SEARXNG_SECRET (compose).
 use_default_settings: true
 server:
-  secret_key: "probe-only-local"
   limiter: false
   image_proxy: false
 search:
