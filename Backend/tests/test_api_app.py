@@ -246,3 +246,17 @@ async def test_unfinished_runs_resume_on_startup(ctx):
     await asyncio.sleep(0.05)
     assert ctx.orchestrator.executed == [run_id]
     await ctx.runs.shutdown()
+
+
+async def test_resume_on_startup_requeues_orphaned_tasks_and_includes_interrupted(ctx):
+    from tf_db.models import Task
+
+    run_id = await ctx.orchestrator.create_run("testy", None)
+    async with ctx.sessionmaker() as s:
+        await s.execute(update(Run).where(Run.id == run_id).values(state="interrupted"))
+        s.add(Task(run_id=run_id, task_type="scout", state="running"))
+        await s.commit()
+    assert await ctx.runs.resume_unfinished() == [run_id]
+    async with ctx.sessionmaker() as s:
+        assert (await s.execute(select(Task.state).where(Task.run_id == run_id))).scalar_one() == "queued"
+    await ctx.runs.shutdown()

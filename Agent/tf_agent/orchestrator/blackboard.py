@@ -18,6 +18,33 @@ _KINDS = (("queries", "query", norm_query), ("hashtags", "hashtag", norm_hashtag
           ("sounds", "sound", lambda v: v.strip().lower()), ("creators", "creator", norm_handle))
 
 
+class EventCursor:
+    """Delivers each event exactly once even when concurrent writers commit their ids out of order.
+
+    Event ids come from a sequence (assigned at INSERT, visible at COMMIT), so a reader that already saw id 101 can
+    still meet id 100 later. The cursor re-reads a trailing window and remembers what it delivered.
+    """
+
+    def __init__(self, board: Blackboard, run_id: uuid.UUID, after: int = 0, window: int = 500) -> None:
+        self.board, self.run_id, self.window = board, run_id, window
+        self.floor = after  # the client already has everything up to here
+        self.high = after
+        self.sent: set[int] = set()
+
+    async def next_batch(self, limit: int = 500) -> list[dict[str, Any]]:
+        start = max(self.floor, self.high - self.window)
+        events = await self.board.events_after(self.run_id, start, limit + self.window)
+        fresh = [e for e in events if e["id"] > self.floor and e["id"] not in self.sent][:limit]
+        for e in fresh:
+            self.sent.add(e["id"])
+            self.high = max(self.high, e["id"])
+        if len(self.sent) > 4 * self.window:  # forget ids far below the re-read window
+            cutoff = self.high - self.window
+            self.sent = {i for i in self.sent if i > cutoff}
+            self.floor = max(self.floor, cutoff)
+        return fresh
+
+
 class Blackboard:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sm = sessionmaker

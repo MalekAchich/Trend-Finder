@@ -11,11 +11,11 @@ import logging
 import random
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tf_agent.characters.sync import LoadedCharacter, load_character
@@ -29,6 +29,7 @@ from tf_agent.roles.runners import RoleOutputError, Roles, TaskSpec
 from tf_agent.roles.schemas import WorkPlan
 from tf_agent.scoring.directions import match_direction_key, normalize_key
 from tf_agent.scoring.explore import DirectionStat, explore_ratio, split_tasks, thompson_rank
+from tf_agent.scoring.subscores import DEFAULT_WEIGHTS
 from tf_agent.tools.platforms import SeenFilter
 from tf_db.models import (
     Character,
@@ -48,6 +49,7 @@ from tf_db.models import (
 log = logging.getLogger(__name__)
 WORK_KINDS = ("scout", "radar", "deep_dive")
 TERMINAL_STATES = ("review_ready", "stopped", "failed")
+RESUMABLE_STATES = ("created", "planning", "running", "paused_usage", "curating", "interrupted")
 
 
 @dataclass
@@ -61,6 +63,38 @@ class RunSettings:
     workers: int = 8
     analysis_workers: int = 3
     max_candidates: int = 6
+    weights: dict[str, float] | None = None  # fixed at creation so a resumed run never mixes weights
+    used_s: float = 0.0  # active seconds already spent (downtime and usage pauses don't count)
+
+
+class ActiveClock:
+    """Wall-clock budget that only counts active time (not downtime between resumes, not usage pauses)."""
+
+    def __init__(self, budget_s: float) -> None:
+        self.start = time.time()
+        self.budget = max(budget_s, 0.0)
+        self.paused = 0.0
+        self._pause_started: float | None = None
+
+    def pause(self) -> None:
+        if self._pause_started is None:
+            self._pause_started = time.time()
+
+    def resume(self) -> None:
+        if self._pause_started is not None:
+            self.paused += time.time() - self._pause_started
+            self._pause_started = None
+
+    def active(self) -> float:
+        now = time.time()
+        current_pause = now - self._pause_started if self._pause_started is not None else 0.0
+        return now - self.start - self.paused - current_pause
+
+    def remaining(self) -> float:
+        return self.budget - self.active()
+
+    def expired(self) -> bool:
+        return self.remaining() <= 0
 
 
 @dataclass
@@ -77,7 +111,8 @@ class ToolProvider(Protocol):
 
 
 class Curator(Protocol):
-    async def curate(self, run_id: uuid.UUID, character: LoadedCharacter) -> None: ...
+    async def curate(self, run_id: uuid.UUID, character: LoadedCharacter,
+                     weights: dict[str, float] | None = None) -> None: ...
 
 
 class Orchestrator:
@@ -113,6 +148,8 @@ class Orchestrator:
             rated = (await s.execute(select(func.count()).select_from(Direction).where(
                 Direction.character_id == ch.character_id, (Direction.alpha + Direction.beta) > 0))).scalar_one()
         ratio = explore_ratio(await self._last_satisfaction(ch.character_id), rated)
+        settings = replace(settings, weights=settings.weights or self.weights or await self._saved_weights()
+                           or dict(DEFAULT_WEIGHTS))  # copy: never mutate the caller's settings
         async with self._sm() as s:
             run = Run(character_id=ch.character_id, character_version_id=ch.version_id, state="created",
                       settings=asdict(settings), explore_ratio_used=ratio)
@@ -148,7 +185,28 @@ class Orchestrator:
         return RunOutcome(run_id, run.state, run.stop_reason, run.current_round, analyzed)
 
     async def execute(self, run_id: uuid.UUID) -> RunOutcome:
-        """Run (or resume) until a stop rule fires. Safe to call again after a crash or cancellation."""
+        """Run (or resume) until a stop rule fires. Safe to call again after a crash or cancellation.
+
+        A Postgres advisory lock guarantees a single loop per run, even across processes (CLI + API).
+        """
+        key = int(run_id) & 0x7FFF_FFFF_FFFF_FFFF
+        engine = self._sm.kw["bind"]
+        async with engine.connect() as lock_conn:
+            if not (await lock_conn.execute(text("select pg_try_advisory_lock(:k)"), {"k": key})).scalar_one():
+                return await self._outcome(run_id)  # another loop already drives this run
+            try:
+                return await self._execute_locked(run_id)
+            finally:
+                async def unlock() -> None:
+                    try:
+                        await lock_conn.execute(text("select pg_advisory_unlock(:k)"), {"k": key})
+                        await lock_conn.commit()
+                    except Exception:
+                        await lock_conn.invalidate()  # dropping the connection releases the lock too
+
+                await asyncio.shield(unlock())
+
+    async def _execute_locked(self, run_id: uuid.UUID) -> RunOutcome:
         async with self._sm() as s:
             run = await s.get(Run, run_id)
         if run is None:
@@ -157,43 +215,84 @@ class Orchestrator:
             return await self._outcome(run_id)
         settings = RunSettings(**run.settings)
         ch = await self._character(run)
-        deadline = run.started_at.timestamp() + settings.wall_clock_s
-        analysis = AnalysisStage(self._sm, self.analyzer, self.roles, self.store, ch,
-                                 self.weights or await self._saved_weights())
+        clock = ActiveClock(settings.wall_clock_s - settings.used_s)
+        weights = settings.weights or self.weights or await self._saved_weights()
+        analysis = AnalysisStage(self._sm, self.analyzer, self.roles, self.store, ch, weights)
         try:
-            stop_reason = await self._loop(run, settings, ch, analysis, deadline)
+            if run.state == "curating" and run.stop_reason:
+                stop_reason = run.stop_reason  # the stop decision was made before a crash: don't plan again
+            else:
+                stop_reason = await self._loop(run, settings, ch, analysis, clock)
+                await self._set_stop_decision(run_id, stop_reason)
             await self.queue.cancel_queued(run_id)
-            if self.curator is not None:
-                await self._set_state(run_id, "curating")
-                await self.curator.curate(run_id, ch)
+            await self._curate(run_id, ch, weights)
             await self._finish(run_id, "review_ready", stop_reason)
         except asyncio.CancelledError:
             raise  # leave the run resumable
+        except Exception as e:  # infrastructure trouble: keep everything, allow resume
+            log.exception("run %s interrupted", run_id)
+            await self._finish(run_id, "interrupted", None, error=f"{type(e).__name__}: {e}"[:500])
+        finally:
+            await asyncio.shield(self._save_used(run_id, clock))
+        return await self._outcome(run_id)
+
+    async def _set_stop_decision(self, run_id: uuid.UUID, stop_reason: str) -> None:
+        async with self._sm() as s:
+            await s.execute(update(Run).where(Run.id == run_id).values(state="curating", stop_reason=stop_reason))
+            await s.commit()
+        await self.blackboard.record_event(run_id, "run.state", {"state": "curating", "stop_reason": stop_reason})
+
+    async def _curate(self, run_id: uuid.UUID, ch: LoadedCharacter, weights: dict[str, float] | None) -> None:
+        if self.curator is not None:
+            await self.curator.curate(run_id, ch, weights=weights)
+
+    async def _save_used(self, run_id: uuid.UUID, clock: ActiveClock) -> None:
+        try:
+            async with self._sm() as s:
+                run = await s.get(Run, run_id)
+                if run is not None:
+                    settings = dict(run.settings)
+                    settings["used_s"] = round(float(settings.get("used_s") or 0) + max(clock.active(), 0.0), 1)
+                    await s.execute(update(Run).where(Run.id == run_id).values(settings=settings))
+                    await s.commit()
         except Exception as e:
-            log.exception("run %s failed", run_id)
-            await self._finish(run_id, "failed", None, error=f"{type(e).__name__}: {e}"[:500])
+            log.warning("could not record active time for run %s: %s", run_id, e)
+
+    async def stop_and_curate(self, run_id: uuid.UUID) -> RunOutcome:
+        """Owner pressed Stop: drop pending work, curate what was found, end as `stopped`."""
+        async with self._sm() as s:
+            run = await s.get(Run, run_id)
+        await self.queue.cancel_queued(run_id)
+        await self._set_stop_decision(run_id, "stopped by the owner")
+        try:
+            await self._curate(run_id, await self._character(run), (run.settings or {}).get("weights"))
+        except Exception as e:
+            log.warning("curation after stop failed for %s: %s", run_id, e)
+        await self._finish(run_id, "stopped", "stopped by the owner")
         return await self._outcome(run_id)
 
     async def _loop(self, run: Run, settings: RunSettings, ch: LoadedCharacter, analysis: AnalysisStage,
-                    deadline: float) -> str:
+                    clock: ActiveClock) -> str:
         run_id = run.id
-        if await self.queue.outstanding(run_id) > 0:  # resuming mid-round: finish that round's work first
+        round_no = run.current_round
+        if round_no > 0 and not await self._round_has_plan(run_id, round_no):
+            round_no -= 1  # a crash between starting and planning a round: plan that same round again
+        elif await self.queue.outstanding(run_id) > 0:  # resuming mid-round: finish that round's work first
             await self._set_state(run_id, "running", resumed=True)
-            if not await self._drain(run_id, ch, settings, analysis, deadline):
+            if not await self._drain(run_id, ch, settings, analysis, clock):
                 return "wall clock limit reached"
             await self._close_round(run_id, run.current_round)
-        round_no = run.current_round
         empty_streak = await self._empty_streak(run_id)
         while True:
             if round_no >= settings.rounds:
                 return f"reached the round limit ({settings.rounds})"
-            if time.time() >= deadline:
+            if clock.expired():
                 return "wall clock limit reached"
             round_no += 1
             await self._set_state(run_id, "planning", round=round_no)
             round_id = await self._start_round(run_id, round_no)
             context, n_explore, n_exploit = await self._context(run_id, ch, settings, round_no)
-            plan = await self._plan(run_id, context, ch, deadline)
+            plan = await self._plan(run_id, context, ch, clock)
             if plan is None:
                 return "planning failed: no valid plan from the Master"
             if plan.stop and round_no > 1:
@@ -205,7 +304,7 @@ class Orchestrator:
                 "round": round_no, "summary": plan.reasoning_summary, "tasks": len(enqueued),
                 "rejections": rejections, "explore": n_explore, "exploit": n_exploit})
             await self._set_state(run_id, "running", round=round_no)
-            if not await self._drain(run_id, ch, settings, analysis, deadline):
+            if not await self._drain(run_id, ch, settings, analysis, clock):
                 await self._close_round(run_id, round_no)
                 return "wall clock limit reached"
             summary = await self._close_round(run_id, round_no)
@@ -217,10 +316,19 @@ class Orchestrator:
                 return "no new findings in 2 consecutive rounds"
 
     # ---------- rounds ----------
+    async def _round_has_plan(self, run_id: uuid.UUID, number: int) -> bool:
+        async with self._sm() as s:
+            plan = (await s.execute(select(Round.plan).where(Round.run_id == run_id, Round.number == number))
+                    ).first()
+        return plan is not None and plan[0] is not None
+
     async def _start_round(self, run_id: uuid.UUID, number: int) -> uuid.UUID:
         async with self._sm() as s:
-            rnd = Round(run_id=run_id, number=number)
-            s.add(rnd)
+            existing = (await s.execute(select(Round).where(Round.run_id == run_id, Round.number == number))
+                        ).scalar_one_or_none()
+            rnd = existing or Round(run_id=run_id, number=number)
+            if existing is None:
+                s.add(rnd)
             await s.execute(update(Run).where(Run.id == run_id).values(current_round=number))
             await s.commit()
             return rnd.id
@@ -346,16 +454,19 @@ class Orchestrator:
             lines.append(f"Your previous plan had rejected tasks: {last.plan_rejections}")
         return "\n".join(lines), n_explore, n_exploit
 
-    async def _plan(self, run_id: uuid.UUID, context: str, ch: LoadedCharacter, deadline: float) -> WorkPlan | None:
+    async def _plan(self, run_id: uuid.UUID, context: str, ch: LoadedCharacter,
+                    clock: ActiveClock) -> WorkPlan | None:
         for _attempt in range(3):
             try:
                 return await self.roles.plan(context, ch.brief, run_id=run_id)
             except AllProvidersUnavailable as e:
-                wait = min(max((e.earliest_reset or time.time() + 900) - time.time(), 1.0), deadline - time.time())
-                if wait <= 0:
-                    return None
+                wait = max((e.earliest_reset or time.time() + 900) - time.time(), 1.0)
                 await self._set_state(run_id, "paused_usage", resume_in_s=round(wait))
-                await asyncio.sleep(wait)
+                clock.pause()  # waiting for a usage window doesn't spend the run's time budget
+                try:
+                    await asyncio.sleep(wait)
+                finally:
+                    clock.resume()
                 await self._set_state(run_id, "planning")
             except RoleOutputError as e:
                 log.warning("master output invalid: %s", e)
@@ -368,6 +479,7 @@ class Orchestrator:
             existing = {d.key: d for d in (await s.execute(select(Direction).where(
                 Direction.character_id == ch.character_id))).scalars()}
             key_map: dict[str, Direction] = {}
+            created: list[Direction] = []
             for d in plan.directions:
                 match = match_direction_key(d.key, list(existing))
                 row = existing.get(match) if match else None
@@ -377,12 +489,28 @@ class Orchestrator:
                     s.add(row)
                     await s.flush()
                     existing[row.key] = row
+                    created.append(row)
                 key_map[d.key] = key_map[normalize_key(d.key)] = row
             await s.commit()
             direction_ids = {k: v.id for k, v in key_map.items()}
+            all_ids = {k: v.id for k, v in existing.items()}
+            new_ids = {row.id for row in created}
+
+        def resolve(key: str | None) -> tuple[uuid.UUID | None, bool]:
+            if not key:
+                return None, True
+            found = direction_ids.get(key) or direction_ids.get(normalize_key(key))
+            if found is None:
+                match = match_direction_key(key, list(all_ids))
+                found = all_ids.get(match) if match else None
+            return found, found is not None
         health = self._health()
         open_leads = {str(l["id"]): l for l in await self.blackboard.open_leads(run_id, limit=200)}
         enqueued: list[uuid.UUID] = []
+        explore_count = 0
+        for t in plan.tasks[settings.tasks_per_round:]:
+            rejections.append({"task": t.goal[:100], "platform": t.platform, "type": t.task_type,
+                               "reason": f"over the {settings.tasks_per_round}-task limit for this round"})
         for t in plan.tasks[: settings.tasks_per_round]:
             label = {"task": t.goal[:100], "platform": t.platform, "type": t.task_type}
             if t.platform not in settings.platforms:
@@ -406,8 +534,11 @@ class Orchestrator:
             if not elements:
                 rejections.append({**label, "reason": "empty scope"})
                 continue
-            direction_id = direction_ids.get(t.direction_key or "") or direction_ids.get(
-                normalize_key(t.direction_key or ""))
+            direction_id, known = resolve(t.direction_key)
+            if not known:
+                rejections.append({**label, "reason": f"unknown direction key {t.direction_key!r}: declare it in "
+                                   "`directions` or use an existing key"})
+                continue
             task_id = await self.queue.enqueue(run_id, round_id, t.task_type, platform=t.platform,
                                                direction_id=direction_id, scope=scope, goal=t.goal,
                                                budget={"max_candidates": min(t.max_candidates,
@@ -424,6 +555,10 @@ class Orchestrator:
             if lead is not None:
                 await self.blackboard.assign_lead(uuid.UUID(str(lead["id"])), task_id)
             enqueued.append(task_id)
+            explore_count += int(direction_id in new_ids)
+        if enqueued and abs(explore_count - n_explore) > 1:
+            rejections.append({"task": "-", "platform": "-", "type": "-", "reason":
+                               f"warning: {explore_count} explore tasks accepted, {n_explore} were requested"})
         if direction_ids:
             async with self._sm() as s:
                 await s.execute(update(Direction).where(Direction.id.in_(set(direction_ids.values()))).values(
@@ -469,8 +604,8 @@ class Orchestrator:
         return out
 
     async def _drain(self, run_id: uuid.UUID, ch: LoadedCharacter, settings: RunSettings, analysis: AnalysisStage,
-                     deadline: float) -> bool:
-        """Run workers and analysis until the round's work is done. False when the wall clock ran out."""
+                     clock: ActiveClock) -> bool:
+        """Run workers and analysis until the round's work is done. False when the time budget ran out."""
         async def work_handler(task: Task) -> dict[str, Any]:
             return await self._handle_work(ch, settings, task)
 
@@ -492,27 +627,49 @@ class Orchestrator:
                     return
                 await asyncio.sleep(self.idle_poll)
 
+        async def both() -> None:  # TaskGroup: a crash in one pool cancels the other (no orphaned spending)
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(run_work())
+                tg.create_task(run_analysis())
+
         async def monitor() -> None:
             paused = False
             while True:
                 await asyncio.sleep(self.monitor_every_s)
-                async with self._sm() as s:
-                    running = (await s.execute(select(func.count()).select_from(Task).where(
-                        Task.run_id == run_id, Task.state == "running"))).scalar_one()
-                ready_at = await self.queue.next_ready_at(run_id)
+                try:
+                    async with self._sm() as s:
+                        running = (await s.execute(select(func.count()).select_from(Task).where(
+                            Task.run_id == run_id, Task.state == "running"))).scalar_one()
+                    ready_at = await self.queue.next_ready_at(run_id)
+                except Exception as e:
+                    log.warning("monitor check failed: %s", e)
+                    continue
                 waiting = running == 0 and ready_at is not None and ready_at > datetime.now(UTC)
                 if waiting and not paused:
                     paused = True
+                    clock.pause()
                     await self._set_state(run_id, "paused_usage", resume_at=ready_at.isoformat())
                 elif paused and not waiting:
                     paused = False
+                    clock.resume()
                     await self._set_state(run_id, "running")
 
+        job = asyncio.create_task(both())
         watcher = asyncio.create_task(monitor())
         try:
-            await asyncio.wait_for(asyncio.gather(run_work(), run_analysis()), max(deadline - time.time(), 0.1))
+            while not job.done():
+                remaining = clock.remaining()
+                if remaining <= 0:
+                    job.cancel()
+                    await asyncio.gather(job, return_exceptions=True)
+                    return False
+                await asyncio.wait({job}, timeout=min(remaining, 1.0))
+            job.result()  # re-raise a pool crash (ExceptionGroup) → run becomes `interrupted`
             return True
-        except TimeoutError:
-            return False
+        except asyncio.CancelledError:
+            job.cancel()
+            await asyncio.gather(job, return_exceptions=True)
+            raise
         finally:
             watcher.cancel()
+            clock.resume()

@@ -17,7 +17,7 @@ from tf_db.models import Run
 
 log = logging.getLogger(__name__)
 TERMINAL = ("review_ready", "stopped", "failed")
-RESUMABLE = ("created", "planning", "running", "paused_usage", "curating")
+RESUMABLE = ("created", "planning", "running", "paused_usage", "curating", "interrupted")
 
 
 class RunError(Exception):
@@ -81,6 +81,10 @@ class RunManager:
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        orch = self._orchestrator
+        if orch is not None and hasattr(orch, "stop_and_curate"):
+            await orch.stop_and_curate(run_id)  # keep what was found: curate, then end as `stopped`
+            return
         await TaskQueue(self._sm).cancel_queued(run_id)
         async with self._sm() as s:
             await s.execute(update(Run).where(Run.id == run_id).values(
@@ -95,8 +99,10 @@ class RunManager:
                                         .order_by(Run.started_at))).scalars())
         if ids:
             orch = await self.orchestrator()
+            queue = TaskQueue(self._sm)
             for run_id in ids:
                 if not self.is_active(run_id):
+                    await queue.reset_running(run_id)  # this process owns its runs: no 10-minute lease wait
                     self._launch(orch, run_id)
         return ids
 

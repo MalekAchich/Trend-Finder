@@ -117,7 +117,12 @@ class AnalysisStage:
         if item is None:
             await self._status(finding_id, "failed")
             return {"error": "video record missing"}
-        analysis = await self.analyzer.analyze(item)
+        try:
+            analysis = await self.analyzer.analyze(item)
+        except Exception as e:  # never leave a finding stuck in pending_analysis
+            log.exception("analysis of %s crashed", item.canonical_id)
+            await self._status(finding_id, "failed")
+            return {"error": f"analysis crashed: {type(e).__name__}: {e}"[:300]}
         if analysis.filtered_reason or not analysis.contact_sheet_path:
             await self._save_score(finding_id, {"feasibility": analysis.feasibility})
             await self._status(finding_id, "filtered_feasibility")

@@ -319,10 +319,11 @@ def _event_line(e: dict) -> str | None:
 
 
 async def _follow(orchestrator, run_id, stop) -> None:
-    after = 0
+    from tf_agent.orchestrator.blackboard import EventCursor
+
+    cursor = EventCursor(orchestrator.blackboard, run_id)
     while True:
-        for e in await orchestrator.blackboard.events_after(run_id, after):
-            after = e["id"]
+        for e in await cursor.next_batch():
             line = _event_line(e)
             if line:
                 typer.echo(line)
@@ -425,7 +426,8 @@ async def _print_trends(sessionmaker, run_id, top: int) -> None:
             .join(Finding, Finding.id == TrendCluster.best_finding_id)
             .join(FindingScore, FindingScore.finding_id == Finding.id)
             .join(Video, Video.canonical_id == Finding.canonical_id)
-            .outerjoin(VideoAnalysis, VideoAnalysis.canonical_id == Finding.canonical_id)
+            .outerjoin(VideoAnalysis, (VideoAnalysis.canonical_id == Finding.canonical_id)
+                       & (VideoAnalysis.pipeline_version == "1"))
             .where(TrendCluster.run_id == run_id).order_by(TrendCluster.rank).limit(top))).all()
     if not rows:
         typer.echo("no trend cards for this run")

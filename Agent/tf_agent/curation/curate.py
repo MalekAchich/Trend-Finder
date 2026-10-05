@@ -17,10 +17,17 @@ from tf_agent.pipeline.result import VideoAnalysisResult
 from tf_agent.roles.runners import RoleOutputError, Roles
 from tf_agent.scoring.subscores import DEFAULT_WEIGHTS, freshness, overall, percentile
 from tf_agent.tools.store import VideoStore
-from tf_db.models import Finding, FindingScore, TrendCluster, TrendMember, Video, VideoAnalysis
+from tf_db.models import CardFeedback, Finding, FindingScore, TrendCluster, TrendMember, Video, VideoAnalysis
 
 log = logging.getLogger(__name__)
 DISAGREEMENT = 30.0
+
+
+def final_fit(sc: FindingScore) -> float | None:
+    """The analyst's fit stays untouched; with a cross-check the score uses the mean of both opinions."""
+    if sc.fit is None:
+        return None
+    return round((sc.fit + sc.cross_fit) / 2, 2) if sc.cross_fit is not None else sc.fit
 
 
 class CharacterLike(Protocol):
@@ -52,7 +59,15 @@ class Curator:
             await s.execute(update(FindingScore).where(FindingScore.finding_id == finding_id).values(**values))
             await s.commit()
 
-    async def curate(self, run_id: uuid.UUID, character: CharacterLike) -> None:
+    async def curate(self, run_id: uuid.UUID, character: CharacterLike,
+                     weights: dict[str, float] | None = None) -> None:
+        weights = weights or self.weights
+        async with self._sm() as s:
+            rated = (await s.execute(select(CardFeedback.id).join(TrendCluster, TrendCluster.id == CardFeedback.cluster_id)
+                                     .where(TrendCluster.run_id == run_id).limit(1))).first()
+        if rated is not None:  # cards were rated: re-curating would delete the owner's ratings and briefs
+            log.info("run %s already has feedback; keeping its trend cards", run_id)
+            return
         rows = await self._rows(run_id)
         by_id = {str(f.id): (f, sc, v, a) for f, sc, v, a in rows}
         members = [Member(finding_id=str(f.id), canonical_id=f.canonical_id, sound_id=v.sound_id,
@@ -69,14 +84,15 @@ class Curator:
                 f, sc, v, _ = by_id[m.finding_id]
                 age = (now - v.posted_at).total_seconds() / 3600 if v.posted_at else None
                 fresh = freshness(age, saturation or 0.0)
-                sub = {"fit": sc.fit, "feasibility": sc.feasibility, "momentum": sc.momentum, "freshness": fresh}
-                m.overall = overall(sub, self.weights)
+                sub = {"fit": final_fit(sc), "feasibility": sc.feasibility, "momentum": sc.momentum,
+                       "freshness": fresh}
+                m.overall = overall(sub, weights)
                 await self._save_score(f.id, freshness=fresh, overall=m.overall)
             best = best_source(cluster)
             cards.append({"members": cluster, "best": best, "overall": best.overall or 0.0})
         cards.sort(key=lambda c: c["overall"], reverse=True)
         for card in cards[: self.top_k]:
-            await self._cross_check(card, by_id, character)
+            await self._cross_check(card, by_id, character, weights)
         cards.sort(key=lambda c: c["overall"], reverse=True)
         async with self._sm() as s:
             await s.execute(delete(TrendCluster).where(TrendCluster.run_id == run_id))
@@ -92,11 +108,12 @@ class Curator:
                            for m in card["members"]])
             await s.commit()
 
-    async def _cross_check(self, card: dict[str, Any], by_id: dict[str, Any], character: CharacterLike) -> None:
+    async def _cross_check(self, card: dict[str, Any], by_id: dict[str, Any], character: CharacterLike,
+                           weights: dict[str, float]) -> None:
         best = card["best"]
         f, sc, v, a = by_id[best.finding_id]
-        if a is None or not a.contact_sheet_path or sc.fit is None:
-            return
+        if a is None or not a.contact_sheet_path or sc.fit is None or sc.cross_fit is not None:
+            return  # already cross-checked: never pay for (or average in) a second opinion twice
         item = await self.store.get_video(f.canonical_id)
         analysis = VideoAnalysisResult(canonical_id=a.canonical_id, probe=a.probe, cuts=list(a.cuts or []),
                                        transcript=a.transcript, pose=a.pose, camera_motion=a.camera_motion,
@@ -109,15 +126,13 @@ class Curator:
             log.warning("cross-check skipped for %s: %s", f.canonical_id, e)
             return
         cross = judged.result.fit
-        final_fit = round((sc.fit + cross) / 2, 2)
-        sub = {"fit": final_fit, "feasibility": sc.feasibility, "momentum": sc.momentum,
-               "freshness": None}
         async with self._sm() as s:
             fresh = (await s.get(FindingScore, f.id)).freshness
-        sub["freshness"] = fresh
-        new_overall = overall(sub, self.weights)
+        sub = {"fit": round((sc.fit + cross) / 2, 2), "feasibility": sc.feasibility, "momentum": sc.momentum,
+               "freshness": fresh}
+        new_overall = overall(sub, weights)
         await self._save_score(f.id, cross_fit=cross, cross_provider=judged.provider,
                                cross_justification=judged.result.justification,
-                               disagreement=abs(sc.fit - cross) >= DISAGREEMENT, fit=final_fit, overall=new_overall)
+                               disagreement=abs(sc.fit - cross) >= DISAGREEMENT, overall=new_overall)
         best.overall = new_overall
         card["overall"] = new_overall or 0.0

@@ -80,7 +80,7 @@ async def test_curate_clusters_cross_checks_and_ranks(db_sessionmaker, tmp_path)
     best = scores["tiktok:2"]  # highest feasibility in the repost cluster becomes its best source
     assert any(c.best_finding_id is not None for c in clusters)
     assert best.cross_provider == "b" and best.disagreement is True  # 70 vs 20
-    assert best.fit == pytest.approx(45.0)
+    assert best.fit == 70 and best.cross_fit == 20  # the analyst's fit is kept; the score uses their mean
     assert len(b.requests) == 2 and a.requests == []
     assert clusters[0].overall >= clusters[1].overall
 
@@ -98,3 +98,42 @@ async def test_curation_is_idempotent(db_sessionmaker, tmp_path):
     await curator.curate(run_id, ch)
     async with db_sessionmaker() as s:
         assert len((await s.execute(select(TrendCluster))).scalars().all()) == 1
+
+
+async def test_second_curation_keeps_analyst_fit_and_skips_cross_check(db_sessionmaker, tmp_path):
+    sheet = tmp_path / "s.jpg"
+    sheet.write_bytes(b"x")
+    _, run_id, (task_id,) = await create_test_run(db_sessionmaker)
+    await add_finding(db_sessionmaker, run_id, task_id, "tiktok:1", A, 80, 75, sheet=str(sheet))
+    b = FakeAdapter("b", [text_response("b", structured={"fit": 20, "justification": "not his vibe"})])
+    client, _, _ = make_client({"a": FakeAdapter("a"), "b": b})
+    curator = Curator(db_sessionmaker, Roles(client), top_k=5)
+    ch = SimpleNamespace(brief="b", canonical_image_path=str(sheet))
+    await curator.curate(run_id, ch)
+    await curator.curate(run_id, ch)
+    async with db_sessionmaker() as s:
+        sc = (await s.execute(select(FindingScore))).scalar_one()
+    assert sc.fit == 80 and sc.cross_fit == 20 and len(b.requests) == 1
+
+
+async def test_curation_never_destroys_owner_feedback(db_sessionmaker, tmp_path):
+    from tf_db.models import CardFeedback
+
+    sheet = tmp_path / "s.jpg"
+    sheet.write_bytes(b"x")
+    _, run_id, (task_id,) = await create_test_run(db_sessionmaker)
+    await add_finding(db_sessionmaker, run_id, task_id, "tiktok:1", A, 80, 75, sheet=str(sheet))
+    client, _, _ = make_client({"a": FakeAdapter("a"), "b": FakeAdapter("b", [
+        text_response("b", structured={"fit": 75, "justification": "agree"})])})
+    curator = Curator(db_sessionmaker, Roles(client), top_k=5)
+    ch = SimpleNamespace(brief="b", canonical_image_path=str(sheet))
+    await curator.curate(run_id, ch)
+    async with db_sessionmaker() as s:
+        cluster = (await s.execute(select(TrendCluster))).scalar_one()
+        s.add(CardFeedback(cluster_id=cluster.id, rating="up"))
+        await s.commit()
+        cid = cluster.id
+    await curator.curate(run_id, ch)
+    async with db_sessionmaker() as s:
+        assert (await s.execute(select(TrendCluster))).scalar_one().id == cid
+        assert len((await s.execute(select(CardFeedback))).scalars().all()) == 1

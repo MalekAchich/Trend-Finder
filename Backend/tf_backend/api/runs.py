@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from tf_agent.orchestrator.blackboard import Blackboard
+from tf_agent.orchestrator.blackboard import Blackboard, EventCursor
 from tf_agent.orchestrator.run import RunSettings
 from tf_backend.api.deps import ctx, require_client_header
 from tf_backend.app_context import AppContext
@@ -115,16 +115,14 @@ async def run_events(run_id: str, request: Request, after: int | None = None,
                      c: AppContext = Depends(ctx)) -> StreamingResponse:
     rid = _uuid(run_id)
     last = after if after is not None else int(request.headers.get("last-event-id") or 0)
-    bb = Blackboard(c.sessionmaker)
+    cursor = EventCursor(Blackboard(c.sessionmaker), rid, after=last)
 
     async def stream():
-        nonlocal last
         quiet_after_end = 0
         heartbeat = 0.0
         while True:
-            events = await bb.events_after(rid, last)
+            events = await cursor.next_batch()
             for e in events:
-                last = e["id"]
                 yield f"id: {e['id']}\nevent: {e['type']}\ndata: {json.dumps(e, default=str)}\n\n"
             async with c.sessionmaker() as s:
                 state = (await s.execute(select(Run.state).where(Run.id == rid))).scalar_one_or_none()
