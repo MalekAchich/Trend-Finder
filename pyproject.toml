@@ -1,0 +1,32 @@
+[project]
+name = "trend-finder"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["tf-db", "tf-agent", "tf-backend"]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["Database", "Agent", "Backend"]
+
+[tool.uv.sources]
+tf-db = { workspace = true }
+tf-agent = { workspace = true }
+tf-backend = { workspace = true }
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.7"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["Database/tests", "Agent/tests", "Backend/tests"]
+addopts = "--import-mode=importlib -m 'not live'"
+markers = [
+  "live: calls real providers or the network (opt-in: -m live)",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
