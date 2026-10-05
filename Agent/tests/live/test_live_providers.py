@@ -1,0 +1,54 @@
+"""Real calls on the owner's subscriptions. Run explicitly: uv run pytest -m live Agent/tests/live -v"""
+import pytest
+
+from tf_agent.config import AppSettings
+from tf_agent.models.chatgpt_adapter import ChatGPTOAuthAdapter
+from tf_agent.models.chatgpt_auth import ChatGptAuth
+from tf_agent.models.claude_cli import ClaudeCLIAdapter, ClaudeCliAuth
+from tf_agent.models.types import CompletionRequest, Message, ToolSpec
+
+pytestmark = pytest.mark.live
+
+ADD = ToolSpec("add", "Add two integers.", {"type": "object", "properties": {"a": {"type": "integer"},
+                                                                          "b": {"type": "integer"}},
+                                            "required": ["a", "b"]})
+ANSWER = {"type": "object", "properties": {"answer": {"type": "integer"}}, "required": ["answer"]}
+
+
+def claude() -> ClaudeCLIAdapter:
+    return ClaudeCLIAdapter(ClaudeCliAuth(AppSettings().claude_bin))
+
+
+def chatgpt() -> ChatGPTOAuthAdapter:
+    settings = AppSettings()
+    auth = ChatGptAuth(settings.chatgpt_auth_file)
+    if not auth.status()["connected"]:
+        pytest.skip("run `uv run tf login chatgpt` first")
+    return ChatGPTOAuthAdapter(auth, models_cache=settings.chatgpt_models_cache)
+
+
+async def test_claude_structured_output_is_isolated():
+    resp = await claude().complete(CompletionRequest(
+        model="haiku", system="Answer per the schema.", messages=[Message.user("What is 2+2?")],
+        output_schema=ANSWER))
+    assert resp.structured == {"answer": 4}
+    assert resp.usage.input_tokens < 20_000  # D-36: isolated calls stay ~3k, not ~70k
+
+
+async def test_claude_tool_step():
+    resp = await claude().complete(CompletionRequest(
+        model="haiku", system="Use the add tool.", messages=[Message.user("Add 2 and 3.")],
+        tools=[ADD], require_tool=True))
+    assert resp.tool_calls[0].name == "add" and resp.tool_calls[0].arguments == {"a": 2, "b": 3}
+
+
+async def test_chatgpt_models_and_tool_step():
+    adapter = chatgpt()
+    visible = [m for m in await adapter.list_models() if not m.hidden]
+    assert visible
+    model = next((m.model_id for m in visible if m.model_id == "gpt-6-luna"), visible[-1].model_id)
+    resp = await adapter.complete(CompletionRequest(
+        model=model, system="Use the add tool.", messages=[Message.user("Add 2 and 3.")],
+        tools=[ADD], require_tool=True, reasoning_effort="low"))
+    assert resp.tool_calls[0].name == "add"
+    assert resp.rate is not None and resp.rate.window_minutes == 300

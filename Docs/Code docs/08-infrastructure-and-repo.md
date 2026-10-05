@@ -99,7 +99,12 @@ PIPELINE_WORKERS=2
 ## Dev workflow
 
 ```
-docker compose -f Database/docker-compose.yml up -d   # db + searxng
-uv sync && uv run tf migrate && uv run uvicorn tf_backend.main:app --reload
-cd Frontend && npm install && npm run dev
+docker compose -f Database/docker-compose.yml up -d     # Postgres (pgvector) on 127.0.0.1:5433; SearXNG arrives in Plan 2
+uv sync
+cp .env.example .env           # once
+uv run tf migrate
+uv run tf login chatgpt        # once; `--device` if port 1455 is busy
+uv run tf doctor
+uv run uvicorn tf_backend.main:app --reload
+uv run pytest                  # unit + DB tests; live tests: uv run pytest -m live Agent/tests/live
 ```
