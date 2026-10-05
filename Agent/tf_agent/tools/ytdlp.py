@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +14,8 @@ from tf_agent.tools.types import Creator, Metrics, Sound, ToolErrorCode, ToolFai
 
 Extractor = Callable[[str, dict[str, Any], bool], dict[str, Any]]
 _HASHTAG_RE = re.compile(r"#(\w+)", re.UNICODE)
+# Only the three platforms we support: never the generic extractor (which would fetch arbitrary URLs).
+ALLOWED_EXTRACTORS = ["tiktok.*", "vm\\.tiktok", "instagram.*", "youtube.*"]
 DOWNLOAD_FORMAT = ("bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/bv*[height<=720]+ba/"
                    "b[height<=720]/b")
 
@@ -66,12 +69,16 @@ def info_to_video_item(info: dict[str, Any]) -> VideoItem:
     handle = info.get("uploader_id") if platform == "youtube" else info.get("uploader") or info.get("uploader_id")
     ts = info.get("timestamp")
     track = (info.get("track") or "").strip() or None
+    artists = info.get("artists") or ([info["artist"]] if info.get("artist") else [])
+    sound_key = None
+    if track and track.lower() != "original sound":  # a bare "original sound" says nothing about the audio
+        sound_key = f"track:{track.lower()}|{(artists[0] if artists else '').lower()}"[:128]
     return VideoItem(
         canonical_id=cid, platform=platform, url=url,
         creator=Creator(handle=norm_handle(str(handle)) if handle else None,
                         followers=_int(info.get("channel_follower_count"))),
         caption=caption, hashtags=tags,
-        sound=Sound(id=info.get("track_id") or None, title=track),
+        sound=Sound(id=sound_key, title=track),
         posted_at=datetime.fromtimestamp(ts, UTC) if ts else None,
         duration_s=float(info["duration"]) if info.get("duration") is not None else None,
         metrics=Metrics(views=_int(info.get("view_count")), likes=_int(info.get("like_count")),
@@ -87,25 +94,27 @@ class YtDlp:
         self.timeout_s = timeout_s
         self.cookies_file = cookies_file
         self._extract = extractor or _default_extract
-        self._slots = asyncio.Semaphore(max_parallel)
+        # a dedicated pool: timed-out calls keep their thread until they finish, so the bound really holds
+        self._pool = ThreadPoolExecutor(max_workers=max_parallel, thread_name_prefix="yt-dlp")
 
     def _opts(self, **extra: Any) -> dict[str, Any]:
-        opts: dict[str, Any] = {"quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 20}
+        opts: dict[str, Any] = {"quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 20,
+                                "allowed_extractors": ALLOWED_EXTRACTORS}
         if self.cookies_file:
             opts["cookiefile"] = str(self.cookies_file)
         opts.update(extra)
         return opts
 
     async def _run(self, url: str, opts: dict[str, Any], download: bool, timeout_s: float) -> dict[str, Any]:
-        async with self._slots:
-            try:
-                return await asyncio.wait_for(asyncio.to_thread(self._extract, url, opts, download), timeout_s)
-            except TimeoutError:
-                raise ToolFailure("platform_unavailable", f"yt-dlp timed out after {timeout_s}s") from None
-            except ToolFailure:
-                raise
-            except Exception as e:  # yt_dlp.utils.DownloadError and friends
-                raise ToolFailure(classify_ytdlp_error(str(e)), str(e).splitlines()[0][:300]) from e
+        future = asyncio.get_running_loop().run_in_executor(self._pool, self._extract, url, opts, download)
+        try:
+            return await asyncio.wait_for(future, timeout_s)  # on timeout a queued job is cancelled
+        except TimeoutError:
+            raise ToolFailure("platform_unavailable", f"yt-dlp timed out after {timeout_s}s") from None
+        except ToolFailure:
+            raise
+        except Exception as e:  # yt_dlp.utils.DownloadError and friends
+            raise ToolFailure(classify_ytdlp_error(str(e)), str(e).splitlines()[0][:300]) from e
 
     async def metadata(self, url: str) -> VideoItem:
         info = await self._run(url, self._opts(skip_download=True), False, self.timeout_s)

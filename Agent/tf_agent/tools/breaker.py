@@ -26,6 +26,15 @@ class CircuitBreaker:
         return self._state
 
     @property
+    def probe_in_flight(self) -> bool:
+        return self._state == "half_open" and self._probe_in_flight
+
+    def release_probe(self) -> None:
+        """The probe ended without a verdict (cancelled, unexpected error): let the next call probe again."""
+        if self._state == "half_open":
+            self._probe_in_flight = False
+
+    @property
     def recent_failures(self) -> int:
         self._prune()
         return len(self._failures)

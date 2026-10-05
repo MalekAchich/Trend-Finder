@@ -80,7 +80,7 @@ def hits(*urls):
 
 
 async def test_tiktok_search_dedupes_url_shapes_and_enriches():
-    q = "site:tiktok.com deadpan dance"
+    q = "site:tiktok.com/@ deadpan dance"
     searx = FakeSearx({q: hits(tt(1) + "?is_from_webapp=1", tt(1), "https://www.tiktok.com/@user9", tt(2))})
     yt = FakeYtDlp()
     res = await tools(searx, yt).tiktok_search("Deadpan  dance", max_results=10)
@@ -90,7 +90,7 @@ async def test_tiktok_search_dedupes_url_shapes_and_enriches():
 
 
 async def test_seen_filter_hides_items_before_enrichment():
-    q = "site:tiktok.com deadpan"
+    q = "site:tiktok.com/@ deadpan"
     yt = FakeYtDlp()
 
     async def seen(items):
@@ -103,7 +103,7 @@ async def test_seen_filter_hides_items_before_enrichment():
 
 
 async def test_enrichment_failure_falls_back_to_snippet():
-    q = "site:tiktok.com deadpan"
+    q = "site:tiktok.com/@ deadpan"
     res = await tools(FakeSearx({q: hits(tt(1), tt(2))}), FakeYtDlp(fail_ids={"tiktok:7000000000000000002"})
                       ).tiktok_search("deadpan")
     fallback = res.items[1]
@@ -124,7 +124,7 @@ async def test_instagram_is_discovery_only_without_login():
 
 async def test_per_video_metadata_is_cached_across_searches():
     yt = FakeYtDlp()
-    searx = FakeSearx({"site:tiktok.com a": hits(tt(1)), "site:tiktok.com b": hits(tt(1))})
+    searx = FakeSearx({"site:tiktok.com/@ a": hits(tt(1)), "site:tiktok.com/@ b": hits(tt(1))})
     pt = tools(searx, yt)
     await pt.tiktok_search("a")
     await pt.tiktok_search("b")
@@ -155,7 +155,7 @@ async def test_on_items_receives_enriched_items():
     async def on_items(items):
         got.extend(i.canonical_id for i in items)
 
-    await tools(FakeSearx({"site:tiktok.com x": hits(tt(3))}), on_items=on_items).tiktok_search("x")
+    await tools(FakeSearx({"site:tiktok.com/@ x": hits(tt(3))}), on_items=on_items).tiktok_search("x")
     assert got == ["tiktok:7000000000000000003"]
 
 

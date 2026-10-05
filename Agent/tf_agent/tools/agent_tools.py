@@ -123,7 +123,7 @@ def _safe(fn: Callable[[Any], Awaitable[Any]]) -> Callable[[Any], Awaitable[dict
 def build_tools(pt: PlatformTools, searx: SearxClient, *, fetch: Callable[..., Awaitable[Any]] = web_fetch
                 ) -> list[Tool]:
     async def do_web_search(p: WebSearchParams) -> dict[str, Any]:
-        resp = await searx.search(p.query, max_results=p.max_results, time_range=p.time_range)
+        resp = await pt.web_search(p.query, max_results=p.max_results, time_range=p.time_range)
         return {"results": [{"title": h.title, "url": h.url, "snippet": h.snippet} for h in resp.results]}
 
     async def do_web_fetch(p: WebFetchParams) -> dict[str, Any]:

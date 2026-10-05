@@ -18,8 +18,22 @@ class MediaRetention:
         roots = [self.media_dir / d for d in under] if under else [self.media_dir]
         return [p for root in roots if root.exists() for p in root.rglob("*") if p.is_file()]
 
+    @staticmethod
+    def _size(p: Path) -> int:
+        try:
+            return p.stat().st_size
+        except FileNotFoundError:  # another worker removed it meanwhile
+            return 0
+
+    @staticmethod
+    def _mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except FileNotFoundError:
+            return 0.0
+
     def usage(self) -> int:
-        return sum(p.stat().st_size for p in self._files())
+        return sum(self._size(p) for p in self._files())
 
     def can_download(self) -> bool:
         return self.usage() < self.quota_bytes * DOWNLOAD_STOP_FRACTION
@@ -30,19 +44,27 @@ class MediaRetention:
         if usage <= self.quota_bytes:
             return 0
         protected = {Path(p).resolve() for p in [*self._protected(), *extra_protected]}
-        candidates = sorted((p for p in self._files(EVICTABLE_DIRS) if p.resolve() not in protected),
-                            key=lambda p: p.stat().st_mtime)
+
+        def is_protected(p: Path) -> bool:  # a protected directory protects everything inside it
+            rp = p.resolve()
+            return rp in protected or any(parent in protected for parent in rp.parents)
+
+        candidates = sorted((p for p in self._files(EVICTABLE_DIRS) if not is_protected(p)), key=self._mtime)
         freed = 0
         for p in candidates:
             if usage - freed <= self.quota_bytes:
                 break
-            size = p.stat().st_size
+            size = self._size(p)
             p.unlink(missing_ok=True)
             freed += size
         for d in EVICTABLE_DIRS:  # drop empty frame folders left behind
             root = self.media_dir / d
             if root.exists():
                 for sub in sorted((x for x in root.rglob("*") if x.is_dir()), reverse=True):
-                    if not any(sub.iterdir()):
-                        sub.rmdir()
+                    if not is_protected(sub):
+                        try:
+                            if not any(sub.iterdir()):
+                                sub.rmdir()
+                        except OSError:
+                            pass
         return freed

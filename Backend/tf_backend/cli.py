@@ -162,6 +162,8 @@ async def _demo(provider: str, question: str) -> None:
         raise typer.Exit(1)
 
 
+from tf_agent.tools.types import ToolFailure  # noqa: E402
+
 PLATFORM_SEARCH = {"tiktok": "tiktok_search", "instagram": "instagram_search", "shorts": "shorts_search"}
 
 
@@ -173,6 +175,9 @@ def search(
     recent: str | None = typer.Option(None, help="day, week, month or year"),
 ) -> None:
     """Discover videos on one platform (no account needed; Instagram is discovery-only)."""
+    if recent not in (None, "day", "week", "month", "year"):
+        typer.echo("--recent must be day, week, month or year", err=True)
+        raise typer.Exit(2)
     if platform not in PLATFORM_SEARCH:
         typer.echo("platform must be one of: tiktok, instagram, shorts", err=True)
         raise typer.Exit(2)
@@ -188,7 +193,11 @@ async def _search(platform: str, query: str, max_results: int, recent: str | Non
     engine = make_engine(settings.database_url)
     try:
         stack = build_tool_stack(settings, make_sessionmaker(engine))
-        res = await getattr(stack.platforms, PLATFORM_SEARCH[platform])(query, max_results, recent)
+        try:
+            res = await getattr(stack.platforms, PLATFORM_SEARCH[platform])(query, max_results, recent)
+        except ToolFailure as e:
+            typer.echo(f"search failed: {e.error.code}: {e.error.message}", err=True)
+            raise typer.Exit(1) from None
         typer.echo(compact_discovery(res.to_dict()))
     finally:
         await engine.dispose()
@@ -211,7 +220,11 @@ async def _analyze(url: str) -> None:
     engine = make_engine(settings.database_url)
     try:
         stack = build_tool_stack(settings, make_sessionmaker(engine))
-        item = await stack.platforms.get_video(url)
+        try:
+            item = await stack.platforms.get_video(url)
+        except ToolFailure as e:
+            typer.echo(f"cannot read that video: {e.error.code}: {e.error.message}", err=True)
+            raise typer.Exit(1) from None
         runner = thread_runner(PoseAnalyzer(), Transcriber(settings.whisper_model))
         try:
             r = await build_analyzer(settings, stack, runner).analyze(item)

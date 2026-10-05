@@ -30,6 +30,8 @@ class PlatformConfig:
 
 # Spacing per platform call (yt-dlp metadata / search). Anonymous mode has no account to lose, and the circuit
 # breaker backs off on 429s, so TikTok runs at 1–2 s per call instead of the 3–6 s meant for logged-in browsers.
+LOGIN_WALLS_FOR_NEEDS_LOGIN = 3
+
 DEFAULT_PLATFORMS: dict[str, PlatformConfig] = {
     "tiktok": PlatformConfig(1.0, 1.0),
     "instagram": PlatformConfig(5.0, 5.0),
@@ -48,6 +50,7 @@ class PlatformRegistry:
         self._limiters = {p: RateLimiter(c.min_interval_s, c.jitter_s, sleep=sleep) for p, c in cfg.items()}
         self._breakers = {p: CircuitBreaker(failure_threshold, window_s, open_s, clock=clock) for p in cfg}
         self._modes: dict[str, Mode] = {p: "full" for p in cfg}
+        self._login_walls: dict[str, int] = {p: 0 for p in cfg}
 
     @property
     def platforms(self) -> list[str]:
@@ -61,9 +64,9 @@ class PlatformRegistry:
 
     def health(self, platform: str) -> Health:
         b = self._breakers[platform]
-        if b.state == "open":
+        if b.state == "open" or b.probe_in_flight:
             return "unavailable"
-        if self._modes[platform] == "needs_login":
+        if self._modes[platform] == "needs_login" or self._login_walls[platform] >= LOGIN_WALLS_FOR_NEEDS_LOGIN:
             return "needs_login"
         if b.state == "half_open" or b.recent_failures > 0 or self._modes[platform] == "discovery_only":
             return "degraded"
@@ -74,7 +77,21 @@ class PlatformRegistry:
 
     async def record_success(self, platform: str) -> None:
         self._breakers[platform].record_success()
+        self._login_walls[platform] = 0
         await self._persist(platform)
+
+    async def record_alive(self, platform: str) -> None:
+        """The platform answered (e.g. 'not found'): it's up, without counting as a content success."""
+        self._breakers[platform].record_success()
+        await self._persist(platform)
+
+    async def record_login_wall(self, platform: str) -> None:
+        self._breakers[platform].record_success()
+        self._login_walls[platform] += 1
+        await self._persist(platform)
+
+    def release_probe(self, platform: str) -> None:
+        self._breakers[platform].release_probe()
 
     async def record_failure(self, platform: str, reason: str) -> None:
         log.info("platform %s failure: %s", platform, reason)

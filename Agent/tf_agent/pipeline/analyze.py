@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import logging
 import multiprocessing
 import shutil
 import threading
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -27,7 +29,10 @@ from tf_agent.pipeline.result import VideoAnalysisResult
 from tf_agent.pipeline.retention import MediaRetention
 from tf_agent.pipeline.sheet import make_contact_sheet
 from tf_agent.pipeline.transcript import Transcriber
+from tf_agent.tools.normalize import canonical_id, platform_of
 from tf_agent.tools.types import ToolFailure, VideoItem
+
+log = logging.getLogger(__name__)
 
 PERMANENT_DOWNLOAD_FAILURES = ("not_found", "login_required")
 
@@ -96,11 +101,21 @@ class process_pool_runner:  # noqa: N801
     """Heavy steps in `max_workers` spawned processes; models load once per worker."""
 
     def __init__(self, max_workers: int = 2, whisper_model: str = "small") -> None:
-        self._pool = ProcessPoolExecutor(max_workers=max_workers, mp_context=multiprocessing.get_context("spawn"),
-                                         initializer=_worker_init, initargs=(whisper_model,))
+        self._args = (max_workers, whisper_model)
+        self._pool = self._new_pool()
+
+    def _new_pool(self) -> ProcessPoolExecutor:
+        max_workers, whisper_model = self._args
+        return ProcessPoolExecutor(max_workers=max_workers, mp_context=multiprocessing.get_context("spawn"),
+                                   initializer=_worker_init, initargs=(whisper_model,))
 
     async def __call__(self, job: HeavyJob) -> HeavyResult:
-        return await asyncio.get_running_loop().run_in_executor(self._pool, _worker_run, job)
+        try:
+            return await asyncio.get_running_loop().run_in_executor(self._pool, _worker_run, job)
+        except BrokenProcessPool:  # a worker died (OOM, segfault): recreate the pool for the next job
+            self._pool.shutdown(wait=False, cancel_futures=True)
+            self._pool = self._new_pool()
+            raise
 
     def close(self) -> None:
         self._pool.shutdown(wait=True, cancel_futures=True)
@@ -119,17 +134,23 @@ class AnalysisStore(Protocol):
 
 
 class VideoAnalyzer:
+    """One shared instance per process: analyses are single-flight per video and bounded by `max_parallel`."""
+
     def __init__(self, downloader: Downloader, *, media_dir: Path, heavy_runner: HeavyRunner,
                  store: AnalysisStore | None = None, retention: MediaRetention | None = None,
-                 max_parallel: int = 2, fps: float = 2.0) -> None:
+                 max_parallel: int = 2, fps: float = 2.0, max_duration_s: float = 600.0,
+                 heavy_timeout_s: float = 300.0) -> None:
         self.downloader = downloader
         self.media_dir = Path(media_dir)
         self.runner = heavy_runner
         self.store = store
         self.retention = retention
         self.fps = fps
+        self.max_duration_s = max_duration_s
+        self.heavy_timeout_s = heavy_timeout_s
         self._slots = asyncio.Semaphore(max_parallel)
-        self._in_progress: set[Path] = set()
+        self._busy_dirs: set[Path] = set()
+        self._inflight: dict[str, asyncio.Future[VideoAnalysisResult]] = {}
 
     async def _save(self, result: VideoAnalysisResult) -> VideoAnalysisResult:
         if self.store is not None:
@@ -137,41 +158,86 @@ class VideoAnalyzer:
         return result
 
     async def analyze(self, item: VideoItem) -> VideoAnalysisResult:
+        cid = item.canonical_id
+        if cid in self._inflight:  # another agent already asked for this video: share the work
+            return await asyncio.shield(self._inflight[cid])
+        future: asyncio.Future[VideoAnalysisResult] = asyncio.get_running_loop().create_future()
+        self._inflight[cid] = future
+        try:
+            result = await self._analyze(item)
+            future.set_result(result)
+            return result
+        except BaseException as e:
+            if not future.done():
+                future.set_exception(e)
+                future.exception()  # mark retrieved: waiters re-raise it, nobody else must
+            raise
+        finally:
+            self._inflight.pop(cid, None)
+
+    async def _analyze(self, item: VideoItem) -> VideoAnalysisResult:
+        cid = item.canonical_id
+        if canonical_id(item.url) not in (cid, None) or platform_of(item.url) != item.platform:
+            return VideoAnalysisResult.filtered(cid, "invalid_item")  # never fetch a URL that isn't this video
         if self.store is not None:
-            existing = await self.store.get_analysis(item.canonical_id, PIPELINE_VERSION)
+            existing = await self.store.get_analysis(cid, PIPELINE_VERSION)
             if existing is not None:
                 return existing
             await self.store.upsert_videos([item])
         if item.media_access == "login_required":
-            return await self._save(VideoAnalysisResult.filtered(item.canonical_id, "media_unavailable"))
+            return await self._save(VideoAnalysisResult.filtered(cid, "media_unavailable"))
+        if item.duration_s is not None and item.duration_s > self.max_duration_s:
+            return await self._save(VideoAnalysisResult.filtered(cid, "too_long"))
         async with self._slots:
             return await self._analyze_media(item)
 
+    def _enforce_retention(self) -> None:
+        if self.retention is None:
+            return
+        try:
+            self.retention.enforce(self._busy_dirs)
+        except Exception as e:  # housekeeping must never mask an analysis result
+            log.warning("media retention failed: %s", e)
+
     async def _analyze_media(self, item: VideoItem) -> VideoAnalysisResult:
         cid = item.canonical_id
-        safe = cid.replace(":", "_")
-        if self.retention is not None and not self.retention.can_download():
-            self.retention.enforce(self._in_progress)
-            if not self.retention.can_download():
-                return VideoAnalysisResult.filtered(cid, "media_quota_full")  # not persisted: retry later
+        safe = cid.replace(":", "_")  # canonical IDs are validated: [A-Za-z0-9_-] only
+        video_dir, work = self.media_dir / "videos" / safe, self.media_dir / "frames" / safe
+        self._busy_dirs.update({video_dir, work})
         try:
-            video = await self.downloader.download(item.url, self.media_dir / "videos" / safe)
-        except ToolFailure as e:
-            result = VideoAnalysisResult.filtered(cid, f"download_failed:{e.error.code}")
-            return await self._save(result) if e.error.code in PERMANENT_DOWNLOAD_FAILURES else result
-        work = self.media_dir / "frames" / safe
-        self._in_progress.add(video)
-        try:
+            if self.retention is not None and not self.retention.can_download():
+                self._enforce_retention()
+                if not self.retention.can_download():
+                    return VideoAnalysisResult.filtered(cid, "media_quota_full")  # not persisted: retry later
+            try:
+                video = await self.downloader.download(item.url, video_dir)
+            except ToolFailure as e:
+                result = VideoAnalysisResult.filtered(cid, f"download_failed:{e.error.code}")
+                return await self._save(result) if e.error.code in PERMANENT_DOWNLOAD_FAILURES else result
             try:
                 meta = await probe(video)
-            except PipelineError:
+            except (PipelineError, TimeoutError, ValueError, KeyError):
                 return await self._save(VideoAnalysisResult.filtered(cid, "probe_failed", media_path=str(video)))
-            cuts = await scene_cuts(video)
-            frames = await sample_frames(video, work / "analysis", fps=self.fps)
-            keys = await key_frames(video, work / "keys", meta.duration_s, cuts)
-            sheet = make_contact_sheet(keys, self.media_dir / "sheets" / f"{safe}.jpg")
-            heavy = await self.runner(HeavyJob(str(video), [str(p) for _, p in frames], meta.has_audio,
-                                               meta.duration_s))
+            if meta.duration_s > self.max_duration_s:
+                return await self._save(VideoAnalysisResult.filtered(cid, "too_long", media_path=str(video)))
+            step, sheet = "frames", None
+            try:
+                cuts = await scene_cuts(video)
+                frames = await sample_frames(video, work / "analysis", fps=self.fps)
+                keys = await key_frames(video, work / "keys", meta.video_duration_s or meta.duration_s, cuts)
+                sheet = make_contact_sheet(keys, self.media_dir / "sheets" / f"{safe}.jpg")
+                step = "heavy"
+                job = HeavyJob(str(video), [str(p) for _, p in frames], meta.has_audio, meta.duration_s)
+                try:
+                    heavy = await asyncio.wait_for(self.runner(job), self.heavy_timeout_s)
+                except TimeoutError:
+                    return VideoAnalysisResult.filtered(cid, "analysis_failed:heavy_timeout", media_path=str(video),
+                                                        contact_sheet_path=str(sheet))
+            except (PipelineError, TimeoutError, ValueError, OSError, BrokenProcessPool, RuntimeError,
+                    AttributeError, ExceptionGroup) as e:
+                log.warning("analysis of %s failed at %s: %s", cid, step, e)
+                return VideoAnalysisResult.filtered(cid, f"analysis_failed:{step}", media_path=str(video),
+                                                    contact_sheet_path=str(sheet) if sheet else None)
             stats = PoseStats(**heavy.pose)
             segments = clean_segments([t for t, _ in frames], stats.per_frame_single, cuts, heavy.motion_per_frame)
             best = segments[0] if segments else None
@@ -186,6 +252,5 @@ class VideoAnalyzer:
                 contact_sheet_path=str(sheet), media_path=str(video)))
         finally:
             shutil.rmtree(work, ignore_errors=True)
-            self._in_progress.discard(video)
-            if self.retention is not None:
-                self.retention.enforce(self._in_progress)
+            self._busy_dirs.difference_update({video_dir, work})
+            self._enforce_retention()

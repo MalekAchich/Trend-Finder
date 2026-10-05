@@ -13,13 +13,22 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 from tf_agent.tools.health import PlatformRegistry
-from tf_agent.tools.normalize import canonical_id, norm_handle, norm_hashtag, norm_query, platform_of
+from tf_agent.tools.limiter import RateLimiter
+from tf_agent.tools.normalize import (
+    canonical_id,
+    canonical_url,
+    norm_handle,
+    norm_hashtag,
+    norm_query,
+    platform_of,
+)
 from tf_agent.tools.types import ToolFailure, VideoItem
 from tf_agent.tools.web import SearchHit, SearchResponse
 
 SeenFilter = Callable[[list[VideoItem]], Awaitable[tuple[list[VideoItem], int]]]
 ItemsSink = Callable[[list[VideoItem]], Awaitable[None]]
 HITS_TTL_S = 6 * 3600
+SEARCH_PAGE = 20
 META_TTL_S = 6 * 3600
 _HASHTAG_RE = re.compile(r"#(\w+)", re.UNICODE)
 _COUNTED_FAILURES = ("platform_unavailable", "rate_limited")
@@ -62,7 +71,7 @@ def _skeleton(cid: str, hit: SearchHit | None, url: str, media_access: str) -> V
         n = norm_hashtag(t)
         if n not in tags:
             tags.append(n)
-    return VideoItem(canonical_id=cid, platform=cid.split(":", 1)[0], url=url.split("?")[0], caption=caption,
+    return VideoItem(canonical_id=cid, platform=cid.split(":", 1)[0], url=canonical_url(cid, url), caption=caption,
                      hashtags=tags, media_access=media_access, source="searxng")
 
 
@@ -70,40 +79,54 @@ class PlatformTools:
     def __init__(self, searx: SearchBackend, ytdlp: MetadataBackend, cache: Cache | None,
                  registry: PlatformRegistry, *, seen_filter: SeenFilter | None = None,
                  on_items: ItemsSink | None = None, instagram_enrich: bool = False, enrich_parallel: int = 4,
-                 clock: Callable[[], float] = time.time) -> None:
+                 search_limiter: RateLimiter | None = None, clock: Callable[[], float] = time.time) -> None:
         self.searx, self.ytdlp, self.cache, self.registry = searx, ytdlp, cache, registry
         self.seen_filter, self.on_items = seen_filter, on_items
         self.instagram_enrich = instagram_enrich
         self._enrich_slots = asyncio.Semaphore(enrich_parallel)
+        # every SearXNG query (site: searches and web_search) shares one politeness lane: same upstream engines
+        self.search_limiter = search_limiter or RateLimiter(1.0)
         self._clock = clock
         if not instagram_enrich:
             registry.configure_mode("instagram", "discovery_only")
 
     # ---- plumbing ----
-    async def _guarded(self, platform: str, fn: Callable[[], Awaitable[Any]]) -> Any:
+    async def _guarded(self, platform: str, fn: Callable[[], Awaitable[Any]],
+                       limiter: RateLimiter | None = None) -> Any:
         if not self.registry.allow(platform):
             raise ToolFailure("platform_unavailable",
                               f"{platform}: circuit open after repeated failures; try another platform or later",
                               retry_after_s=600)
-        await self.registry.limiter(platform).acquire()
+        verdict = False
         try:
+            await (limiter or self.registry.limiter(platform)).acquire()
             result = await fn()
+            await self.registry.record_success(platform)
+            verdict = True
+            return result
         except ToolFailure as e:
             if e.error.code in _COUNTED_FAILURES:
                 await self.registry.record_failure(platform, e.error.message)
             elif e.error.code == "login_required":
-                await self.registry.set_mode(platform, "needs_login")
+                await self.registry.record_login_wall(platform)  # per item; repeated walls flip the platform
+            else:
+                await self.registry.record_alive(platform)  # not_found / invalid_input: the platform answered
+            verdict = True
             raise
-        await self.registry.record_success(platform)
-        return result
+        finally:
+            if not verdict:  # cancelled or unexpected error: never leave a half-open probe stuck
+                self.registry.release_probe(platform)
 
-    async def _search_hits(self, platform: str, query: str, n: int, recent: Recent = None) -> list[SearchHit]:
+    async def _search_hits(self, platform: str, query: str, n: int, recent: Recent = None,
+                           notes: list[str] | None = None) -> list[SearchHit]:
         key = {"q": query, "n": n, "recent": recent}
         if self.cache is not None and (cached := await self.cache.get("search_hits", key)) is not None:
             return [SearchHit(**h) for h in cached["hits"]]
         resp: SearchResponse = await self._guarded(
-            platform, lambda: self.searx.search(query, max_results=n, time_range=recent))
-        if self.cache is not None:
+            platform, lambda: self.searx.search(query, max_results=n, time_range=recent), self.search_limiter)
+        if resp.unresponsive and notes is not None:
+            notes.append(f"search engines degraded ({', '.join(resp.unresponsive)}): results may be incomplete")
+        if self.cache is not None and resp.results and not resp.unresponsive:  # never cache thin results
             await self.cache.put("search_hits", key, {"hits": [h.__dict__ for h in resp.results]}, HITS_TTL_S)
         return resp.results
 
@@ -146,14 +169,20 @@ class PlatformTools:
 
     async def _finish(self, platform: str, items: list[VideoItem], hidden: int, notes: list[str]) -> DiscoveryResult:
         if self.on_items is not None and items:
-            await self.on_items(items)
-        return DiscoveryResult(items=items, hidden_already_seen=hidden, platform_health=self.registry.health(platform),
-                               notes=notes)
+            try:
+                await self.on_items(items)
+            except Exception as e:  # persistence trouble must not throw away a paid-for search
+                notes.append(f"results not saved ({type(e).__name__}); they are still shown here")
+        health = self.registry.health(platform)
+        if health == "ok" and any(n.startswith("search engines degraded") for n in notes):
+            health = "degraded"
+        return DiscoveryResult(items=items, hidden_already_seen=hidden, platform_health=health, notes=notes)
 
     async def _site_search(self, platform: str, site_query: str, max_results: int, enrich: bool,
                            media_access: str = "unknown", recent: Recent = None) -> DiscoveryResult:
         notes: list[str] = []
-        hits = await self._search_hits(platform, site_query, max_results * 2, recent)
+        # ask for a full page and keep only video URLs before slicing: engines mix in tag/profile pages
+        hits = await self._search_hits(platform, site_query, SEARCH_PAGE, recent, notes)
         kept, hidden = await self._filter_seen(self._skeletons(hits, media_access))
         kept = kept[:max_results]
         if enrich:
@@ -162,7 +191,8 @@ class PlatformTools:
 
     # ---- public tools ----
     async def tiktok_search(self, query: str, max_results: int = 15, recent: Recent = None) -> DiscoveryResult:
-        return await self._site_search("tiktok", f"site:tiktok.com {norm_query(query)}", max_results, True,
+        # `site:tiktok.com/@` keeps engines on /@user/video/ID pages (measured: 20/20 videos vs 2/20 with recency)
+        return await self._site_search("tiktok", f"site:tiktok.com/@ {norm_query(query)}", max_results, True,
                                        recent=recent)
 
     async def tiktok_creator(self, handle: str, max_results: int = 15) -> DiscoveryResult:
@@ -193,7 +223,7 @@ class PlatformTools:
             notes.append(f"youtube search unavailable: {e.error.message}")
         try:
             for it in self._skeletons(await self._search_hits("youtube", f"site:youtube.com/shorts {q}",
-                                                              max_results, recent), "unknown"):
+                                                              SEARCH_PAGE, recent, notes), "unknown"):
                 merged.setdefault(it.canonical_id, it)
         except ToolFailure as e:
             failures.append(e)
@@ -203,6 +233,10 @@ class PlatformTools:
         kept, hidden = await self._filter_seen(list(merged.values()))
         kept = await self._enrich("youtube", kept[:max_results], notes)
         return await self._finish("youtube", kept, hidden, notes)
+
+    async def web_search(self, query: str, max_results: int = 8, time_range: Recent = None) -> SearchResponse:
+        return await self._guarded("web", lambda: self.searx.search(query, max_results=max_results,
+                                                                     time_range=time_range), self.search_limiter)
 
     async def get_video(self, url: str) -> VideoItem:
         platform = platform_of(url)

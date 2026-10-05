@@ -14,6 +14,10 @@ async def sample_frames(path: Path, out_dir: Path, fps: float = 2.0, width: int 
     await run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(path), "-vf", f"fps={fps},scale={width}:-2",
                "-q:v", "4", str(out_dir / "f_%05d.jpg")])
     files = sorted(out_dir.glob("f_*.jpg"))
+    if not files:  # clips shorter than one sampling interval: take the first frame
+        await run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(path), "-frames:v", "1", "-vf", f"scale={width}:-2",
+                   str(out_dir / "f_00001.jpg")])
+        files = sorted(out_dir.glob("f_*.jpg"))
     if not files:
         raise PipelineError("no frames could be sampled")
     return [(round(i / fps, 3), f) for i, f in enumerate(files)]
@@ -45,4 +49,6 @@ async def key_frames(path: Path, out_dir: Path, duration_s: float, cuts: list[fl
             raise PipelineError(f"key frame at {t:.2f}s missing")
         return t, dest
 
-    return list(await asyncio.gather(*(grab(i, t) for i, t in enumerate(_key_times(duration_s, cuts, n)))))
+    async with asyncio.TaskGroup() as tg:  # a failed grab cancels its siblings (gather would leave them running)
+        tasks = [tg.create_task(grab(i, t)) for i, t in enumerate(_key_times(duration_s, cuts, n))]
+    return [t.result() for t in tasks]

@@ -29,8 +29,11 @@ class Metrics(BaseModel):
     saves: int | None = None
 
 
+CANONICAL_ID_PATTERN = r"^(tiktok|instagram|youtube):[A-Za-z0-9_-]{1,64}$"
+
+
 class VideoItem(BaseModel):
-    canonical_id: str
+    canonical_id: str = Field(pattern=CANONICAL_ID_PATTERN)
     platform: Platform
     url: str
     creator: Creator = Field(default_factory=Creator)

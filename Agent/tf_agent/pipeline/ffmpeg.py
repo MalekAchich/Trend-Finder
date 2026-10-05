@@ -19,6 +19,7 @@ class Probe:
     height: int
     fps: float
     has_audio: bool
+    video_duration_s: float = 0.0  # the video stream's own length (can be shorter than the container)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -49,15 +50,18 @@ def _fps(rate: str | None) -> float:
 
 async def probe(path: Path) -> Probe:
     out, _ = await run(["ffprobe", "-v", "error", "-show_entries",
-                        "stream=codec_type,width,height,r_frame_rate:format=duration", "-of", "json", str(path)], 60)
+                        "stream=codec_type,width,height,r_frame_rate,duration:format=duration", "-of", "json",
+                        str(path)], 60)
     data = json.loads(out or "{}")
     streams = data.get("streams") or []
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     duration = float((data.get("format") or {}).get("duration") or 0.0)
     if video is None or duration <= 0:
         raise PipelineError("no decodable video stream")
+    video_duration = float(video.get("duration") or duration)
     return Probe(duration_s=duration, width=int(video["width"]), height=int(video["height"]),
-                 fps=_fps(video.get("r_frame_rate")), has_audio=any(s.get("codec_type") == "audio" for s in streams))
+                 fps=_fps(video.get("r_frame_rate")), has_audio=any(s.get("codec_type") == "audio" for s in streams),
+                 video_duration_s=min(video_duration, duration))
 
 
 _PTS_RE = re.compile(r"pts_time:([0-9.]+)")

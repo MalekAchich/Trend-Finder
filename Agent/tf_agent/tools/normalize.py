@@ -5,7 +5,8 @@ import re
 from urllib.parse import parse_qs, urlparse
 
 _TT_VIDEO = re.compile(r"/(?:@[^/]+/video|v|video)/(\d{8,25})")
-_IG_MEDIA = re.compile(r"/(?:[^/]+/)?(?:reels?|p|tv)/([A-Za-z0-9_-]{5,40})")
+_IG_MEDIA = re.compile(r"/(?:[^/]+/)?(?:reels?|p|tv)/([A-Za-z0-9_-]{8,40})/?$")
+_IG_RESERVED = {"audio", "videos", "explore", "tags", "stories", "accounts", "reels", "reel"}
 _YT_PATH = re.compile(r"^/(?:shorts|embed|live)/([A-Za-z0-9_-]{11})")
 _YT_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
@@ -45,7 +46,9 @@ def canonical_id(url: str) -> str | None:
         return f"tiktok:{m.group(1)}" if m else None
     if platform == "instagram":
         m = _IG_MEDIA.match(path)
-        return f"instagram:{m.group(1)}" if m else None
+        if not m or m.group(1).lower() in _IG_RESERVED:
+            return None
+        return f"instagram:{m.group(1)}"
     host = parsed.hostname or ""
     if host == "youtu.be":
         vid = path.strip("/").split("/")[0]
@@ -57,6 +60,16 @@ def canonical_id(url: str) -> str | None:
         vid = (parse_qs(parsed.query).get("v") or [""])[0]
         return f"youtube:{vid}" if _YT_ID.match(vid) else None
     return None
+
+
+def canonical_url(cid: str, original: str | None = None) -> str:
+    """A clean, fetchable URL for a canonical ID (TikTok keeps its original path: it needs the handle)."""
+    platform, _, vid = cid.partition(":")
+    if platform == "youtube":
+        return f"https://www.youtube.com/shorts/{vid}"
+    if platform == "instagram":
+        return f"https://www.instagram.com/reel/{vid}/"
+    return (original or "").split("?")[0].split("#")[0]
 
 
 def norm_hashtag(tag: str) -> str:

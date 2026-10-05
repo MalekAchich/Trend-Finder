@@ -29,7 +29,10 @@ class FakeDownloader:
 
 
 def item(cid="tiktok:7000000000000000001", access="ok"):
-    return VideoItem(canonical_id=cid, platform=cid.split(":")[0], url=f"https://www.tiktok.com/@u/video/{cid[7:]}",
+    from tf_agent.tools.normalize import canonical_url
+
+    url = canonical_url(cid, f"https://www.tiktok.com/@u/video/{cid.split(':')[1]}")
+    return VideoItem(canonical_id=cid, platform=cid.split(":")[0], url=url,
                      metrics=Metrics(views=10), media_access=access)
 
 

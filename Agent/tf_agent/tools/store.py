@@ -33,7 +33,7 @@ class VideoStore:
 
     async def upsert_videos(self, items: list[VideoItem]) -> None:
         async with self._sm() as s:
-            for item in items:
+            for item in sorted(items, key=lambda i: i.canonical_id):  # one lock order for every caller
                 values = _video_values(item)
                 insert_values = {"platform": item.platform, "url": item.url, **values}
                 stmt = pg_insert(Video).values(canonical_id=item.canonical_id, **insert_values)
