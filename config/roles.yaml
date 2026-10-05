@@ -1,0 +1,37 @@
+# role -> ordered candidates; the first available provider wins (usage governor decides availability).
+default:
+  - {provider: claude, model: best}
+  - {provider: chatgpt, model: best, effort: medium}
+master:
+  - {provider: claude, model: best}
+  - {provider: chatgpt, model: best, effort: high}
+scout:
+  - {provider: chatgpt, model: best, effort: medium}
+  - {provider: claude, model: best}
+deep_dive:
+  - {provider: claude, model: best}
+  - {provider: chatgpt, model: best, effort: medium}
+radar:
+  - {provider: chatgpt, model: fast, effort: low}
+  - {provider: claude, model: fast}
+seed_study:
+  - {provider: claude, model: best}
+  - {provider: chatgpt, model: best, effort: medium}
+analyst:
+  - {provider: claude, model: best}
+  - {provider: chatgpt, model: best, effort: medium}
+cross_check:
+  - {provider: chatgpt, model: best, effort: medium}
+  - {provider: claude, model: best}
+curator:
+  - {provider: claude, model: best}
+  - {provider: chatgpt, model: best, effort: high}
+brief:
+  - {provider: claude, model: best}
+  - {provider: chatgpt, model: best, effort: medium}
+learner:
+  - {provider: claude, model: best}
+  - {provider: chatgpt, model: best, effort: high}
+demo:
+  - {provider: claude, model: fast}
+  - {provider: chatgpt, model: fast, effort: low}

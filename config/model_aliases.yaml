@@ -1,0 +1,9 @@
+# alias -> concrete model id per provider (Docs/Code docs/02-model-layer.md).
+# If a configured id disappears from the provider's model list, the registry falls back to the
+# provider's highest-priority visible model.
+claude:
+  best: opus
+  fast: sonnet
+chatgpt:
+  best: gpt-6-astra
+  fast: gpt-6-luna
