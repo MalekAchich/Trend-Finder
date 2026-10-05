@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+media/
+secrets/
+.superpowers/
+Frontend/node_modules/
+Frontend/dist/
