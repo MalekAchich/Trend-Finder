@@ -6,12 +6,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import fcntl
 import hashlib
 import json
 import os
 import secrets
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -31,7 +33,11 @@ ClientFactory = Callable[[], httpx.AsyncClient]
 
 
 class ChatGptAuthError(RuntimeError):
-    pass
+    """Credentials missing or rejected: a human must log in again."""
+
+
+class ChatGptTransientError(ChatGptAuthError):
+    """Auth server unreachable or failing (network, 5xx, bad body): retry later, no re-login."""
 
 
 def _b64url(raw: bytes) -> str:
@@ -72,7 +78,7 @@ class ChatGptAuth:
         self._client_factory = client_factory or (lambda: httpx.AsyncClient(timeout=30))
         self._clock = clock
         self._pending: dict[str, str] = {}  # state -> PKCE verifier
-        self._lock = asyncio.Lock()
+        self._inflight: asyncio.Future[dict[str, Any]] | None = None
         self._server: asyncio.AbstractServer | None = None
         self._device_task: asyncio.Task[None] | None = None
 
@@ -105,7 +111,7 @@ class ChatGptAuth:
 
     def status(self) -> dict[str, Any]:
         data = self.load()
-        if not data or not data.get("refresh_token"):
+        if not data or not data.get("refresh_token") or data.get("needs_login"):
             return {"connected": False, "email": None, "plan": None}
         claims = data.get("claims") or {}
         return {"connected": True, "email": claims.get("email"), "plan": claims.get("plan_type")}
@@ -124,22 +130,71 @@ class ChatGptAuth:
             raise ChatGptAuthError(f"token exchange failed ({r.status_code})")
         return self._persist(r.json())
 
-    async def ensure_fresh(self, force: bool = False) -> dict[str, Any]:
-        async with self._lock:
-            data = self.load()
-            if not data or not data.get("refresh_token"):
-                raise ChatGptAuthError("not connected: run `tf login chatgpt`")
-            exp = jwt_payload(data["access_token"]).get("exp")
-            if not force and (not exp or exp - self._clock() > REFRESH_SKEW_S):
+    @staticmethod
+    def _needs_refresh(data: dict[str, Any], force: bool, stale_token: str | None, now: float) -> bool:
+        if stale_token is not None:  # reactive refresh after a 401: only if nobody replaced that token yet
+            return data.get("access_token") == stale_token
+        if force:
+            return True
+        exp = jwt_payload(data.get("access_token")).get("exp")
+        return bool(exp) and exp - now <= REFRESH_SKEW_S
+
+    def _connected_data(self) -> dict[str, Any]:
+        data = self.load()
+        if not data or not data.get("refresh_token") or data.get("needs_login"):
+            raise ChatGptAuthError("not connected: run `tf login chatgpt`")
+        return data
+
+    async def ensure_fresh(self, force: bool = False, stale_token: str | None = None) -> dict[str, Any]:
+        """Return fresh token data. Concurrent callers share one in-flight refresh; the refresh itself is
+        shielded from caller cancellation and serialized across processes with a file lock."""
+        data = self._connected_data()
+        if not self._needs_refresh(data, force, stale_token, self._clock()):
+            return data
+        if self._inflight is None or self._inflight.done():
+            task = asyncio.ensure_future(self._refresh_locked(force, stale_token))
+            task.add_done_callback(lambda t: t.cancelled() or t.exception())  # never "exception never retrieved"
+            self._inflight = task
+        return await asyncio.shield(self._inflight)
+
+    @asynccontextmanager
+    async def _file_lock(self) -> AsyncIterator[None]:
+        lock_path = self.auth_file.with_suffix(".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            while True:  # non-blocking polling keeps the wait cancellable
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    await asyncio.sleep(0.05)
+            yield
+        finally:
+            os.close(fd)  # closing the descriptor releases the lock
+
+    async def _refresh_locked(self, force: bool, stale_token: str | None) -> dict[str, Any]:
+        async with self._file_lock():
+            data = self._connected_data()  # re-read: another process may have refreshed meanwhile
+            if not self._needs_refresh(data, force, stale_token, self._clock()):
                 return data
-            async with self._client_factory() as client:
-                r = await client.post(f"{ISSUER}/oauth/token", json={  # JSON body for refresh
-                    "client_id": CLIENT_ID, "grant_type": "refresh_token",
-                    "refresh_token": data["refresh_token"],
-                })
-            if r.status_code >= 400:
+            try:
+                async with self._client_factory() as client:
+                    r = await client.post(f"{ISSUER}/oauth/token", json={  # JSON body for refresh
+                        "client_id": CLIENT_ID, "grant_type": "refresh_token",
+                        "refresh_token": data["refresh_token"],
+                    })
+            except httpx.TransportError as e:
+                raise ChatGptTransientError(f"token refresh network error: {type(e).__name__}") from e
+            if r.status_code in (400, 401, 403):
+                self._save({**data, "needs_login": True})
                 raise ChatGptAuthError(f"token refresh rejected ({r.status_code}): run `tf login chatgpt` again")
-            new = r.json()
+            if r.status_code >= 400:
+                raise ChatGptTransientError(f"token refresh failed ({r.status_code})")
+            try:
+                new = r.json()
+            except ValueError as e:
+                raise ChatGptTransientError("token refresh returned non-JSON") from e
             return self._persist({
                 "id_token": new.get("id_token") or data.get("id_token"),
                 "access_token": new.get("access_token") or data["access_token"],

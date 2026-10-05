@@ -3,11 +3,21 @@ import asyncio
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from tf_agent.models.chatgpt_auth import ChatGptAuthError
 from tf_backend.services import Services
+
+CLIENT_HEADER = "x-trendfinder-client"
+
+
+def require_client_header(request: Request) -> None:
+    """Mutating calls need a custom header: browsers can't send one cross-site without a CORS preflight,
+    so a random web page can't log the owner out or start logins."""
+    if not request.headers.get(CLIENT_HEADER):
+        raise HTTPException(403, f"missing {CLIENT_HEADER} header")
+
 
 router = APIRouter(prefix="/providers", tags=["providers"])
 
@@ -27,8 +37,6 @@ async def list_providers(request: Request) -> list[dict[str, Any]]:
     out = []
     for name, adapter in sv.adapters.items():
         h = await adapter.health()
-        if h.connected and sv.governor.status(name).status == "auth_error":
-            await sv.governor.mark_ok(name)
         st = sv.governor.status(name)
         out.append({"provider": name, "connected": h.connected, "detail": h.detail, "account": h.account,
                     "status": st.status, "cooling_until": st.cooling_until, "used_percent": st.used_percent,
@@ -48,7 +56,7 @@ class ChatGptLoginStart(BaseModel):
     device_code: bool = False
 
 
-@router.post("/chatgpt/login/start")
+@router.post("/chatgpt/login/start", dependencies=[Depends(require_client_header)])
 async def chatgpt_login_start(body: ChatGptLoginStart, request: Request) -> dict[str, Any]:
     sv = _sv(request)
     try:
@@ -59,7 +67,7 @@ async def chatgpt_login_start(body: ChatGptLoginStart, request: Request) -> dict
         raise HTTPException(409, str(e)) from e
 
 
-@router.post("/claude/login/start")
+@router.post("/claude/login/start", dependencies=[Depends(require_client_header)])
 async def claude_login_start(request: Request) -> dict[str, Any]:
     return await _sv(request).claude_auth.login_start()
 
@@ -68,7 +76,7 @@ class ClaudeLoginComplete(BaseModel):
     code: str
 
 
-@router.post("/claude/login/complete")
+@router.post("/claude/login/complete", dependencies=[Depends(require_client_header)])
 async def claude_login_complete(body: ClaudeLoginComplete, request: Request) -> dict[str, bool]:
     sv = _sv(request)
     try:
@@ -79,7 +87,7 @@ async def claude_login_complete(body: ClaudeLoginComplete, request: Request) -> 
     return {"connected": connected}
 
 
-@router.post("/{provider}/logout")
+@router.post("/{provider}/logout", dependencies=[Depends(require_client_header)])
 async def logout(provider: str, request: Request) -> dict[str, bool]:
     sv = _sv(request)
     _require(sv, provider)

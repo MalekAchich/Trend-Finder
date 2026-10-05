@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import Literal, Protocol
 
 from tf_agent.models.types import RateInfo
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -27,12 +30,14 @@ class ProviderStateStore(Protocol):
 class UsageGovernor:
     def __init__(self, providers: Iterable[str], concurrency: int = 4, *,
                  clock: Callable[[], float] = time.time, store: ProviderStateStore | None = None,
-                 cool_at_percent: float = 98.0, probe_after_s: float = 900.0) -> None:
+                 cool_at_percent: float = 98.0, probe_after_s: float = 900.0,
+                 auth_probe_s: float = 300.0) -> None:
         names = list(providers)
         self._clock = clock
         self._store = store
         self.cool_at_percent = cool_at_percent
         self.probe_after_s = probe_after_s
+        self.auth_probe_s = auth_probe_s
         self._status = {p: ProviderStatus() for p in names}
         self._slots = {p: asyncio.Semaphore(concurrency) for p in names}
 
@@ -43,17 +48,23 @@ class UsageGovernor:
         st = self._status[provider]
         if st.status == "ok":
             return True
-        if st.status == "auth_error":
-            return False
+        # cooling and auth_error both re-open for a probe call once their window has passed
         return st.cooling_until is None or self._clock() >= st.cooling_until
 
     def slot(self, provider: str) -> asyncio.Semaphore:
         return self._slots[provider]
 
+    async def _persist(self, provider: str) -> None:
+        if self._store is None:
+            return
+        try:
+            await self._store.save(provider, self._status[provider])
+        except Exception as e:  # in-memory state is the source of truth; persistence is best effort
+            log.warning("provider state save failed for %s: %s", provider, e)
+
     async def _set(self, provider: str, status: ProviderStatus) -> None:
         self._status[provider] = status
-        if self._store is not None:
-            await self._store.save(provider, status)
+        await self._persist(provider)
 
     async def mark_cooling(self, provider: str, reset_at: float | None, reason: str) -> None:
         now = self._clock()
@@ -62,8 +73,8 @@ class UsageGovernor:
                                           last_error=reason))
 
     async def mark_auth_error(self, provider: str, reason: str) -> None:
-        await self._set(provider, replace(self._status[provider], status="auth_error", cooling_until=None,
-                                          last_error=reason))
+        await self._set(provider, replace(self._status[provider], status="auth_error",
+                                          cooling_until=self._clock() + self.auth_probe_s, last_error=reason))
 
     async def mark_ok(self, provider: str) -> None:
         if self._status[provider].status != "ok":
@@ -77,8 +88,8 @@ class UsageGovernor:
         if rate.used_percent >= self.cool_at_percent:
             await self.mark_cooling(provider, rate.resets_at,
                                     f"pre-emptive: {rate.used_percent:.0f}% of the usage window used")
-        elif self._store is not None:
-            await self._store.save(provider, self._status[provider])
+        else:
+            await self._persist(provider)
 
     def earliest_recovery(self) -> float | None:
         times = [s.cooling_until for s in self._status.values() if s.status == "cooling" and s.cooling_until]

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import uuid
@@ -20,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 from tf_agent.models.errors import (
     AuthRequired,
+    InvalidRequest,
     MalformedResponse,
     ProviderError,
     TransientProviderError,
@@ -40,7 +42,10 @@ PROVIDER = "claude"
 URL_RE = re.compile(r"https?://[^\s)>\"]+")
 MODEL_RE = re.compile(r"^claude-(haiku|sonnet|opus)-(\d+)-(\d+)(?:-(\d{8}))?$")
 CLAUDE_ALIASES = ("opus", "sonnet", "haiku")
-STRIPPED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+# Variables that would move Claude calls off the owner's subscription (API key, proxy, cloud providers).
+STRIPPED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
+                "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_OAUTH_TOKEN")
+_LIVE_MENTION_RE = re.compile(r"@(?=[/~.])")
 MAX_SYSTEM_ARG_BYTES = 64_000
 
 LIMIT_RE = re.compile(r"usage limit|rate limit|hit your limit|limit reached|too many requests", re.I)
@@ -52,6 +57,11 @@ RESET_EPOCH_RE = re.compile(r"\|(\d{10})\b")
 
 def clean_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in STRIPPED_ENV}
+
+
+def defuse(text: str) -> str:
+    """Neutralise `@/…`, `@~…`, `@.…` in untrusted text so the CLI never inlines local files (only image refs may)."""
+    return _LIVE_MENTION_RE.sub("@\u200b", text)
 
 
 def isolation_flags(empty_mcp_config: Path) -> list[str]:
@@ -87,23 +97,23 @@ def render_prompt(req: CompletionRequest, image_ref: Callable[[ImagePart], str])
     for m in req.messages:
         if m.role == "user":
             out.append("[user]")
-            out.append(m.text())
+            out.append(defuse(m.text()))
             out.extend(image_ref(img) for img in m.images())
         elif m.role == "assistant":
             out.append("[assistant]")
             if m.text():
-                out.append(m.text())
+                out.append(defuse(m.text()))
             if m.tool_calls:
-                out.append(json.dumps({"calls": [{"id": c.id, "name": c.name, "arguments": c.arguments}
-                                                 for c in m.tool_calls]}, ensure_ascii=False))
+                out.append(defuse(json.dumps({"calls": [{"id": c.id, "name": c.name, "arguments": c.arguments}
+                                                        for c in m.tool_calls]}, ensure_ascii=False)))
         else:
             out.append(f"[tool result id={m.tool_call_id} name={m.tool_name}]")
-            out.append(m.text())
+            out.append(defuse(m.text()))
     out.append("</conversation>")
     if req.tools:
         out.append("<tools>")
-        out.extend(json.dumps({"name": t.name, "description": t.description, "parameters": t.parameters},
-                              ensure_ascii=False) for t in req.tools)
+        out.extend(defuse(json.dumps({"name": t.name, "description": t.description, "parameters": t.parameters},
+                                     ensure_ascii=False)) for t in req.tools)
         out.append("</tools>")
         out.append('Decide your next step. Reply ONLY with JSON matching the schema: one or more tool calls in '
                    '"calls", each with the tool "name" and "arguments" matching that tool\'s parameters.')
@@ -126,6 +136,15 @@ def classify_failure(text: str, api_status: Any) -> ProviderError:
     if (status or 0) >= 500 or TRANSIENT_RE.search(t):
         return TransientProviderError(PROVIDER, t or "transient failure")
     return ProviderError(PROVIDER, t or "unknown claude CLI failure")
+
+
+async def _kill_group(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    await proc.wait()
 
 
 class ClaudeCliAuth:
@@ -225,6 +244,8 @@ class ClaudeCLIAdapter:
 
     def _image_ref(self, img: ImagePart) -> str:
         src = Path(img.path).resolve()
+        if not src.is_file():
+            raise InvalidRequest(PROVIDER, f"image not found: {img.path}")
         if " " not in str(src):
             return f"@{src}"
         data = src.read_bytes()
@@ -237,15 +258,17 @@ class ClaudeCLIAdapter:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, cwd=self.cwd, env=clean_env())
+                stderr=asyncio.subprocess.PIPE, cwd=self.cwd, env=clean_env(), start_new_session=True)
         except (FileNotFoundError, PermissionError) as e:
             raise AuthRequired(PROVIDER, f"claude CLI not found at {self.auth.bin!r}") from e
         try:
             out, err = await asyncio.wait_for(proc.communicate(stdin_text.encode()), timeout_s)
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await _kill_group(proc)
             raise TransientProviderError(PROVIDER, f"claude -p timed out after {timeout_s}s") from None
+        except BaseException:  # cancellation: never leave a CLI (and its children) spending usage
+            await asyncio.shield(_kill_group(proc))
+            raise
         stdout = out.decode(errors="replace").strip()
         stderr = err.decode(errors="replace").strip()
         try:

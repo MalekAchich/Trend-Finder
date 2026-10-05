@@ -49,6 +49,19 @@ class AgentResult(Generic[T]):
 EventSink = Callable[[AgentEvent], Awaitable[None]]
 
 
+def _paired(messages: list[Message]) -> list[Message]:
+    """Guarantee every assistant tool call has a tool result (ChatGPT rejects orphaned function calls)."""
+    answered = {m.tool_call_id for m in messages if m.role == "tool"}
+    out: list[Message] = []
+    for m in messages:
+        out.append(m)
+        for c in m.tool_calls:
+            if c.id not in answered:
+                out.append(Message.tool_result(c, "SKIPPED: no result was recorded for this call."))
+                answered.add(c.id)
+    return out
+
+
 def _short(e: ValidationError) -> str:
     return "; ".join(f"{'.'.join(map(str, err['loc'])) or 'root'}: {err['msg']}" for err in e.errors()[:8])
 
@@ -106,7 +119,7 @@ async def run_agent(
             messages.append(Message.user(BUDGET_MSG))
         specs = [submit_spec] if last else [t.spec() for t in tools] + [submit_spec]
         req = CompletionRequest(model="", system=system, tools=specs, require_tool=True,
-                                messages=compact_transcript(messages, budget.max_transcript_chars))
+                                messages=_paired(compact_transcript(messages, budget.max_transcript_chars)))
         resp = await client.complete(req, ctx, only=provider)
         used_provider, used_model = resp.provider, resp.model
         messages.append(Message.assistant(resp.text, resp.tool_calls))
@@ -122,6 +135,8 @@ async def run_agent(
             for c in others:
                 messages.append(Message.tool_result(c, "SKIPPED: submit_result was called in the same step."))
             submit = submits[0]
+            for dup in submits[1:]:
+                messages.append(Message.tool_result(dup, "SKIPPED: duplicate submit_result; only the first counts."))
             try:
                 value = result_model.model_validate(submit.arguments)
             except ValidationError as e:

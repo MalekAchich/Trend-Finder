@@ -14,7 +14,7 @@ class TextPart:
 @dataclass(frozen=True)
 class ImagePart:
     path: str
-    mime: str = "image/jpeg"
+    mime: str | None = None  # guessed from the file extension when None
     kind: Literal["image"] = "image"
 
 
@@ -72,7 +72,7 @@ class CompletionRequest:
     output_schema: dict[str, Any] | None = None
     schema_name: str = "result"
     reasoning_effort: str | None = None
-    timeout_s: float = 300.0
+    timeout_s: float = 180.0  # D-31 per-call default
 
     def __post_init__(self) -> None:
         if self.tools and self.output_schema is not None:

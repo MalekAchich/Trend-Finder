@@ -22,7 +22,7 @@ class StubAuth:
     async def headers(self, accept="text/event-stream"):
         return {"authorization": "Bearer t", "chatgpt-account-id": "acc_1", "accept": accept}
 
-    async def ensure_fresh(self, force=False):
+    async def ensure_fresh(self, force=False, stale_token=None):
         self.forced += int(force)
         return {}
 

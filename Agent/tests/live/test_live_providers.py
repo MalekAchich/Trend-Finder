@@ -51,4 +51,27 @@ async def test_chatgpt_models_and_tool_step():
         model=model, system="Use the add tool.", messages=[Message.user("Add 2 and 3.")],
         tools=[ADD], require_tool=True, reasoning_effort="low"))
     assert resp.tool_calls[0].name == "add"
-    assert resp.rate is not None and resp.rate.window_minutes == 300
+    assert resp.rate is not None and resp.rate.window_minutes in (300, 10080)  # binding window (D-37)
+
+
+async def test_both_providers_read_a_staged_image(tmp_path):
+    """I10: real Claude (`@` staged image from a path with spaces) and real ChatGPT both read image content."""
+    import subprocess
+
+    from tf_agent.models.types import ImagePart
+
+    folder = tmp_path / "Trend Finder App"
+    folder.mkdir()
+    img = folder / "number sheet.png"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=white:s=400x200",
+                    "-vf", "drawtext=text='742':fontsize=120:fontcolor=black:x=(w-text_w)/2:y=(h-text_h)/2",
+                    "-frames:v", "1", str(img)], check=True)
+    schema = {"type": "object", "properties": {"number": {"type": "integer"}}, "required": ["number"]}
+    ask = Message.user("What number is shown in the image? Answer 0 if you cannot see an image.", [ImagePart(str(img))])
+    c = await claude().complete(CompletionRequest(model="haiku", system="Answer per the schema.", messages=[ask],
+                                                  output_schema=schema))
+    assert c.structured == {"number": 742}
+    adapter = chatgpt()
+    g = await adapter.complete(CompletionRequest(model="gpt-6-luna", system="Answer per the schema.", messages=[ask],
+                                                 output_schema=schema, reasoning_effort="low"))
+    assert g.structured == {"number": 742}

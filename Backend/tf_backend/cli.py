@@ -15,7 +15,7 @@ from tf_agent.config import AppSettings
 from tf_agent.loop.agent import AgentBudget, AgentEvent, run_agent
 from tf_agent.loop.tools import Tool
 from tf_agent.models.chatgpt_auth import ChatGptAuth
-from tf_agent.models.claude_cli import ClaudeCliAuth
+from tf_agent.models.claude_cli import ClaudeCliAuth, clean_env
 from tf_backend.doctor import default_probes, run_checks
 from tf_backend.services import build_services, close_services
 
@@ -95,7 +95,7 @@ def login_claude() -> None:
     if st["connected"]:
         typer.echo(f"Claude already connected: {st['email']} ({st['subscription']})")
         return
-    raise typer.Exit(subprocess.call([settings.claude_bin, "auth", "login", "--claudeai"]))
+    raise typer.Exit(subprocess.call([settings.claude_bin, "auth", "login", "--claudeai"], env=clean_env()))
 
 
 @app.command()

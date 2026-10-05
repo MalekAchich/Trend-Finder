@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from tf_agent.models.chatgpt_auth import CODEX_BASE_URL, ChatGptAuthError
+from tf_agent.models.chatgpt_auth import CODEX_BASE_URL, ChatGptAuthError, ChatGptTransientError
 from tf_agent.models.errors import (
     AuthRequired,
     InvalidRequest,
@@ -40,13 +40,16 @@ USAGE_LIMIT_CODES = ("usage_limit_reached", "rate_limit_exceeded", "insufficient
 class ChatGptAuthLike(Protocol):
     async def headers(self, accept: str = "text/event-stream") -> dict[str, str]: ...
 
-    async def ensure_fresh(self, force: bool = False) -> dict[str, Any]: ...
+    async def ensure_fresh(self, force: bool = False, stale_token: str | None = None) -> dict[str, Any]: ...
 
     def status(self) -> dict[str, Any]: ...
 
 
 def _image_url(part: ImagePart) -> str:
-    data = Path(part.path).read_bytes()
+    try:
+        data = Path(part.path).read_bytes()
+    except OSError as e:
+        raise InvalidRequest(PROVIDER, f"image not readable: {part.path}") from e
     mime = part.mime or mimetypes.guess_type(part.path)[0] or "image/jpeg"
     return f"data:{mime};base64,{base64.b64encode(data).decode()}"
 
@@ -108,20 +111,21 @@ def _num(headers: Mapping[str, str], key: str, cast: Callable[[str], Any]) -> An
 
 
 def parse_rate_headers(headers: Mapping[str, str]) -> RateInfo | None:
-    used = _num(headers, "x-codex-primary-used-percent", float)
-    if used is None:
-        return None
-    return RateInfo(
-        used_percent=used,
-        window_minutes=_num(headers, "x-codex-primary-window-minutes", int),
-        resets_at=_num(headers, "x-codex-primary-reset-at", float),
-    )
+    """The binding window is whichever of the 5-hour (primary) and weekly (secondary) windows is fuller (D-37)."""
+    windows = []
+    for name in ("primary", "secondary"):
+        used = _num(headers, f"x-codex-{name}-used-percent", float)
+        if used is not None:
+            windows.append(RateInfo(used_percent=used,
+                                    window_minutes=_num(headers, f"x-codex-{name}-window-minutes", int),
+                                    resets_at=_num(headers, f"x-codex-{name}-reset-at", float)))
+    return max(windows, key=lambda w: w.used_percent or 0.0) if windows else None
 
 
 def _reset_at(headers: Mapping[str, str]) -> float | None:
-    reset = _num(headers, "x-codex-primary-reset-at", float)
-    if reset is not None:
-        return reset
+    rate = parse_rate_headers(headers)
+    if rate is not None and rate.resets_at is not None:
+        return rate.resets_at
     retry_after = _num(headers, "retry-after", float)
     return time.time() + retry_after if retry_after is not None else None
 
@@ -141,6 +145,7 @@ async def _consume_sse(lines: AsyncIterator[str]) -> tuple[str, list[ToolCall], 
     texts: list[str] = []
     calls: list[ToolCall] = []
     usage = Usage()
+    completed = False
     async for line in lines:
         if not line.startswith("data: "):
             continue
@@ -166,6 +171,10 @@ async def _consume_sse(lines: AsyncIterator[str]) -> tuple[str, list[ToolCall], 
         elif kind == "response.completed":
             u = (event.get("response") or {}).get("usage") or {}
             usage = Usage(u.get("input_tokens"), u.get("output_tokens"))
+            completed = True
+        elif kind == "response.incomplete":
+            reason = ((event.get("response") or {}).get("incomplete_details") or {}).get("reason", "unknown")
+            raise TransientProviderError(PROVIDER, f"response incomplete: {reason}")
         elif kind in ("error", "response.failed"):
             err = event.get("error") or (event.get("response") or {}).get("error") or {}
             code = str(err.get("code") or err.get("type") or "")
@@ -175,6 +184,8 @@ async def _consume_sse(lines: AsyncIterator[str]) -> tuple[str, list[ToolCall], 
             if not code or code in ("server_error", "overloaded"):
                 raise TransientProviderError(PROVIDER, message)
             raise InvalidRequest(PROVIDER, f"{code}: {message}")
+    if not completed:
+        raise TransientProviderError(PROVIDER, "stream ended without response.completed")
     return "".join(texts), calls, usage
 
 
@@ -203,23 +214,29 @@ class ChatGPTOAuthAdapter:
         self._client_factory = client_factory or (
             lambda timeout: httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=15)))
 
-    async def _headers(self, accept: str, force_refresh: bool) -> dict[str, str]:
+    async def _headers(self, accept: str, stale_token: str | None = None) -> dict[str, str]:
         try:
-            if force_refresh:
-                await self.auth.ensure_fresh(force=True)
+            if stale_token is not None:
+                await self.auth.ensure_fresh(force=True, stale_token=stale_token)
             return await self.auth.headers(accept)
+        except ChatGptTransientError as e:
+            raise TransientProviderError(PROVIDER, str(e)) from e
         except ChatGptAuthError as e:
             raise AuthRequired(PROVIDER, str(e)) from e
+        except httpx.TransportError as e:
+            raise TransientProviderError(PROVIDER, f"auth network error: {type(e).__name__}") from e
 
     async def complete(self, req: CompletionRequest) -> CompletionResponse:
         payload = build_payload(req)
+        rejected_token: str | None = None
         for attempt in (1, 2):
-            headers = await self._headers("text/event-stream", force_refresh=attempt == 2)
+            headers = await self._headers("text/event-stream", stale_token=rejected_token)
             try:
                 async with self._client_factory(req.timeout_s) as client:
                     async with client.stream("POST", f"{self.base_url}/responses", headers=headers,
                                              json=payload) as r:
                         if r.status_code == 401 and attempt == 1:
+                            rejected_token = headers.get("authorization", "").removeprefix("Bearer ")
                             continue
                         if r.status_code >= 400:
                             body = (await r.aread()).decode(errors="replace")
@@ -239,7 +256,7 @@ class ChatGPTOAuthAdapter:
         raise AuthRequired(PROVIDER, "still unauthorized after token refresh: run `tf login chatgpt`")
 
     async def list_models(self) -> list[ModelInfo]:
-        headers = await self._headers("application/json", force_refresh=False)
+        headers = await self._headers("application/json")
         best: list[dict[str, Any]] = []
         async with self._client_factory(30) as client:
             for version in CLIENT_VERSIONS:

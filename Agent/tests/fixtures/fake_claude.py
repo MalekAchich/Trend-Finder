@@ -13,7 +13,7 @@ stdin = sys.stdin.read()
 log = os.environ.get("FAKE_CLAUDE_LOG")
 if log:
     with open(log, "a") as f:
-        f.write(json.dumps({"argv": argv, "stdin": stdin, "env_keys": sorted(os.environ)}) + "\n")
+        f.write(json.dumps({"argv": argv, "stdin": stdin, "env_keys": sorted(os.environ), "pid": os.getpid()}) + "\n")
 time.sleep(float(os.environ.get("FAKE_CLAUDE_SLEEP", "0")))
 with open(os.environ["FAKE_CLAUDE_RESPONSE"]) as f:
     sys.stdout.write(f.read())

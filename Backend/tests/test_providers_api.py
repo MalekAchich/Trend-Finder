@@ -48,7 +48,8 @@ def services():
 @pytest.fixture
 async def http(services):
     app = create_app(services)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                 headers={"x-trendfinder-client": "test"}) as c:
         yield c
 
 
@@ -88,7 +89,16 @@ async def test_logout(http, services):
     assert services.chatgpt_auth.logged_out is True
 
 
-async def test_connected_provider_clears_stale_auth_error(http, services):
-    await services.governor.mark_auth_error("chatgpt", "old")
+async def test_listing_providers_does_not_clear_auth_error(http, services):
+    await services.governor.mark_auth_error("chatgpt", "refresh rejected")
     body = {p["provider"]: p for p in (await http.get("/api/providers")).json()}
-    assert body["chatgpt"]["status"] == "ok"
+    assert body["chatgpt"]["status"] == "auth_error"
+
+
+async def test_mutating_routes_require_client_header(services):
+    app = create_app(services)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as bare:
+        assert (await bare.post("/api/providers/claude/logout")).status_code == 403
+        assert (await bare.post("/api/providers/chatgpt/login/start", json={})).status_code == 403
+        assert (await bare.get("/api/providers")).status_code == 200
+    assert services.claude_auth.logged_out is False
