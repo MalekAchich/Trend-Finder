@@ -204,3 +204,14 @@ async def test_recency_filter_reaches_the_search_engine():
     await tool.handler(SearchParams(query="deadpan", recent="week"))
     await pt.shorts_search("deadpan", recent="month")
     assert seen == ["week", "month"]
+
+
+def test_tool_stack_gives_platform_specific_tools():
+    from tf_agent.config import AppSettings
+    from tf_agent.tools.factory import build_tool_stack
+
+    stack = build_tool_stack(AppSettings())
+    names = {t.name for t in stack.tools_for("youtube")}
+    assert names == {"shorts_search", "get_video", "web_search", "web_fetch"}
+    a, b = stack.platform_tools(), stack.platform_tools()
+    assert a.search_limiter is b.search_limiter and a.registry is b.registry

@@ -83,9 +83,10 @@ class ModelClient:
         except Exception as e:  # the ledger must never break a model call
             log.warning("call ledger write failed: %s", e)
 
-    async def complete(self, req: CompletionRequest, ctx: CallContext, only: str | None = None) -> CompletionResponse:
+    async def complete(self, req: CompletionRequest, ctx: CallContext, only: str | None = None,
+                       prefer: str | None = None) -> CompletionResponse:
         last_error: Exception | None = None
-        for cand in self.router.candidates(ctx.role, only=only):
+        for cand in self.router.candidates(ctx.role, only=only, prefer=prefer):
             if cand.provider not in self.adapters or not self.governor.available(cand.provider):
                 continue
             adapter = self.adapters[cand.provider]

@@ -95,12 +95,12 @@ class Roles:
         return judged.result
 
     async def work(self, spec: TaskSpec, brief: str, tools: Sequence[Tool], *, run_id: uuid.UUID | None = None,
-                   task_id: uuid.UUID | None = None, provider: str | None = None,
+                   task_id: uuid.UUID | None = None, provider: str | None = None, prefer: str | None = None,
                    on_event: EventSink | None = None) -> AgentResult[WorkerResult]:
         return await run_agent(client=self.client, role=spec.task_type,
                                system=self.prompts.render(spec.task_type, brief=brief), task=_task_text(spec),
                                result_model=WorkerResult, tools=tools, budget=self.worker_budget, run_id=run_id,
-                               task_id=task_id, provider=provider, on_event=on_event)
+                               task_id=task_id, provider=provider, prefer_provider=prefer, on_event=on_event)
 
     def _facts_text(self, facts: dict[str, Any]) -> str:
         return "Candidate facts (metadata, transcript, measurements):\n" + json.dumps(facts, default=str)

@@ -26,7 +26,7 @@ class RoleRouter:
         self.roles = roles
         self.registry = registry
 
-    def candidates(self, role: str, only: str | None = None) -> list[RouteCandidate]:
+    def candidates(self, role: str, only: str | None = None, prefer: str | None = None) -> list[RouteCandidate]:
         entries = self.roles.get(role) or self.roles.get("default") or []
         out: list[RouteCandidate] = []
         for entry in entries:
@@ -36,4 +36,6 @@ class RoleRouter:
             model = self.registry.resolve(provider, str(entry.get("model", "best")))
             if model:
                 out.append(RouteCandidate(provider, model, entry.get("effort")))
+        if prefer is not None:
+            out.sort(key=lambda c: c.provider != prefer)  # stable: preferred first, others keep their order
         return out

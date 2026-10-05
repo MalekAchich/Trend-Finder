@@ -95,6 +95,7 @@ async def run_agent(
     run_id: uuid.UUID | None = None,
     task_id: uuid.UUID | None = None,
     provider: str | None = None,
+    prefer_provider: str | None = None,
     on_event: EventSink | None = None,
 ) -> AgentResult[T]:
     budget = budget or AgentBudget()
@@ -120,7 +121,7 @@ async def run_agent(
         specs = [submit_spec] if last else [t.spec() for t in tools] + [submit_spec]
         req = CompletionRequest(model="", system=system, tools=specs, require_tool=True,
                                 messages=_paired(compact_transcript(messages, budget.max_transcript_chars)))
-        resp = await client.complete(req, ctx, only=provider)
+        resp = await client.complete(req, ctx, only=provider, prefer=prefer_provider)
         used_provider, used_model = resp.provider, resp.model
         messages.append(Message.assistant(resp.text, resp.tool_calls))
         await emit("step", step, ", ".join(c.name for c in resp.tool_calls) or "no tool call")

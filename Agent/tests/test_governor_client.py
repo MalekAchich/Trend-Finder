@@ -138,3 +138,11 @@ async def test_load_ignores_stale_auth_error():
     await gov.load()
     assert gov.status("a").status == "ok"
     assert gov.status("b").status == "cooling"
+
+
+async def test_prefer_reorders_but_still_falls_back():
+    a = FakeAdapter("a", [text_response("a", "from a")])
+    b = FakeAdapter("b", [text_response("b", "from b"), UsageLimited("b", "limit")])
+    client, _, _ = make_client({"a": a, "b": b})
+    assert (await client.complete(req(), CTX, prefer="b")).provider == "b"
+    assert (await client.complete(req(), CTX, prefer="b")).provider == "a"  # b limited → falls back to a
