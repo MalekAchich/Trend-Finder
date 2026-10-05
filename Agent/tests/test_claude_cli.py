@@ -1,0 +1,165 @@
+import json
+import time
+
+import pytest
+
+from tf_agent.models.claude_cli import ClaudeCLIAdapter, ClaudeCliAuth, render_prompt
+from tf_agent.models.errors import AuthRequired, MalformedResponse, TransientProviderError, UsageLimited
+from tf_agent.models.types import CompletionRequest, ImagePart, Message, ToolCall, ToolSpec
+
+ADD = ToolSpec("add", "Add two ints", {"type": "object", "properties": {"a": {"type": "integer"}}})
+
+
+def adapter(fake):
+    return ClaudeCLIAdapter(ClaudeCliAuth(fake.bin, stats_path=fake.tmp / "stats.json"), runtime_dir=fake.tmp / "rt")
+
+
+def req(text="hi", **kw):
+    kw.setdefault("system", "You are a scout.")
+    return CompletionRequest(model="opus", messages=[Message.user(text)], **kw)
+
+
+def flag_value(argv, flag):
+    return argv[argv.index(flag) + 1]
+
+
+def test_render_prompt_includes_conversation_and_tools():
+    call = ToolCall("c1", "add", {"a": 1})
+    r = CompletionRequest(model="opus", system="s", tools=[ADD], messages=[
+        Message.user("go"), Message.assistant("plan", [call]), Message.tool_result(call, "2")])
+    text = render_prompt(r, lambda img: "@" + img.path)
+    assert "[user]\ngo" in text
+    assert '"name": "add"' in text and '[tool result id=c1 name=add]\n2' in text
+    assert "<tools>" in text and '"calls"' in text
+
+
+async def test_tool_step_uses_isolation_flags_and_stdin(fake_claude):
+    fake_claude.respond(fake_claude.envelope(structured={"thought": "t", "calls": [
+        {"name": "add", "arguments": {"a": 1}}]}))
+    resp = await adapter(fake_claude).complete(req(tools=[ADD], require_tool=True))
+    assert [(c.name, c.arguments) for c in resp.tool_calls] == [("add", {"a": 1})]
+    assert resp.text == "t" and resp.provider == "claude" and resp.model == "claude-opus-5-5"
+    assert (resp.usage.input_tokens, resp.usage.output_tokens) == (15, 7)
+    call = fake_claude.calls()[0]
+    argv = call["argv"]
+    for flag in ("-p", "--strict-mcp-config", "--no-session-persistence"):
+        assert flag in argv
+    assert flag_value(argv, "--tools") == "" and flag_value(argv, "--setting-sources") == ""
+    assert flag_value(argv, "--output-format") == "json" and flag_value(argv, "--model") == "opus"
+    assert flag_value(argv, "--system-prompt") == "You are a scout."
+    schema = json.loads(flag_value(argv, "--json-schema"))
+    assert schema["properties"]["calls"]["items"]["properties"]["name"]["enum"] == ["add"]
+    assert "[user]\nhi" in call["stdin"] and "hi" not in argv
+
+
+async def test_structured_output_mode(fake_claude):
+    schema = {"type": "object", "properties": {"answer": {"type": "integer"}}}
+    fake_claude.respond(fake_claude.envelope(structured={"answer": 4}))
+    resp = await adapter(fake_claude).complete(req(output_schema=schema))
+    assert resp.structured == {"answer": 4}
+    assert json.loads(flag_value(fake_claude.calls()[0]["argv"], "--json-schema")) == schema
+
+
+async def test_plain_text_mode(fake_claude):
+    fake_claude.respond(fake_claude.envelope(result="hello there"))
+    resp = await adapter(fake_claude).complete(req())
+    assert resp.text == "hello there"
+    assert "--json-schema" not in fake_claude.calls()[0]["argv"]
+
+
+async def test_large_prompt_goes_through_stdin(fake_claude):
+    fake_claude.respond(fake_claude.envelope(result="ok"))
+    await adapter(fake_claude).complete(req("x" * 300_000))
+    call = fake_claude.calls()[0]
+    assert sum(len(a) for a in call["argv"]) < 20_000
+    assert len(call["stdin"]) > 300_000
+
+
+async def test_oversized_system_prompt_moves_to_stdin(fake_claude):
+    fake_claude.respond(fake_claude.envelope(result="ok"))
+    await adapter(fake_claude).complete(req(system="S" * 100_000))
+    call = fake_claude.calls()[0]
+    assert len(flag_value(call["argv"], "--system-prompt")) < 200
+    assert call["stdin"].startswith("<system>\n" + "S" * 10)
+
+
+async def test_image_with_spaces_is_staged(fake_claude):
+    folder = fake_claude.tmp / "Trend Finder App"
+    folder.mkdir()
+    img = folder / "sheet one.jpg"
+    img.write_bytes(b"\xff\xd8fakejpeg")
+    fake_claude.respond(fake_claude.envelope(structured={"ok": True}))
+    r = CompletionRequest(model="opus", system="s", output_schema={"type": "object"},
+                          messages=[Message.user("look", [ImagePart(str(img))])])
+    await adapter(fake_claude).complete(r)
+    stdin = fake_claude.calls()[0]["stdin"]
+    ref = next(tok for tok in stdin.split() if tok.startswith("@"))
+    assert " " not in ref and "Trend Finder App" not in stdin
+    from pathlib import Path
+    assert Path(ref[1:]).read_bytes() == b"\xff\xd8fakejpeg"
+
+
+async def test_api_key_env_is_stripped(fake_claude, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "tok")
+    fake_claude.respond(fake_claude.envelope(result="ok"))
+    await adapter(fake_claude).complete(req())
+    keys = fake_claude.calls()[0]["env_keys"]
+    assert "ANTHROPIC_API_KEY" not in keys and "ANTHROPIC_AUTH_TOKEN" not in keys
+
+
+async def test_usage_limit_error(fake_claude):
+    fake_claude.respond(fake_claude.envelope(is_error=True, subtype="error_during_execution",
+                                             result="Claude AI usage limit reached|1791247829"))
+    with pytest.raises(UsageLimited) as ei:
+        await adapter(fake_claude).complete(req())
+    assert ei.value.reset_at == 1791247829.0
+
+
+async def test_auth_error(fake_claude):
+    fake_claude.respond(fake_claude.envelope(is_error=True, result="Invalid API key · Please run /login"))
+    with pytest.raises(AuthRequired):
+        await adapter(fake_claude).complete(req())
+
+
+async def test_garbage_output(fake_claude):
+    fake_claude.respond("garbage", exit_code=1)
+    with pytest.raises(TransientProviderError):
+        await adapter(fake_claude).complete(req())
+    fake_claude.respond("garbage", exit_code=0)
+    with pytest.raises(MalformedResponse):
+        await adapter(fake_claude).complete(req())
+
+
+async def test_timeout_kills_process(fake_claude):
+    fake_claude.respond(fake_claude.envelope(result="late"), sleep=5)
+    started = time.monotonic()
+    with pytest.raises(TransientProviderError, match="timed out"):
+        await adapter(fake_claude).complete(req(timeout_s=0.5))
+    assert time.monotonic() - started < 3
+
+
+async def test_empty_calls_is_malformed(fake_claude):
+    fake_claude.respond(fake_claude.envelope(structured={"calls": []}))
+    with pytest.raises(MalformedResponse):
+        await adapter(fake_claude).complete(req(tools=[ADD]))
+
+
+async def test_status_models_and_health(fake_claude, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_STATUS", json.dumps(
+        {"loggedIn": True, "email": "nico@example.com", "subscriptionType": "max"}))
+    (fake_claude.tmp / "stats.json").write_text(json.dumps({"modelUsage": {
+        "claude-opus-5-5": {}, "claude-opus-4-1-20250805": {}, "claude-haiku-4-5-20251001": {}}}))
+    a = adapter(fake_claude)
+    assert a.auth.status()["connected"] is True
+    assert sorted(a.auth.discover_models()) == ["claude-haiku-4-5-20251001", "claude-opus-5-5"]
+    ids = [m.model_id for m in await a.list_models()]
+    assert ids[:3] == ["opus", "sonnet", "haiku"] and "claude-opus-5-5" in ids
+    h = await a.health()
+    assert h.connected is True and h.account == "nico@example.com (max)"
+
+
+async def test_missing_binary_is_auth_required(tmp_path):
+    a = ClaudeCLIAdapter(ClaudeCliAuth(str(tmp_path / "nope" / "claude")), runtime_dir=tmp_path / "rt")
+    with pytest.raises(AuthRequired, match="not found"):
+        await a.complete(req())
