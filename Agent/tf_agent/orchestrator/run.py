@@ -40,6 +40,7 @@ from tf_db.models import (
     RunFeedback,
     ScopeClaim,
     Seed,
+    Setting,
     TasteProfile,
     Task,
 )
@@ -101,6 +102,11 @@ class Orchestrator:
                 Run.character_id == character_id).order_by(RunFeedback.updated_at.desc()).limit(1))
                     ).scalar_one_or_none()
 
+    async def _saved_weights(self) -> dict[str, float] | None:
+        """Scoring weights the owner saved in Settings (None → defaults)."""
+        async with self._sm() as s:
+            return (await s.execute(select(Setting.value).where(Setting.key == "weights"))).scalar_one_or_none()
+
     async def create_run(self, slug: str, settings: RunSettings) -> uuid.UUID:
         ch = await load_character(self._sm, slug)
         async with self._sm() as s:
@@ -152,7 +158,8 @@ class Orchestrator:
         settings = RunSettings(**run.settings)
         ch = await self._character(run)
         deadline = run.started_at.timestamp() + settings.wall_clock_s
-        analysis = AnalysisStage(self._sm, self.analyzer, self.roles, self.store, ch, self.weights)
+        analysis = AnalysisStage(self._sm, self.analyzer, self.roles, self.store, ch,
+                                 self.weights or await self._saved_weights())
         try:
             stop_reason = await self._loop(run, settings, ch, analysis, deadline)
             await self.queue.cancel_queued(run_id)

@@ -7,17 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from tf_agent.models.chatgpt_auth import ChatGptAuthError
+from tf_backend.api.deps import require_client_header
 from tf_backend.services import Services
-
-CLIENT_HEADER = "x-trendfinder-client"
-
-
-def require_client_header(request: Request) -> None:
-    """Mutating calls need a custom header: browsers can't send one cross-site without a CORS preflight,
-    so a random web page can't log the owner out or start logins."""
-    if not request.headers.get(CLIENT_HEADER):
-        raise HTTPException(403, f"missing {CLIENT_HEADER} header")
-
 
 router = APIRouter(prefix="/providers", tags=["providers"])
 
