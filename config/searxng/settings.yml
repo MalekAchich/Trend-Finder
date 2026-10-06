@@ -5,3 +5,20 @@ server:
   image_proxy: false
 search:
   formats: [html, json]
+# The default engines (brave, duckduckgo, google) get rate-limited or CAPTCHA'd after a few runs and then every
+# discovery search comes back empty. Spreading over more engines keeps results flowing while some are suspended.
+engines:
+  - name: bing
+    disabled: false
+  - name: yahoo
+    disabled: false
+  - name: yandex
+    disabled: false
+  - name: mwmbl
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: startpage
+    disabled: false
+  - name: wikipedia
+    disabled: true

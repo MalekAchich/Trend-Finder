@@ -110,11 +110,11 @@ function Decision({ card, rating, draft, noteRef, onNote, onRate }: {
   );
 }
 
-function FilmStrip({ cards, index, ratings, onPick }: {
+export function FilmStrip({ cards, index, ratings, onPick }: {
   cards: TrendCard[]; index: number; ratings: Record<string, CardRating>; onPick: (i: number) => void;
 }) {
   const active = useRef<HTMLButtonElement>(null);
-  useEffect(() => active.current?.scrollIntoView({ block: "nearest", inline: "nearest" }), [index]);
+  useEffect(() => { active.current?.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [index]);
   return (
     <nav aria-label="All trend cards" className="-mx-4 overflow-x-auto bg-ink px-4 py-3 md:-mx-10 md:px-10">
       <ol className="flex gap-2">

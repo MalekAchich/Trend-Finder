@@ -53,3 +53,12 @@ def test_serve_refuses_a_public_host_without_opt_in(monkeypatch):
     monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
     out = CliRunner().invoke(app, ["serve", "--host", "0.0.0.0", "--no-open"])
     assert out.exit_code != 0 and "no login" in out.output
+
+
+def test_search_check_flags_blocked_engines():
+    from tf_backend.doctor import search_check
+
+    ok = search_check({"results": [{}] * 12, "unresponsive_engines": [["brave", "too many requests"]]})
+    assert ok.level == "OK" and "12 results" in ok.detail and "brave" in ok.detail
+    dead = search_check({"results": [], "unresponsive_engines": [["duckduckgo", "CAPTCHA"], ["google", "access denied"]]})
+    assert dead.level == "FAIL" and "duckduckgo (CAPTCHA)" in dead.detail and "settings.yml" in dead.detail

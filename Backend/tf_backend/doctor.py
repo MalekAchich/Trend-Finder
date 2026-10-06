@@ -31,6 +31,16 @@ def run_checks(probes: dict[str, Probe]) -> list[Check]:
     return out
 
 
+def search_check(response: dict) -> Check:
+    """SearXNG's free engines get rate-limited or CAPTCHA'd; with all of them blocked, discovery finds nothing."""
+    results = len(response.get("results") or [])
+    blocked = ", ".join(f"{e[0]} ({e[1]})" for e in response.get("unresponsive_engines") or [])
+    if results == 0:
+        return Check("search", "FAIL", f"no results; blocked engines: {blocked or 'none reported'}. Wait an hour or "
+                                       "enable more engines in config/searxng/settings.yml")
+    return Check("search", "OK", f"{results} results" + (f"; blocked for now: {blocked}" if blocked else ""))
+
+
 def disk_check(free_gb: float) -> Check:
     if free_gb < 5:
         return Check("disk", "FAIL", f"only {free_gb:.1f} GB free; media needs ~5 GB")
@@ -66,4 +76,13 @@ def default_probes(settings: AppSettings) -> dict[str, Probe]:
     def disk() -> Check:
         return disk_check(shutil.disk_usage(".").free / 1e9)
 
-    return {"claude": claude, "chatgpt": chatgpt, "database": database, "ffmpeg": ffmpeg, "disk": disk}
+    def search() -> Check:
+        import httpx
+
+        r = httpx.get(f"{settings.searxng_url}/search", params={"q": "site:tiktok.com/@ dance", "format": "json"},
+                      timeout=20)
+        r.raise_for_status()
+        return search_check(r.json())
+
+    return {"claude": claude, "chatgpt": chatgpt, "database": database, "search": search, "ffmpeg": ffmpeg,
+            "disk": disk}
