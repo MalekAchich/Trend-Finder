@@ -215,3 +215,19 @@ def test_tool_stack_gives_platform_specific_tools():
     assert names == {"shorts_search", "get_video", "web_search", "web_fetch"}
     a, b = stack.platform_tools(), stack.platform_tools()
     assert a.search_limiter is b.search_limiter and a.registry is b.registry
+
+
+async def test_run_freshness_is_the_default_recency():
+    """Plan 5 Task 5: the owner's freshness choice applies unless the agent asks for something else."""
+    seen = []
+
+    class RecordingSearx(FakeSearx):
+        async def search(self, query, max_results=10, time_range=None):
+            seen.append(time_range)
+            return SearchResponse(results=hits(tt(5)))
+
+    pt = tools(RecordingSearx())
+    tool = next(t for t in build_tools(pt, RecordingSearx(), default_recent="day") if t.name == "tiktok_search")
+    await tool.handler(SearchParams(query="deadpan"))
+    await tool.handler(SearchParams(query="deadpan", recent="month"))
+    assert seen == ["day", "month"]

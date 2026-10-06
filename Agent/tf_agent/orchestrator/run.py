@@ -18,13 +18,14 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from sqlalchemy import delete, func, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tf_agent.characters.folders import LoadedCharacter, load_character
 from tf_agent.characters.read import CharacterRead, render_brief
 from tf_agent.loop.agent import AgentEvent
 from tf_agent.loop.tools import Tool
-from tf_agent.models.errors import AllProvidersUnavailable
+from tf_agent.models.errors import AllProvidersUnavailable, InvalidRequest
 from tf_agent.orchestrator.analysis import AnalysisStage, CandidateSink
 from tf_agent.orchestrator.blackboard import Blackboard
 from tf_agent.orchestrator.queue import Requeue, TaskQueue, WorkerPool
@@ -34,8 +35,11 @@ from tf_agent.roles.schemas import WorkPlan
 from tf_agent.scoring.directions import match_direction_key, normalize_key
 from tf_agent.scoring.explore import DirectionStat, explore_ratio, split_tasks, thompson_rank
 from tf_agent.scoring.subscores import DEFAULT_WEIGHTS
+from tf_agent.tools.normalize import canonical_id
 from tf_agent.tools.platforms import SeenFilter
+from tf_agent.tools.types import ToolFailure
 from tf_db.models import (
+    CardFeedback,
     Character,
     Direction,
     Finding,
@@ -44,15 +48,24 @@ from tf_db.models import (
     Run,
     RunFeedback,
     ScopeClaim,
+    Target,
     TasteProfile,
     Task,
+    TrendCluster,
 )
 
 log = logging.getLogger(__name__)
 WORK_KINDS = ("scout", "radar", "deep_dive")
 TERMINAL_STATES = ("review_ready", "stopped", "failed")
 STOPPED_BY_OWNER = "stopped by the owner"
-RESUMABLE_STATES = ("created", "planning", "running", "paused_usage", "curating", "interrupted")
+RESUMABLE_STATES = ("created", "reading_character", "studying_trends", "planning", "running", "paused_usage",
+                    "curating", "interrupted")
+FRESHNESS = ("day", "week", "month", "any")
+OWNER = {"id": "owner", "role": "owner", "platform": None}
+
+
+class InputError(ValueError):
+    """A run input the owner gave can't be used (bad URL, unknown character)."""
 
 
 @dataclass
@@ -67,6 +80,9 @@ class RunSettings:
     analysis_workers: int = 3
     max_candidates: int = 6
     weights: dict[str, float] | None = None  # fixed at creation so a resumed run never mixes weights
+    freshness: str = "week"  # how recent searched videos must be: day | week | month | any
+    trend_urls: list[str] = field(default_factory=list)  # trending AI-influencer videos to study first
+    targets: list[dict[str, str]] = field(default_factory=list)  # [{url, character}] videos the owner found
     used_s: float = 0.0  # active seconds already spent (downtime and usage pauses don't count)
 
 
@@ -123,7 +139,10 @@ def _json_safe(value: Any, max_chars: int = 400) -> Any:
 
 
 class ToolProvider(Protocol):
-    def tools_for(self, platform: str | None, seen_filter: SeenFilter | None = None) -> list[Tool]: ...
+    def tools_for(self, platform: str | None, seen_filter: SeenFilter | None = None,
+                  recent: str | None = None) -> list[Tool]: ...
+
+    async def get_video(self, url: str) -> Any: ...
 
 
 class Curator(Protocol):
@@ -134,10 +153,11 @@ class Curator(Protocol):
 class Orchestrator:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], roles: Roles, tools: ToolProvider,
                  analyzer: Any, store: Any, *, curator: Curator | None = None, weights: dict[str, float] | None = None,
+                 learner: Any = None,
                  idle_poll: float = 0.5, monitor_every_s: float = 1.0, rng: random.Random | None = None) -> None:
         self._sm = sessionmaker
         self.roles, self.tools, self.analyzer, self.store = roles, tools, analyzer, store
-        self.curator, self.weights = curator, weights
+        self.curator, self.weights, self.learner = curator, weights, learner
         self.idle_poll, self.monitor_every_s = idle_poll, monitor_every_s
         self.rng = rng or random.Random()
         self.blackboard = Blackboard(sessionmaker)
@@ -162,17 +182,46 @@ class Orchestrator:
                 Run.character_id == character_id).order_by(RunFeedback.updated_at.desc()).limit(1))
                     ).scalar_one_or_none()
 
+    async def _validate_inputs(self, settings: RunSettings) -> list[tuple[uuid.UUID, str, str]]:
+        """Check every URL and target character before anything is saved; returns (character_id, url, cid)."""
+        if settings.freshness not in FRESHNESS:
+            raise InputError(f"freshness must be one of {', '.join(FRESHNESS)}")
+        for url in settings.trend_urls:
+            if canonical_id(url) is None:
+                raise InputError(f"not a TikTok, Instagram or YouTube video URL: {url}")
+        targets = []
+        for t in settings.targets:
+            url, slug = str(t.get("url", "")).strip(), str(t.get("character", "")).strip()
+            cid = canonical_id(url)
+            if cid is None:
+                raise InputError(f"not a TikTok, Instagram or YouTube video URL: {url}")
+            async with self._sm() as s:
+                char_id = (await s.execute(select(Character.id).where(Character.slug == slug))).scalar_one_or_none()
+            if char_id is None:
+                raise InputError(f"unknown character for target {url}: {slug}")
+            targets.append((char_id, url, cid))
+        return targets
+
     async def create_run(self, slug: str, settings: RunSettings) -> uuid.UUID:
         ch = await load_character(self._sm, slug)
+        targets = await self._validate_inputs(settings)
         async with self._sm() as s:
             rated = (await s.execute(select(func.count()).select_from(Direction).where(
                 Direction.character_id == ch.character_id, (Direction.alpha + Direction.beta) > 0))).scalar_one()
         ratio = explore_ratio(await self._last_satisfaction(ch.character_id), rated)
-        settings = replace(settings, weights=settings.weights or self.weights or dict(DEFAULT_WEIGHTS))  # copy: never mutate the caller's settings
+        # copy: never mutate the caller's settings
+        settings = replace(settings, weights=settings.weights or self.weights or dict(DEFAULT_WEIGHTS))
+        inputs = {"freshness": settings.freshness, "trend_urls": list(settings.trend_urls),
+                  "targets": [{"url": u, "canonical_id": c, "character_id": str(cid)} for cid, u, c in targets]}
         async with self._sm() as s:
             run = Run(character_id=ch.character_id, character_version_id=ch.version_id, state="created",
-                      settings=asdict(settings), explore_ratio_used=ratio)
+                      settings=asdict(settings), inputs=inputs, explore_ratio_used=ratio)
             s.add(run)
+            await s.flush()
+            for char_id, url, cid in targets:  # owner targets wait for their character's run (this one or a later one)
+                stmt = pg_insert(Target).values(character_id=char_id, url=url, canonical_id=cid, status="pending")
+                await s.execute(stmt.on_conflict_do_update(index_elements=[Target.character_id, Target.canonical_id],
+                                                           set_={"status": "pending", "url": url, "run_id": None}))
             await s.commit()
             run_id = run.id
         await self.blackboard.record_event(run_id, "run.state", {"state": "created", "explore_ratio": ratio})
@@ -256,6 +305,9 @@ class Orchestrator:
             if run.stop_reason and run.state in ("curating", "interrupted"):
                 stop_reason = run.stop_reason  # the stop decision was made before a crash: don't plan again
             else:
+                ch = await self._prepare(run_id, settings, clock)
+                analysis.character = ch
+                run = await self._reload(run_id)
                 stop_reason = await self._loop(run, settings, ch, analysis, clock)
                 await self._set_stop_decision(run_id, stop_reason)
             await self.queue.cancel_queued(run_id)
@@ -269,6 +321,130 @@ class Orchestrator:
         finally:
             await asyncio.shield(self._save_used(run_id, clock))
         return await self._outcome(run_id)
+
+    async def _reload(self, run_id: uuid.UUID) -> Run:
+        async with self._sm() as s:
+            return await s.get(Run, run_id)
+
+    async def _with_usage_wait(self, run_id: uuid.UUID, clock: ActiveClock, state: str, call: Any) -> Any:
+        """Run a model call; if both subscriptions are limited, pause (not counted) until a reset and retry."""
+        while True:
+            try:
+                return await call()
+            except AllProvidersUnavailable as e:
+                wait = max((e.earliest_reset or time.time() + 900) - time.time(), 1.0)
+                await self._set_state(run_id, "paused_usage", resume_in_s=round(wait))
+                clock.pause()
+                try:
+                    await asyncio.sleep(wait)
+                finally:
+                    clock.resume()
+                await self._set_state(run_id, state)
+
+    async def _save_inputs(self, run_id: uuid.UUID, **values: Any) -> None:
+        async with self._sm() as s:
+            run = (await s.execute(select(Run).where(Run.id == run_id).with_for_update())).scalar_one()
+            await s.execute(update(Run).where(Run.id == run_id).values(inputs={**(run.inputs or {}), **values}))
+            await s.commit()
+
+    async def _prepare(self, run_id: uuid.UUID, settings: RunSettings, clock: ActiveClock) -> LoadedCharacter:
+        """Phases before the first round; each is recorded so a resumed run skips what's done."""
+        run = await self._reload(run_id)
+        inputs = run.inputs or {}
+        if self.learner is not None and not inputs.get("taste_refreshed"):
+            await self._set_state(run_id, "reading_character")
+            update_ = await self.learner.refresh_taste(run.character_id, run_id)
+            if update_ is not None and update_.version is not None:
+                text_ = "Updated what I know about your taste from your latest ratings: " + " ".join(
+                    update_.retrospective)
+                await self.blackboard.record_event(run_id, "agent.thought", {
+                    "agent": {"id": "learner", "role": "learner", "platform": None}, "text": text_[:1200]})
+            elif update_ is not None and update_.error:
+                await self.blackboard.record_event(run_id, "error", {
+                    "agent": {"id": "learner", "role": "learner", "platform": None},
+                    "message": f"couldn't update the taste profile this time: {update_.error}"[:300]})
+            await self._save_inputs(run_id, taste_refreshed=True)
+        if run.character_read is None:
+            await self._read_character(run, clock)
+        ch = await self._character(await self._reload(run_id))
+        await self._study_trends(run_id, settings, ch, clock)
+        await self._take_targets(run_id, ch)
+        return ch
+
+    async def _read_character(self, run: Run, clock: ActiveClock) -> None:
+        await self._set_state(run.id, "reading_character")
+        ch = await self._character(run)
+        async with self._sm() as s:
+            taste = (await s.execute(select(TasteProfile.body_md).where(TasteProfile.character_id == run.character_id)
+                                     .order_by(TasteProfile.version.desc()).limit(1))).scalar_one_or_none()
+            notes = (await s.execute(select(CardFeedback.note).join(TrendCluster, TrendCluster.id == CardFeedback.cluster_id)
+                                     .join(Run, Run.id == TrendCluster.run_id)
+                                     .where(Run.character_id == run.character_id, CardFeedback.note.is_not(None))
+                                     .order_by(CardFeedback.updated_at.desc()).limit(10))).scalars().all()
+        taste_body = taste.split("## Owner notes")[0].strip() if taste else None
+        judged = await self._with_usage_wait(run.id, clock, "reading_character", lambda: self.roles.read_character(
+            ch.name, ch.images, taste_body, list(notes), run_id=run.id))
+        read = judged.result.model_dump()
+        async with self._sm() as s:
+            await s.execute(update(Run).where(Run.id == run.id).values(character_read=read))
+            await s.commit()
+        await self.blackboard.record_event(run.id, "character.read", {
+            "agent": {"id": "reader", "role": "reader", "platform": None}, "read": read,
+            "images": len(ch.images), "provider": judged.provider})
+
+    async def _study_trends(self, run_id: uuid.UUID, settings: RunSettings, ch: LoadedCharacter,
+                            clock: ActiveClock) -> None:
+        studies = dict((await self._reload(run_id)).inputs.get("trend_studies") or {})
+        todo = [u for u in settings.trend_urls if u not in studies]
+        if not todo:
+            return
+        await self._set_state(run_id, "studying_trends")
+        for i, url in enumerate(todo, 1):
+            agent = {"id": f"trend-{len(studies) + 1}", "role": "seed_study", "platform": None}
+            try:
+                item = await self.tools.get_video(url)
+                agent["platform"] = item.platform
+                result = await self.analyzer.analyze(item)
+                if not result.contact_sheet_path:
+                    raise ToolFailure("media_unavailable", (result.filtered_reason or "no frames").replace("_", " "))
+                from tf_agent.orchestrator.analysis import candidate_facts
+
+                judged = await self._with_usage_wait(run_id, clock, "studying_trends", lambda: self.roles.study_seed(
+                    ch.brief, result.contact_sheet_path, candidate_facts(item, result), run_id=run_id))
+                study = judged.result.model_dump()
+                await self.blackboard.record_event(run_id, "trend.studied", {"agent": agent, "url": url,
+                                                                             "study": study})
+            except (ToolFailure, RoleOutputError, InvalidRequest) as e:
+                reason = e.error.message if isinstance(e, ToolFailure) else str(e)[:200]
+                study = {"error": reason}
+                await self.blackboard.record_event(run_id, "error", {
+                    "agent": agent, "message": f"couldn't study {url}: {reason}"[:300]})
+            studies[url] = study
+            await self._save_inputs(run_id, trend_studies=studies)
+
+    async def _take_targets(self, run_id: uuid.UUID, ch: LoadedCharacter) -> None:
+        """The owner's target videos for this character go straight to analysis (no scout needed)."""
+        async with self._sm() as s:
+            targets = (await s.execute(select(Target).where(Target.character_id == ch.character_id,
+                                                            Target.status == "pending"))).scalars().all()
+        for t in targets:
+            try:
+                item = await self.tools.get_video(t.url)
+            except ToolFailure as e:
+                await self.blackboard.record_event(run_id, "candidate.rejected", {
+                    "agent": OWNER, "canonical_id": t.canonical_id, "reason": f"your target: {e.error.message}"})
+            else:
+                async with self._sm() as s:
+                    stmt = pg_insert(Finding).values(run_id=run_id, canonical_id=item.canonical_id, source="owner",
+                                                     why="picked by you").on_conflict_do_nothing()
+                    finding_id = (await s.execute(stmt.returning(Finding.id))).scalar_one_or_none()
+                    await s.commit()
+                if finding_id is not None:
+                    await self.queue.enqueue(run_id, None, "analyze", scope={"finding_id": str(finding_id),
+                                                                             "canonical_id": item.canonical_id})
+            async with self._sm() as s:
+                await s.execute(update(Target).where(Target.id == t.id).values(status="used", run_id=run_id))
+                await s.commit()
 
     async def _set_stop_decision(self, run_id: uuid.UUID, stop_reason: str) -> None:
         async with self._sm() as s:
@@ -331,7 +507,7 @@ class Orchestrator:
         round_no = run.current_round
         if round_no > 0 and not await self._round_has_plan(run_id, round_no):
             round_no -= 1  # a crash between starting and planning a round: plan that same round again
-        elif await self.queue.outstanding(run_id) > 0:  # resuming mid-round: finish that round's work first
+        elif round_no > 0 and await self.queue.outstanding(run_id) > 0:  # resuming mid-round: finish it first
             await self._set_state(run_id, "running", resumed=True)
             if not await self._drain(run_id, ch, settings, analysis, clock):
                 return "wall clock limit reached"
@@ -494,6 +670,12 @@ class Orchestrator:
         if ranked:
             lines.append("Existing directions ranked by Thompson sample (key | label | niche | 👍 | 👎):")
             lines += [f"- {d.key} | {d.label} | {d.niche or '-'} | {d.alpha} | {d.beta}" for d, _ in ranked[:15]]
+        studies = {u: st for u, st in (run.inputs or {}).get("trend_studies", {}).items() if "error" not in st}
+        if studies:
+            lines.append("Formats trending in AI-influencer content right now (studied from the owner's examples; "
+                         "search for these formats for this character):")
+            lines += [f"- {st.get('format')} | hook: {st.get('hook')} | why: {st.get('why_it_works')} | "
+                      f"angles: {', '.join(st.get('search_angles') or [])}" for st in list(studies.values())[:8]]
         if leads:
             lines.append("Open leads (use lead_id for deep_dive tasks):")
             lines += [f"- {l['id']} | {l['platform']} {l['type']} = {l['value']} | {l['why'] or ''}" for l in leads]
@@ -637,7 +819,9 @@ class Orchestrator:
                         goal=task.goal or "", max_candidates=int(task.budget.get("max_candidates",
                                                                                  settings.max_candidates)),
                         direction_label=label, direction_hypothesis=hypothesis, lead=task.scope.get("lead_info"))
-        tools = self.tools.tools_for(task.platform, self.blackboard.seen_filter_for(task.run_id, ch.character_id))
+        recent = settings.freshness if settings.freshness != "any" else None
+        tools = self.tools.tools_for(task.platform, self.blackboard.seen_filter_for(task.run_id, ch.character_id),
+                                     recent=recent)
 
         agent = {"id": str(task.id), "role": task.task_type, "platform": task.platform}
 

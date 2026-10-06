@@ -63,3 +63,24 @@ def test_search_check_flags_blocked_engines():
     assert ok.level == "OK" and "12 results" in ok.detail and "brave" in ok.detail
     dead = search_check({"results": [], "unresponsive_engines": [["duckduckgo", "CAPTCHA"], ["google", "access denied"]]})
     assert dead.level == "FAIL" and "duckduckgo (CAPTCHA)" in dead.detail and "settings.yml" in dead.detail
+
+
+def test_run_takes_trend_urls_and_targets_and_old_commands_are_gone(monkeypatch):
+    import tf_backend.cli as cli
+
+    seen = {}
+
+    async def fake_run(*args):
+        seen["args"] = args
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    out = CliRunner().invoke(app, ["run", "nicolaiz", "--trend-url", "https://www.tiktok.com/@a/video/1",
+                                   "--target", "https://youtu.be/OUZbZ8cz4j8",
+                                   "--target", "https://www.tiktok.com/@b/video/2=tekashi67", "--freshness", "day"])
+    assert out.exit_code == 0, out.output
+    *_, freshness, _minutes, _workers, trends, targets = seen["args"]
+    assert freshness == "day" and trends == ["https://www.tiktok.com/@a/video/1"]
+    assert targets == [{"url": "https://youtu.be/OUZbZ8cz4j8", "character": "nicolaiz"},
+                       {"url": "https://www.tiktok.com/@b/video/2", "character": "tekashi67"}]
+    help_text = CliRunner().invoke(app, ["--help"]).output
+    assert "sync-characters" not in help_text and " seed " not in help_text

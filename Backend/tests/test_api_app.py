@@ -8,7 +8,7 @@ import httpx
 import pytest
 from sqlalchemy import select, update
 
-from tf_agent.characters.sync import sync_characters
+from tf_agent.characters.folders import sync_characters
 from tf_agent.learning.briefs import BriefWriter
 from tf_agent.learning.learner import Learner
 from tf_agent.models.fake import FakeAdapter, text_response

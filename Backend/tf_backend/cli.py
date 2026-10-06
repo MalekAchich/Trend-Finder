@@ -21,7 +21,6 @@ from tf_backend.services import build_services, close_services
 
 app = typer.Typer(no_args_is_help=True, help="Trend Finder command line")
 login_app = typer.Typer(no_args_is_help=True, help="Log in to a model provider")
-seed_app = typer.Typer(no_args_is_help=True, help="Manage a character's seed videos")
 
 
 @app.callback()
@@ -30,7 +29,6 @@ def main() -> None:
 
 
 app.add_typer(login_app, name="login")
-app.add_typer(seed_app, name="seed")
 
 
 def alembic_config() -> Config:
@@ -244,53 +242,6 @@ async def _analyze(url: str) -> None:
         typer.echo(f"  contact sheet: {r.contact_sheet_path}")
 
 
-@app.command("sync-characters")
-def sync_characters_cmd() -> None:
-    """Import/refresh characters from the characters folder (new version only when something changed)."""
-    asyncio.run(_sync_characters())
-
-
-async def _sync_characters() -> None:
-    from tf_agent.characters.sync import sync_characters
-    from tf_db.session import make_engine, make_sessionmaker
-
-    settings = AppSettings()
-    engine = make_engine(settings.database_url)
-    try:
-        for r in await sync_characters(settings.characters_dir, make_sessionmaker(engine)):
-            typer.echo(f"{r.slug}: version {r.version}{' (updated)' if r.changed else ' (unchanged)'}")
-    finally:
-        await engine.dispose()
-
-
-@seed_app.command("add")
-def seed_add(slug: str, url: str) -> None:
-    """Add a seed video (an example of the direction you want) to a character."""
-    asyncio.run(_seed_add(slug, url))
-
-
-async def _seed_add(slug: str, url: str) -> None:
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-    from tf_agent.characters.sync import load_character
-    from tf_agent.tools.normalize import canonical_id
-    from tf_db.models import Seed
-    from tf_db.session import make_engine, make_sessionmaker
-
-    settings = AppSettings()
-    engine = make_engine(settings.database_url)
-    try:
-        sm = make_sessionmaker(engine)
-        ch = await load_character(sm, slug)
-        async with sm() as s:
-            await s.execute(pg_insert(Seed).values(character_id=ch.character_id, url=url, canonical_id=canonical_id(url),
-                                                   source="cli").on_conflict_do_nothing())
-            await s.commit()
-    finally:
-        await engine.dispose()
-    typer.echo(f"seed added to {slug}: {url}")
-
-
 def _parse_run_id(raw: str):
     import uuid
 
@@ -304,15 +255,28 @@ def _parse_run_id(raw: str):
 def _event_line(e: dict) -> str | None:
     p = e["payload"]
     kind = e["type"]
+    who = (p.get("agent") or {}).get("role", "")
     if kind == "run.state":
         extra = f" — {p['stop_reason']}" if p.get("stop_reason") else ""
         return f"● run {p['state']}{extra}"
+    if kind == "character.read":
+        return f"◆ read the character: {p['read']['vibe']} | niches: {', '.join(p['read']['possible_niches'])}"
+    if kind == "trend.studied":
+        return f"◆ studied {p['url']}: {p['study']['format'][:120]}"
     if kind == "plan.created":
-        return f"◆ round {p['round']}: {p['tasks']} tasks ({p['explore']} explore / {p['exploit']} exploit). {p['summary'][:160]}"
-    if kind == "task.finished":
+        return (f"◆ round {p['round']}: {len(p['tasks'])} tasks ({p['explore']} explore / {p['exploit']} exploit). "
+                f"{p['reasoning'][:160]}")
+    if kind == "agent.thought":
+        return f"  {who}: {p['text'][:160]}"
+    if kind == "agent.finished":
         if p.get("failed"):
-            return f"  ✗ {p['type']} failed: {str(p['failed'])[:120]}"
-        return f"  ✓ {p['type']}: {len(p.get('accepted', []))} accepted, {len(p.get('rejected', []))} rejected, {p.get('leads', 0)} leads ({p.get('provider')})"
+            return f"  ✗ {who} failed: {str(p['failed'])[:120]}"
+        return f"  ✓ {who}: {p['accepted']} accepted, {p['rejected']} rejected, {p['leads']} leads ({p.get('provider')})"
+    if kind == "video.saved":
+        v = p["video"]
+        return f"  ★ saved {v['url']} (score {v['score']:.0f})" if v.get("score") is not None else f"  ★ saved {v['url']}"
+    if kind in ("candidate.rejected", "error", "provider.switched"):
+        return f"  · {kind}: {p.get('reason') or p.get('message') or (p.get('from') + ' → ' + p.get('to'))}"
     if kind == "round.finished":
         return f"◆ round {p['round']} done: {p['new_analyzed']} analyzed"
     return None
@@ -346,29 +310,43 @@ async def _execute(runtime, run_id) -> None:
 
 @app.command()
 def run(
-    slug: str = typer.Argument(..., help="character slug, e.g. nicolaiz"),
+    slug: str = typer.Argument(..., help="character slug (folder name, lower-case), e.g. nicolaiz"),
     rounds: int = typer.Option(3, min=1, max=10),
     tasks: int = typer.Option(12, min=1, max=16, help="tasks per round"),
     target: int = typer.Option(20, min=1, help="stop once this many findings score ≥ --good"),
     good: float = typer.Option(60.0, help="score that counts toward the target"),
     platforms: str = typer.Option("tiktok,youtube,instagram"),
+    freshness: str = typer.Option("week", help="how recent videos must be: day, week, month or any"),
     minutes: float = typer.Option(60.0, help="wall-clock limit"),
     workers: int = typer.Option(8, min=1, max=16),
+    trend_url: list[str] = typer.Option([], "--trend-url", help="a trending AI-influencer video to study (repeat)"),
+    target_url: list[str] = typer.Option([], "--target", help="a video you found: URL or URL=character (repeat)"),
 ) -> None:
     """Start a multi-agent trend-finding run for a character."""
-    asyncio.run(_run(slug, rounds, tasks, target, good, platforms, minutes, workers))
+    targets = []
+    for raw in target_url:
+        url, _, who = raw.partition("=")
+        targets.append({"url": url.strip(), "character": (who or slug).strip()})
+    asyncio.run(_run(slug, rounds, tasks, target, good, platforms, freshness, minutes, workers, trend_url, targets))
 
 
-async def _run(slug, rounds, tasks, target, good, platforms, minutes, workers) -> None:
-    from tf_agent.orchestrator.run import RunSettings
+async def _run(slug, rounds, tasks, target, good, platforms, freshness, minutes, workers, trend_urls, targets) -> None:
+    from tf_agent.characters.folders import sync_characters
+    from tf_agent.orchestrator.run import InputError, RunSettings
     from tf_backend.runtime import build_runtime
 
     runtime = await build_runtime()
     try:
+        await sync_characters(runtime.services.settings.characters_dir, runtime.services.sessionmaker)
         settings = RunSettings(platforms=[p.strip() for p in platforms.split(",") if p.strip()], rounds=rounds,
                                tasks_per_round=tasks, target_findings=target, good_score=good,
-                               wall_clock_s=minutes * 60, workers=workers)
-        run_id = await runtime.orchestrator.create_run(slug, settings)
+                               wall_clock_s=minutes * 60, workers=workers, freshness=freshness,
+                               trend_urls=list(trend_urls), targets=targets)
+        try:
+            run_id = await runtime.orchestrator.create_run(slug, settings)
+        except InputError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(2) from None
         typer.echo(f"run {run_id} started (resume with `tf resume {run_id}` if interrupted)")
         await _execute(runtime, run_id)
     finally:

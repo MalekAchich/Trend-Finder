@@ -120,8 +120,11 @@ def _safe(fn: Callable[[Any], Awaitable[Any]]) -> Callable[[Any], Awaitable[dict
     return handler
 
 
-def build_tools(pt: PlatformTools, searx: SearxClient, *, fetch: Callable[..., Awaitable[Any]] = web_fetch
-                ) -> list[Tool]:
+def build_tools(pt: PlatformTools, searx: SearxClient, *, fetch: Callable[..., Awaitable[Any]] = web_fetch,
+                default_recent: str | None = None) -> list[Tool]:
+    def recent(p: SearchParams) -> str | None:
+        return p.recent or default_recent
+
     async def do_web_search(p: WebSearchParams) -> dict[str, Any]:
         resp = await pt.web_search(p.query, max_results=p.max_results, time_range=p.time_range)
         return {"results": [{"title": h.title, "url": h.url, "snippet": h.snippet} for h in resp.results]}
@@ -132,15 +135,15 @@ def build_tools(pt: PlatformTools, searx: SearxClient, *, fetch: Callable[..., A
 
     return [
         Tool("tiktok_search", "Search TikTok videos by keywords. Returns ids, views, age, duration, creator, caption.",
-             SearchParams, _safe(lambda p: pt.tiktok_search(p.query, p.max_results, p.recent)), compact_discovery),
+             SearchParams, _safe(lambda p: pt.tiktok_search(p.query, p.max_results, recent(p))), compact_discovery),
         Tool("tiktok_creator", "Recent videos from one TikTok creator.", CreatorParams,
              _safe(lambda p: pt.tiktok_creator(p.handle, p.max_results)), compact_discovery),
         Tool("tiktok_hashtag", "TikTok videos using a hashtag.", HashtagParams,
              _safe(lambda p: pt.tiktok_hashtag(p.tag, p.max_results)), compact_discovery),
         Tool("instagram_search", "Search Instagram Reels by keywords (discovery only without login).", SearchParams,
-             _safe(lambda p: pt.instagram_search(p.query, p.max_results, p.recent)), compact_discovery),
+             _safe(lambda p: pt.instagram_search(p.query, p.max_results, recent(p))), compact_discovery),
         Tool("shorts_search", "Search YouTube Shorts by keywords.", SearchParams,
-             _safe(lambda p: pt.shorts_search(p.query, p.max_results, p.recent)), compact_discovery),
+             _safe(lambda p: pt.shorts_search(p.query, p.max_results, recent(p))), compact_discovery),
         Tool("get_video", "Full metadata for one TikTok/Instagram/YouTube video URL.", VideoParams,
              _safe(lambda p: pt.get_video(p.url)), _compact_video),
         Tool("web_search", "General web search (articles, trend reports, news).", WebSearchParams,

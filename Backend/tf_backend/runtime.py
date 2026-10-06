@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from tf_agent.config import AppSettings
 from tf_agent.curation.curate import Curator
+from tf_agent.learning.learner import Learner
 from tf_agent.orchestrator.run import Orchestrator
 from tf_agent.pipeline.analyze import process_pool_runner
 from tf_agent.roles.runners import Roles
@@ -34,5 +35,6 @@ async def build_runtime(settings: AppSettings | None = None, heavy_workers: int 
     analyzer = build_analyzer(s, stack, heavy, max_parallel=heavy_workers)
     roles = Roles(services.client)
     orchestrator = Orchestrator(services.sessionmaker, roles, stack, analyzer, stack.store,
-                                curator=Curator(services.sessionmaker, roles))
+                                curator=Curator(services.sessionmaker, roles),
+                                learner=Learner(services.sessionmaker, roles))
     return Runtime(services, stack, orchestrator, heavy)

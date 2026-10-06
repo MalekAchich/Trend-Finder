@@ -26,6 +26,13 @@ ANALYSIS = {"fit_breakdown": {"look": 8, "vibe": 8, "energy": 8, "niche": 8, "ad
             "niche_guess": "deadpan professional"}
 
 
+READ = {"look": "Robot butler in a black tailcoat", "vibe": "calm and precise", "performance_angle": "absolute composure",
+        "possible_niches": ["household duty", "fine dining", "office life"], "kling_constraints": "full body",
+        "avoid": "fast spins"}
+STUDY = {"format": "slow-motion walk-in to a beat drop", "hook": "freeze on the beat", "why_it_works": "contrast",
+         "search_angles": ["beat drop walk in"], "fit_for_character": "strong"}
+
+
 class World:
     """Fake provider that plays every role; behavior switches let each test shape the run."""
 
@@ -36,6 +43,8 @@ class World:
         self.limit_first_analysis = limit_first_analysis
         self.analysis_calls = 0
         self.rounds_planned = 0
+        self.reads = 0
+        self.master_prompts = []
 
     async def list_models(self):
         from tf_agent.models.types import ModelInfo
@@ -46,7 +55,16 @@ class World:
         return ProviderHealth("a", True)
 
     async def complete(self, req):
+        if req.schema_name == "character_read":
+            self.reads += 1
+            return CompletionResponse("a", "a-model", structured=READ)
+        if req.schema_name == "seed_study":
+            return CompletionResponse("a", "a-model", structured=STUDY)
+        if req.schema_name == "taste_profile":
+            return CompletionResponse("a", "a-model", structured={
+                "taste_profile_md": "## Loves\n- ceremony", "retrospective": ["liked ceremony"], "primary_niche": None})
         if req.schema_name == "work_plan":
+            self.master_prompts.append(req.system + "\n" + req.messages[0].text())
             self.rounds_planned += 1
             n = int(re.search(r"Create exactly (\d+) tasks", req.messages[0].text()).group(1))
             r = self.rounds_planned
@@ -80,7 +98,8 @@ class FakeStack:
     def __init__(self, store, empty=False):
         self.store, self.empty = store, empty
 
-    def tools_for(self, platform, seen_filter=None):
+    def tools_for(self, platform, seen_filter=None, recent=None):
+        self.recent = recent
         async def search(p: SearchParams):
             if self.empty:
                 return {"items": [], "hidden_already_seen": 0, "platform_health": "ok", "notes": []}
@@ -96,12 +115,26 @@ class FakeStack:
 
         return [Tool("tiktok_search", "search", SearchParams, search)]
 
+    async def get_video(self, url):
+        from tf_agent.tools.normalize import canonical_id, platform_of
+        from tf_agent.tools.types import ToolFailure
+
+        if "private" in url:
+            raise ToolFailure("not_found", "video is private or removed")
+        cid = canonical_id(url)
+        item = VideoItem(canonical_id=cid, platform=platform_of(url), url=url, metrics=Metrics(views=5000),
+                         media_access="login_required" if cid.startswith("instagram") else "ok")
+        await self.store.upsert_videos([item])
+        return item
+
 
 class FakeAnalyzer:
     def __init__(self, sheet):
         self.sheet = sheet
 
     async def analyze(self, item):
+        if item.media_access == "login_required":
+            return VideoAnalysisResult.filtered(item.canonical_id, "media_unavailable")
         return VideoAnalysisResult(canonical_id=item.canonical_id, feasibility=80.0, contact_sheet_path=str(self.sheet))
 
 

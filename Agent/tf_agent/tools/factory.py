@@ -14,6 +14,7 @@ from tf_agent.tools.health import PlatformRegistry
 from tf_agent.tools.limiter import RateLimiter
 from tf_agent.tools.platforms import ItemsSink, PlatformTools, SeenFilter
 from tf_agent.tools.store import VideoStore
+from tf_agent.tools.types import VideoItem
 from tf_agent.tools.web import SearxClient
 from tf_agent.tools.ytdlp import YtDlp
 
@@ -40,9 +41,15 @@ class ToolStack:
                              on_items=self.store.upsert_videos if self.store else None,
                              instagram_enrich=self.instagram_enrich, search_limiter=self.search_limiter)
 
-    def tools_for(self, platform: str | None, seen_filter: SeenFilter | None = None) -> list[Tool]:
+    def tools_for(self, platform: str | None, seen_filter: SeenFilter | None = None,
+                  recent: str | None = None) -> list[Tool]:
         wanted = PLATFORM_TOOLS.get(platform or "", set().union(*PLATFORM_TOOLS.values())) | COMMON_TOOLS
-        return [t for t in build_tools(self.platform_tools(seen_filter), self.searx) if t.name in wanted]
+        return [t for t in build_tools(self.platform_tools(seen_filter), self.searx, default_recent=recent)
+                if t.name in wanted]
+
+    async def get_video(self, url: str) -> VideoItem:
+        """Metadata for one URL the owner pasted (stored like any tool result)."""
+        return await self.platform_tools().get_video(url)
 
 
 def build_tool_stack(settings: AppSettings, sessionmaker: async_sessionmaker[AsyncSession] | None = None, *,
