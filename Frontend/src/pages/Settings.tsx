@@ -1,14 +1,9 @@
 import { useEffect, useState } from "react";
 import { useModelSettings, useSaveModels, useUsage } from "../api/hooks";
 import type { ModelChoice, ProviderUsage } from "../api/types";
+import { windowView } from "../lib/usage";
 
 const NAME: Record<string, string> = { claude: "Claude", chatgpt: "ChatGPT" };
-function resetText(epoch: number): string {
-  const d = new Date(epoch * 1000);
-  const sameDay = d.toDateString() === new Date().toDateString();
-  return sameDay ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-    : d.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
-}
 const at = (epoch: number | null) => epoch ? new Date(epoch * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : null;
 
 export default function Settings() {
@@ -44,17 +39,21 @@ function UsageCard({ u }: { u: ProviderUsage }) {
       </div>
       {u.windows.length > 0 ? (
         <div className="mt-4 space-y-3">
-          {u.windows.map((w) => (
-            <div key={w.name}>
-              <div className="flex justify-between text-[12.5px] text-mist">
-                <span>{w.name === "seven_day" ? "Weekly limit" : w.name === "five_hour" ? "5-hour limit" : w.name}</span>
-                <span className="num">{Math.round(w.used_percent)}% used{at(w.resets_at) ? `, resets ${resetText(w.resets_at!)}` : ""}</span>
+          {u.windows.map((w) => {
+            const v = windowView(u.provider, w);
+            const low = u.provider === "chatgpt" ? v.bar < 15 : v.bar > 85;
+            return (
+              <div key={w.name}>
+                <div className="flex justify-between text-[12.5px] text-mist">
+                  <span>{v.label}{v.reset && <span className="ml-2 text-mist/70">{v.reset}</span>}</span>
+                  <span className="num">{v.value}</span>
+                </div>
+                <div className="mt-1.5 h-2 rounded-full bg-white/10">
+                  <div className={`h-2 rounded-full ${low ? "bg-warn" : "bg-lime"}`} style={{ width: `${Math.min(v.bar, 100)}%` }} />
+                </div>
               </div>
-              <div className="mt-1.5 h-2 rounded-full bg-white/10">
-                <div className={`h-2 rounded-full ${w.used_percent > 85 ? "bg-warn" : "bg-lime"}`} style={{ width: `${Math.min(w.used_percent, 100)}%` }} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : <p className="mt-4 text-[12.5px] text-mist">{cooling && u.last_error ? u.last_error : "Shown after the next call to this subscription."}</p>}
       <dl className="num mt-5 grid grid-cols-3 gap-3 text-[12.5px]">
