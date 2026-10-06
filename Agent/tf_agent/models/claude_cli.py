@@ -145,6 +145,7 @@ def render_prompt(req: CompletionRequest, image_ref: Callable[[ImagePart], str])
     return "\n".join(out)
 
 
+CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 REFUSAL_RE = re.compile(r"safeguards flagged|usage policy|acceptable use policy|\banthropic\.com/legal/aup", re.I)
 
 
@@ -323,6 +324,8 @@ class ClaudeCLIAdapter:
             prompt = f"<system>\n{system}\n</system>\n{prompt}"
             system = "Follow the instructions in the <system> block of the user message."
         cmd = [self.auth.bin, *isolation_flags(self.mcp_config), "--model", req.model, "--system-prompt", system]
+        if req.reasoning_effort in CLAUDE_EFFORTS:
+            cmd += ["--effort", req.reasoning_effort]
         if req.tools:
             cmd += ["--json-schema", json.dumps(step_schema(req.tools))]
         elif req.output_schema is not None:

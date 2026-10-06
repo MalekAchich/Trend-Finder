@@ -5,6 +5,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from tf_agent.learning.learner import FeedbackError
 from tf_agent.orchestrator.found import found_video
@@ -29,32 +30,37 @@ def _latest_analysis():
             .where(VideoAnalysis.pipeline_version == PIPELINE_VERSION).subquery())
 
 
+async def videos_for_run(s: AsyncSession, rid: uuid.UUID) -> list[dict[str, Any]]:
+    """The curated cards once the run is ranked, otherwise the live set (analysed findings, best first)."""
+    a = _latest_analysis()
+    curated = (await s.execute(
+        select(TrendCluster, Finding, FindingScore, Video, a.c.thumbnail_path, a.c.best_clean_segment, CardFeedback)
+        .join(Finding, Finding.id == TrendCluster.best_finding_id)
+        .join(Video, Video.canonical_id == Finding.canonical_id)
+        .outerjoin(FindingScore, FindingScore.finding_id == Finding.id)
+        .outerjoin(a, a.c.canonical_id == Finding.canonical_id)
+        .outerjoin(CardFeedback, CardFeedback.cluster_id == TrendCluster.id)
+        .where(TrendCluster.run_id == rid).order_by(TrendCluster.rank))).all()
+    if curated:
+        return [found_video(f, sc, v, _Analysis(thumb, seg), cluster_id=cl.id, feedback=fb)
+                for cl, f, sc, v, thumb, seg, fb in curated]
+    live = (await s.execute(
+        select(Finding, FindingScore, Video, a.c.thumbnail_path, a.c.best_clean_segment)
+        .join(FindingScore, FindingScore.finding_id == Finding.id)
+        .join(Video, Video.canonical_id == Finding.canonical_id)
+        .outerjoin(a, a.c.canonical_id == Finding.canonical_id)
+        .where(Finding.run_id == rid, Finding.status == "analyzed")
+        .order_by(FindingScore.overall.desc().nulls_last()))).all()
+    return [found_video(f, sc, v, _Analysis(thumb, seg)) for f, sc, v, thumb, seg in live]
+
+
 @router.get("/runs/{run_id}/videos")
 async def run_videos(run_id: str, c: AppContext = Depends(ctx)) -> list[dict[str, Any]]:
     rid = _uuid(run_id, "run")
-    a = _latest_analysis()
     async with c.sessionmaker() as s:
         if await s.get(Run, rid) is None:
             raise HTTPException(404, "unknown run")
-        curated = (await s.execute(
-            select(TrendCluster, Finding, FindingScore, Video, a.c.thumbnail_path, a.c.best_clean_segment, CardFeedback)
-            .join(Finding, Finding.id == TrendCluster.best_finding_id)
-            .join(Video, Video.canonical_id == Finding.canonical_id)
-            .outerjoin(FindingScore, FindingScore.finding_id == Finding.id)
-            .outerjoin(a, a.c.canonical_id == Finding.canonical_id)
-            .outerjoin(CardFeedback, CardFeedback.cluster_id == TrendCluster.id)
-            .where(TrendCluster.run_id == rid).order_by(TrendCluster.rank))).all()
-        if curated:
-            return [found_video(f, sc, v, _Analysis(thumb, seg), cluster_id=cl.id, feedback=fb)
-                    for cl, f, sc, v, thumb, seg, fb in curated]
-        live = (await s.execute(
-            select(Finding, FindingScore, Video, a.c.thumbnail_path, a.c.best_clean_segment)
-            .join(FindingScore, FindingScore.finding_id == Finding.id)
-            .join(Video, Video.canonical_id == Finding.canonical_id)
-            .outerjoin(a, a.c.canonical_id == Finding.canonical_id)
-            .where(Finding.run_id == rid, Finding.status == "analyzed")
-            .order_by(FindingScore.overall.desc().nulls_last()))).all()
-    return [found_video(f, sc, v, _Analysis(thumb, seg)) for f, sc, v, thumb, seg in live]
+        return await videos_for_run(s, rid)
 
 
 class _Analysis:

@@ -206,3 +206,11 @@ async def test_tool_steps_carry_a_progress_note(fake_claude):
     schema = json.loads(flag_value(fake_claude.calls()[0]["argv"], "--json-schema"))
     assert "note" in schema["properties"] and "thought" not in schema["properties"]
     assert r.text == "Checking #deskdance"
+
+
+async def test_effort_is_passed_to_the_cli(fake_claude):
+    fake_claude.respond(fake_claude.envelope(structured={"ok": True}))
+    r = CompletionRequest(model="opus", system="s", output_schema={"type": "object"}, reasoning_effort="high",
+                          messages=[Message.user("hi")])
+    await adapter(fake_claude).complete(r)
+    assert flag_value(fake_claude.calls()[0]["argv"], "--effort") == "high"

@@ -4,7 +4,7 @@ import json
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -16,7 +16,7 @@ from tf_backend.api.characters import character_card
 from tf_backend.api.deps import ctx, require_client_header
 from tf_backend.app_context import AppContext
 from tf_backend.runs import TERMINAL, RunError
-from tf_db.models import Character, Finding, Run, Task
+from tf_db.models import Character, Finding, ModelCallRow, Run, RunFeedback, Task, TrendCluster
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 TASK_STATUS = {"queued": "waiting", "running": "working", "succeeded": "done", "failed": "failed",
@@ -76,6 +76,32 @@ async def _run_out(c: AppContext, run: Run, ch: Character) -> dict[str, Any]:
                     "status": TASK_STATUS.get(t.state, t.state), "goal": t.goal} for t in tasks],
         "findings": counts,
     }
+
+
+@router.get("")
+async def list_runs(character: str | None = None, limit: int = Query(100, ge=1, le=500),
+                    c: AppContext = Depends(ctx)) -> list[dict[str, Any]]:
+    total = func.coalesce(ModelCallRow.input_tokens, 0) + func.coalesce(ModelCallRow.output_tokens, 0)
+    tokens = select(ModelCallRow.run_id, func.sum(total).label("t")).group_by(ModelCallRow.run_id).subquery()
+    q = (select(Run, Character, RunFeedback.satisfaction, tokens.c.t)
+         .join(Character, Character.id == Run.character_id)
+         .outerjoin(RunFeedback, RunFeedback.run_id == Run.id).outerjoin(tokens, tokens.c.run_id == Run.id)
+         .order_by(Run.started_at.desc()).limit(limit))
+    if character:
+        q = q.where(Character.slug == character)
+    async with c.sessionmaker() as s:
+        rows = (await s.execute(q)).all()
+        out = []
+        for run, ch, satisfaction, t in rows:
+            clusters = (await s.execute(select(func.count()).select_from(TrendCluster).where(
+                TrendCluster.run_id == run.id))).scalar_one()
+            videos = clusters or (await s.execute(select(func.count()).select_from(Finding).where(
+                Finding.run_id == run.id, Finding.status == "analyzed"))).scalar_one()
+            out.append({"id": str(run.id), "character": await character_card(c, ch), "state": run.state,
+                        "stop_reason": run.stop_reason, "started_at": run.started_at, "finished_at": run.finished_at,
+                        "videos": videos, "satisfaction": satisfaction, "tokens": int(t or 0),
+                        "active": c.runs.is_active(run.id)})
+    return out
 
 
 @router.get("/active")

@@ -64,6 +64,7 @@ class ModelClient:
         self.max_attempts = max_attempts
         self.backoff_s = backoff_s
         self._sleep = sleep
+        self.effort_override: dict[str, str] = {}  # the owner's per-provider effort (Settings), beats role efforts
         # awaited when a call falls back to a later provider: (ctx, from_provider, to_provider, reason)
         self.on_switch: Callable[[CallContext, str, str, str], Awaitable[None]] | None = None
 
@@ -100,7 +101,8 @@ class ModelClient:
                 except Exception as e:  # narration must never break a model call
                     log.warning("switch hook failed: %s", e)
             adapter = self.adapters[cand.provider]
-            concrete = replace(req, model=cand.model, reasoning_effort=cand.effort or req.reasoning_effort)
+            effort = self.effort_override.get(cand.provider) or cand.effort or req.reasoning_effort
+            concrete = replace(req, model=cand.model, reasoning_effort=effort)
             for attempt in range(1, self.max_attempts + 1):
                 started = time.monotonic()
                 try:

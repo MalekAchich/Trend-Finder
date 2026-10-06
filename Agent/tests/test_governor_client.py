@@ -172,3 +172,20 @@ async def test_refusal_falls_back_without_cooling_the_provider():
     client, gov, _ = make_client({"a": a, "b": b})
     assert (await client.complete(req(), CTX)).provider == "b"
     assert gov.available("a") is True  # a refusal is about the message, not the subscription
+
+
+async def test_provider_effort_override_wins_over_the_role_effort():
+    """Plan 6: the owner's per-provider effort applies to every call on that provider."""
+    roles = {"default": [{"provider": "a", "model": "a-model", "effort": "low"}]}
+    a = FakeAdapter("a", [text_response("a", "x"), text_response("a", "y")])
+    client, _, _ = make_client({"a": a}, roles=roles)
+    await client.complete(req(), CTX)
+    client.effort_override["a"] = "high"
+    await client.complete(req(), CTX)
+    assert [r.reasoning_effort for r in a.requests] == ["low", "high"]
+
+
+async def test_governor_keeps_the_last_rate_window():
+    gov = UsageGovernor(["a"], 4)
+    await gov.observe_rate("a", RateInfo(used_percent=44.0, window_minutes=300, resets_at=1791300000.0))
+    assert gov.last_rate("a").window_minutes == 300 and gov.last_rate("b") is None

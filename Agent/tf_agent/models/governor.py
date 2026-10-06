@@ -39,6 +39,7 @@ class UsageGovernor:
         self.probe_after_s = probe_after_s
         self.auth_probe_s = auth_probe_s
         self._status = {p: ProviderStatus() for p in names}
+        self._rates: dict[str, RateInfo] = {}
         self._slots = {p: asyncio.Semaphore(concurrency) for p in names}
 
     def status(self, provider: str) -> ProviderStatus:
@@ -81,9 +82,14 @@ class UsageGovernor:
             await self._set(provider, replace(self._status[provider], status="ok", cooling_until=None,
                                               last_error=None))
 
+    def last_rate(self, provider: str) -> RateInfo | None:
+        """The latest usage window the provider reported (ChatGPT sends it on every call)."""
+        return self._rates.get(provider)
+
     async def observe_rate(self, provider: str, rate: RateInfo | None) -> None:
         if rate is None or rate.used_percent is None:
             return
+        self._rates[provider] = rate
         self._status[provider] = replace(self._status[provider], used_percent=rate.used_percent)
         if rate.used_percent >= self.cool_at_percent:
             await self.mark_cooling(provider, rate.resets_at,
