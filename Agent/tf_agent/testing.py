@@ -72,7 +72,7 @@ async def create_test_run(sessionmaker, n_tasks: int = 1, slug: str = "nicolaiz"
         c = Character(slug=slug, name=slug.title(), folder_path="/x")
         s.add(c)
         await s.flush()
-        v = CharacterVersion(character_id=c.id, version=1, profile_md="p", front_matter={},
+        v = CharacterVersion(character_id=c.id, version=1, images=["/i.png"],
                              canonical_image_path="/i.png", content_hash="h")
         s.add(v)
         await s.flush()

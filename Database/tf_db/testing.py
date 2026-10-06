@@ -34,8 +34,10 @@ async def _reset(url: str) -> None:
     try:
         async with engine.begin() as conn:
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+            # every table in the test schema, including ones a newer migration removed from the ORM
+            names = (await conn.execute(text("select tablename from pg_tables where schemaname = 'public'"))).scalars()
+            for name in list(names):
+                await conn.execute(text(f'DROP TABLE IF EXISTS "{name}" CASCADE'))
             await conn.run_sync(Base.metadata.create_all)
     finally:
         await engine.dispose()

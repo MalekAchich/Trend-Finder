@@ -54,22 +54,22 @@ class CharacterVersion(Base):
     character_id: Mapped[uuid.UUID] = mapped_column(UUID_T, ForeignKey("characters.id", ondelete="CASCADE"),
                                                     index=True)
     version: Mapped[int] = mapped_column(Integer)
-    profile_md: Mapped[str] = mapped_column(Text)
-    front_matter: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=EMPTY_JSON)
+    images: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
     canonical_image_path: Mapped[str] = mapped_column(Text)
     content_hash: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = _created()
 
 
-class Seed(Base):
-    __tablename__ = "seeds"
-    __table_args__ = (UniqueConstraint("character_id", "url"),)
+class Target(Base):
+    """A video the owner found for a character: analysed in that character's next run."""
+    __tablename__ = "targets"
+    __table_args__ = (UniqueConstraint("character_id", "canonical_id"),)
     id: Mapped[uuid.UUID] = _id()
     character_id: Mapped[uuid.UUID] = mapped_column(UUID_T, ForeignKey("characters.id", ondelete="CASCADE"))
     url: Mapped[str] = mapped_column(Text)
-    canonical_id: Mapped[str | None] = mapped_column(String(64))
-    source: Mapped[str] = mapped_column(String(16), default="profile", server_default="profile")
-    study: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    canonical_id: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    run_id: Mapped[uuid.UUID | None] = mapped_column(UUID_T, ForeignKey("runs.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = _created()
 
 
@@ -108,6 +108,9 @@ class Run(Base):
     character_version_id: Mapped[uuid.UUID] = mapped_column(UUID_T, ForeignKey("character_versions.id"))
     state: Mapped[str] = mapped_column(String(24), index=True)
     settings: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=EMPTY_JSON)
+    inputs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=EMPTY_JSON)
+    character_read: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    feedback_contributions: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=EMPTY_JSON)
     explore_ratio_used: Mapped[float | None] = mapped_column(Float)
     current_round: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     stop_reason: Mapped[str | None] = mapped_column(Text)
@@ -200,6 +203,7 @@ class Finding(Base):
     why: Mapped[str | None] = mapped_column(Text)
     evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=EMPTY_JSON)
     preliminary_fit: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(8), default="agent", server_default="agent")
     status: Mapped[str] = mapped_column(String(24), default="pending_analysis", server_default="pending_analysis")
     created_at: Mapped[datetime] = _created()
 

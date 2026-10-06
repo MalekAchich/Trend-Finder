@@ -18,7 +18,7 @@ async def seed(s):
     c = Character(slug="nicolaiz", name="Nicolaiz", folder_path="/x")
     s.add(c)
     await s.flush()
-    v = CharacterVersion(character_id=c.id, version=1, profile_md="p", front_matter={}, canonical_image_path="/i.png",
+    v = CharacterVersion(character_id=c.id, version=1, images=["/i.png"], canonical_image_path="/i.png",
                          content_hash="h")
     s.add(v)
     await s.flush()
