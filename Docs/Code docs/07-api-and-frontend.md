@@ -4,7 +4,7 @@
 
 Everything is served by one process: `tf serve` runs the API and the built web app on `http://127.0.0.1:8000` and refuses to bind a non-loopback interface unless you pass `--allow-remote` (there is no login). Runs execute inside the same process as background tasks. Unfinished runs (`created`, `planning`, `running`, `paused_usage`, `curating`, `interrupted`) resume on startup.
 
-Every mutating route (POST/PUT) requires the `x-trendfinder-client` header. The web app always sends it, which stops cross-site form posts.
+Every mutating route (POST/PUT) requires the `x-trendfinder-client` header. The web app always sends it, which stops cross-site form posts. Requests must also name the host `127.0.0.1`, `localhost` or `[::1]`, which blocks DNS-rebinding pages (`--allow-remote` lifts this).
 
 ## REST API (`/api`)
 
@@ -17,12 +17,12 @@ Every mutating route (POST/PUT) requires the `x-trendfinder-client` header. The 
 | `POST /characters/{slug}/seeds` | Add a seed video URL (TikTok, Instagram or YouTube) |
 | `POST /runs` | Start a run `{slug, platforms, rounds, tasks_per_round, target_findings, good_score, minutes, workers}` |
 | `GET /runs` · `GET /runs/{id}` | List / detail (state, rounds with the Master's reasoning and rejections, tasks, finding counts) |
-| `POST /runs/{id}/stop` | Stop now and rank what was found (curates; ends in `review_ready`) |
+| `POST /runs/{id}/stop` | Stop now and rank what was found. Curation runs in the background (the run stays active, a second stop gets 409) and ends in `review_ready` with reason "stopped by the owner" |
 | `POST /runs/{id}/resume` | Resume a run that isn't active (409 for finished runs) |
 | `GET /runs/{id}/events` | **SSE**; resumes from `Last-Event-ID` (or `?after=`), heartbeat every 15 s, closes after the run ends |
 | `GET /runs/{id}/trends?include=filtered` | Ranked trend cards with scores, analysis, cross-check, feedback and brief status, plus filtered videos and run feedback |
 | `POST /runs/{id}/feedback` | `{cards: [{cluster_id, rating: up\|down\|skip, note?}], satisfaction: 1–10, note?}`. Only for `review_ready` runs (409 otherwise). Idempotent: re-rating replaces the earlier contribution. Runs the Learner and returns the taste-profile version, retrospective, niche guess, weight suggestion and any learner error. Ratings are saved even if the Learner fails |
-| `POST /trends/{id}/brief` · `GET /trends/{id}/brief` | Write (or rewrite) / read a production brief. 👍 cards only (409 otherwise) |
+| `POST /trends/{id}/brief` · `GET /trends/{id}/brief` | Write (or rewrite) / read a production brief. 👍 cards only (409 otherwise); 503 when both subscriptions are at their limit, 502 on unusable model output |
 | `GET /briefs` | Latest 100 briefs |
 | `GET /providers` · `GET /providers/{p}/models` | Subscription status (connected, ok/cooling/auth_error, usage %, reset time), model lists |
 | `POST /providers/chatgpt/login/start` · `/claude/login/start` · `/claude/login/complete` · `/{p}/logout` | Subscription logins |
