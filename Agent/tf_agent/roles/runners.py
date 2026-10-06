@@ -13,6 +13,7 @@ from tf_agent.loop.agent import AgentBudget, AgentResult, EventSink, run_agent
 from tf_agent.loop.tools import Tool
 from tf_agent.models.client import CallContext, ModelClient
 from tf_agent.models.types import CompletionRequest, ImagePart, Message
+from tf_agent.characters.read import CharacterRead
 from tf_agent.roles.prompts import PromptLibrary
 from tf_agent.roles.schemas import AnalystResult, CrossCheck, SeedStudy, WorkerResult, WorkPlan
 
@@ -121,6 +122,18 @@ class Roles:
         return await self._structured("cross_check", self.prompts.render("cross_check", brief=brief),
                                       self._facts_text(facts), [ImagePart(canonical_image), ImagePart(contact_sheet)],
                                       CrossCheck, "cross_check", run_id=run_id, only=others[0])
+
+    async def read_character(self, name: str, images: Sequence[str], taste_md: str | None,
+                             owner_notes: Sequence[str] = (), *, run_id: uuid.UUID | None = None
+                             ) -> Judged[CharacterRead]:
+        text = [f"Character name: {name}. You receive {min(len(images), 4)} image(s) of them."]
+        if taste_md:
+            text.append(f"Owner's taste profile so far:\n{taste_md}")
+        if owner_notes:
+            text.append("Owner's notes (verbatim):\n" + "\n".join(f"- {n}" for n in owner_notes))
+        return await self._structured("reader", self.prompts.render("reader"), "\n\n".join(text),
+                                      [ImagePart(p) for p in list(images)[:4]], CharacterRead, "character_read",
+                                      run_id=run_id)
 
     async def study_seed(self, brief: str, contact_sheet: str, facts: dict[str, Any], *,
                          run_id: uuid.UUID | None = None) -> Judged[SeedStudy]:

@@ -20,7 +20,8 @@ from typing import Any, Protocol
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from tf_agent.characters.sync import LoadedCharacter, load_character
+from tf_agent.characters.folders import LoadedCharacter, load_character
+from tf_agent.characters.read import CharacterRead, render_brief
 from tf_agent.loop.agent import AgentEvent
 from tf_agent.loop.tools import Tool
 from tf_agent.models.errors import AllProvidersUnavailable
@@ -42,7 +43,6 @@ from tf_db.models import (
     Run,
     RunFeedback,
     ScopeClaim,
-    Seed,
     Setting,
     TasteProfile,
     Task,
@@ -178,7 +178,13 @@ class Orchestrator:
     async def _character(self, run: Run) -> LoadedCharacter:
         async with self._sm() as s:
             slug = (await s.execute(select(Character.slug).where(Character.id == run.character_id))).scalar_one()
-        return await load_character(self._sm, slug)
+            read = (await s.execute(select(Run.character_read).where(Run.id == run.id))).scalar_one_or_none()
+            taste = (await s.execute(select(TasteProfile.body_md).where(TasteProfile.character_id == run.character_id)
+                                     .order_by(TasteProfile.version.desc()).limit(1))).scalar_one_or_none()
+        ch = await load_character(self._sm, slug)
+        if read:
+            ch.brief = render_brief(ch.name, CharacterRead(**read), taste)
+        return ch
 
     async def _outcome(self, run_id: uuid.UUID) -> RunOutcome:
         async with self._sm() as s:
@@ -445,7 +451,6 @@ class Orchestrator:
                                      .order_by(TasteProfile.version.desc()).limit(1))).scalar_one_or_none()
             owned = (await s.execute(select(ScopeClaim.platform, ScopeClaim.kind, ScopeClaim.value).where(
                 ScopeClaim.run_id == run_id).limit(80))).all()
-            seeds = (await s.execute(select(Seed.url, Seed.study).where(Seed.character_id == ch.character_id))).all()
             last = (await s.execute(select(Round).where(Round.run_id == run_id, Round.number == round_no - 1))
                     ).scalar_one_or_none()
         rated = [DirectionStat(d.key, d.alpha, d.beta, d.id, d.label, d.niche) for d in dirs if d.alpha + d.beta > 0]
@@ -459,17 +464,13 @@ class Orchestrator:
             f"Create exactly {n} tasks: {n_explore} explore (new directions) and {n_exploit} exploit "
             f"(existing directions, best first below). Each worker returns up to {settings.max_candidates} candidates.",
             "Platforms enabled: " + ", ".join(f"{p}={health.get(p, 'ok')}" for p in settings.platforms),
-            "Niche: OPEN: spread explore directions over at least 3 distinct niche hypotheses."
-            if ch.profile.niche_open else "Niche: defined in the character brief.",
+            "Niche: not decided yet: spread explore directions over at least 3 distinct niche hypotheses.",
             f"Target: {settings.target_findings} findings scoring ≥ {settings.good_score:g}.",
             "Taste profile (learned from the owner's ratings):\n" + (taste or "none yet: first runs explore broadly."),
         ]
         if ranked:
             lines.append("Existing directions ranked by Thompson sample (key | label | niche | 👍 | 👎):")
             lines += [f"- {d.key} | {d.label} | {d.niche or '-'} | {d.alpha} | {d.beta}" for d, _ in ranked[:15]]
-        if seeds:
-            lines.append("Seed videos from the owner:")
-            lines += [f"- {url}" + (f": {study}" if study else "") for url, study in seeds[:10]]
         if leads:
             lines.append("Open leads (use lead_id for deep_dive tasks):")
             lines += [f"- {l['id']} | {l['platform']} {l['type']} = {l['value']} | {l['why'] or ''}" for l in leads]

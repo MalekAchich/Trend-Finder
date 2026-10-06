@@ -4,7 +4,6 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from tf_agent.characters.profile import Profile
 from tf_agent.models.errors import UsageLimited
 from tf_agent.models.fake import FakeAdapter, text_response
 from tf_agent.orchestrator.analysis import AnalysisStage, CandidateSink
@@ -19,7 +18,7 @@ from tf_db.models import Finding, FindingScore
 
 from .test_blackboard import make_run
 
-ANALYSIS = {"fit_breakdown": {"persona": 8, "deadpan_contrast": 9, "energy": 7, "niche": 6, "adaptability": 8},
+ANALYSIS = {"fit_breakdown": {"look": 8, "vibe": 9, "energy": 7, "niche": 6, "adaptability": 8},
             "justification": "stiff dance suits him", "adaptation_idea": "bank lobby",
             "feasibility_notes": "single person", "niche_guess": "deadpan professional"}
 NOW = datetime.now(UTC)
@@ -42,8 +41,7 @@ async def setup(sm, tmp_path, analysis, script):
                                          duration_s=9, metrics=Metrics(views=50_000, likes=5000))])
     canon = tmp_path / "canon.png"
     canon.write_bytes(b"x")
-    character = SimpleNamespace(character_id=char_id, brief="# Character: N", canonical_image_path=str(canon),
-                                profile=Profile(front={}))
+    character = SimpleNamespace(character_id=char_id, brief="# Character: N", canonical_image_path=str(canon))
     fa = FakeAdapter("a", script)
     client, _, _ = make_client({"a": fa})
     q = TaskQueue(sm)

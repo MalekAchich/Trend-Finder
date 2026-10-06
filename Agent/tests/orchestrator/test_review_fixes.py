@@ -171,7 +171,7 @@ async def test_exploit_task_resolves_existing_direction(db_sessionmaker, tmp_pat
                  scope=ScopeSpec(queries=["gym deadpan"]), goal="exploit gym"),
         TaskPlan(task_type="scout", direction_key="never-declared", platform="tiktok",
                  scope=ScopeSpec(queries=["other"]), goal="ghost direction")])
-    from tf_agent.characters.sync import load_character
+    from tf_agent.characters.folders import load_character
 
     ch = await load_character(db_sessionmaker, "testy")
     enqueued, rejections = await orch._apply_plan(run_id, rid, plan, SETTINGS, ch, 0)

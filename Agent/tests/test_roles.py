@@ -19,7 +19,7 @@ PLAN = {"reasoning_summary": "start broad", "directions": [
                "scope": {"queries": ["serious man dance trend"]}, "goal": "single-person deadpan dances",
                "max_candidates": 5}], "stop": False}
 
-ANALYSIS = {"fit_breakdown": {"persona": 8, "deadpan_contrast": 9, "energy": 7, "niche": 6, "adaptability": 8},
+ANALYSIS = {"fit_breakdown": {"look": 8, "vibe": 9, "energy": 7, "niche": 6, "adaptability": 8},
             "justification": "stiff dance suits him", "adaptation_idea": "Nicolaiz in a bank lobby",
             "feasibility_notes": "single person, static camera", "niche_guess": "deadpan professional"}
 
@@ -31,9 +31,10 @@ def roles_for(*adapters):
 
 def test_every_prompt_renders_without_leftover_placeholders():
     lib = PromptLibrary()
-    for role in ("master", "scout", "radar", "deep_dive", "seed_study", "analyst", "cross_check"):
+    for role in ("master", "scout", "radar", "deep_dive", "seed_study", "analyst", "cross_check", "reader"):
         text = lib.render(role, brief=BRIEF)
-        assert "Nicolaiz" in text and "$" not in text and lib.version(role)
+        assert ("Nicolaiz" in text or role == "reader") and "$" not in text and lib.version(role)
+        assert "deadpan" not in lib.raw(role).lower()  # prompts are character-agnostic
     assert "only your own scope" in lib.render("scout", brief=BRIEF).lower()
 
 

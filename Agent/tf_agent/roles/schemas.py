@@ -62,8 +62,8 @@ class WorkerResult(BaseModel):
 
 
 class FitBreakdown(BaseModel):
-    persona: float = Field(ge=0, le=10)
-    deadpan_contrast: float = Field(ge=0, le=10)
+    look: float = Field(ge=0, le=10)
+    vibe: float = Field(ge=0, le=10)
     energy: float = Field(ge=0, le=10)
     niche: float = Field(ge=0, le=10)
     adaptability: float = Field(ge=0, le=10)
@@ -79,7 +79,7 @@ class AnalystResult(BaseModel):
     @property
     def fit(self) -> float:
         b = self.fit_breakdown
-        return round((b.persona + b.deadpan_contrast + b.energy + b.niche + b.adaptability) / 5 * 10, 2)
+        return round((b.look + b.vibe + b.energy + b.niche + b.adaptability) / 5 * 10, 2)
 
 
 class CrossCheck(BaseModel):

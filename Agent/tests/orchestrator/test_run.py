@@ -7,7 +7,7 @@ import uuid
 import pytest
 from sqlalchemy import select
 
-from tf_agent.characters.sync import sync_characters
+from tf_agent.characters.folders import sync_characters
 from tf_agent.loop.tools import Tool
 from tf_agent.models.errors import UsageLimited
 from tf_agent.models.types import CompletionResponse, ToolCall
@@ -21,7 +21,7 @@ from tf_agent.tools.store import VideoStore
 from tf_agent.tools.types import Metrics, VideoItem
 from tf_db.models import Finding, Round, Run
 
-ANALYSIS = {"fit_breakdown": {"persona": 8, "deadpan_contrast": 8, "energy": 8, "niche": 8, "adaptability": 8},
+ANALYSIS = {"fit_breakdown": {"look": 8, "vibe": 8, "energy": 8, "niche": 8, "adaptability": 8},
             "justification": "fits well", "adaptation_idea": "bank lobby", "feasibility_notes": "ok",
             "niche_guess": "deadpan professional"}
 
@@ -102,24 +102,9 @@ class FakeAnalyzer:
         return VideoAnalysisResult(canonical_id=item.canonical_id, feasibility=80.0, contact_sheet_path=str(self.sheet))
 
 
-PROFILE = """---
-name: Testy
-slug: testy
-canonical_image: testy.png
----
-
-## Persona
-A calm robot butler.
-
-## Niche / context: OPEN
-To discover.
-"""
-
-
 async def build(sm, tmp_path, world, empty=False):
     folder = tmp_path / "chars" / "Testy"
     folder.mkdir(parents=True)
-    (folder / "profile.md").write_text(PROFILE)
     (folder / "testy.png").write_bytes(b"png")
     await sync_characters(tmp_path / "chars", sm)
     sheet = tmp_path / "sheet.jpg"

@@ -147,8 +147,7 @@ class Learner:
 
     async def _learn(self, run_id: uuid.UUID, character_id: uuid.UUID, satisfaction: int, note: str | None,
                      outcome: FeedbackOutcome) -> None:
-        from tf_agent.characters.profile import CharacterError
-        from tf_agent.characters.sync import load_character
+        from tf_agent.characters.folders import CharacterError, load_character
 
         async with self._sm() as s:
             slug = (await s.execute(select(Character.slug).where(Character.id == character_id))).scalar_one()
@@ -170,7 +169,7 @@ class Learner:
                                          .order_by(RunFeedback.updated_at.desc()).limit(20))).all()
         try:
             brief = (await load_character(self._sm, slug)).brief
-        except CharacterError:  # an unparsable profile must not block learning from the owner's ratings
+        except CharacterError:  # a missing character folder must not block learning from the owner's ratings
             brief = f"# Character: {slug}"
         evidence = [{"direction": key, "label": c.label, "niche_guess": sc.niche_guess, "rating": fb.rating,
                      "note": fb.note, "fit": sc.fit, "feasibility": sc.feasibility, "overall": sc.overall}
