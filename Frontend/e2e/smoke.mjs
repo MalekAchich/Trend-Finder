@@ -1,5 +1,6 @@
-// Browser smoke test against a running backend: every page renders without console errors,
-// deep links work, and the review keyboard flow marks cards. Usage: node e2e/smoke.mjs [baseUrl] [shotDir]
+// Browser check of the single page against a running backend: renders at desktop/laptop/phone widths without
+// console errors, the composer works, the library shows a character's runs, and hovering a card starts a preview.
+// Usage: node e2e/smoke.mjs [baseUrl] [shotDir]
 import { chromium } from "playwright";
 
 const base = process.argv[2] ?? "http://127.0.0.1:8000";
@@ -7,67 +8,47 @@ const shots = process.argv[3];
 const browser = await chromium.launch();
 const errors = [];
 const failures = [];
-
-async function page(width, height) {
-  const p = await browser.newPage({ viewport: { width, height } });
-  p.on("console", (m) => m.type() === "error" && errors.push(`${p.url()}: ${m.text()}`));
-  p.on("pageerror", (e) => errors.push(`${p.url()}: ${e.message}`));
-  return p;
-}
 const check = (ok, what) => { if (!ok) failures.push(what); console.log(`${ok ? "ok  " : "FAIL"} ${what}`); };
 
-const p = await page(1440, 900);
-const runs = await (await fetch(`${base}/api/runs`)).json();
-const ready = runs.find((r) => r.state === "review_ready");
-
-for (const [path, text] of [["/runs", "Start a run"], ["/characters", "Characters"], ["/settings", "How cards are ranked"],
-  ["/briefs", "Production briefs"]]) {
-  await p.goto(base + path);
-  await p.getByText(text).first().waitFor({ timeout: 10_000 }).catch(() => {});
-  check(await p.getByText(text).first().isVisible(), `${path} renders "${text}"`);
-  if (shots) await p.screenshot({ path: `${shots}/desktop${path.replaceAll("/", "_")}.png`, fullPage: true });
-}
-
-const chars = await (await fetch(`${base}/api/characters`)).json();
-if (chars[0]) {
-  await p.goto(`${base}/characters/${chars[0].slug}`);
-  await p.getByText("Taste profile").first().waitFor({ timeout: 10_000 });
-  check(true, "character page renders");
-  if (shots) await p.screenshot({ path: `${shots}/desktop_character.png`, fullPage: true });
-}
-
-if (ready) {
-  await p.goto(`${base}/runs/${ready.id}`);
-  await p.getByText("What the lead agent decided").waitFor({ timeout: 10_000 });
-  check(true, "live run page renders for a finished run");
-  if (shots) await p.screenshot({ path: `${shots}/desktop_run.png`, fullPage: true });
-
-  await p.goto(`${base}/runs/${ready.id}/review`);
-  await p.getByText("Review trend cards").waitFor({ timeout: 10_000 });
-  const marked = async () => Number((await p.getByText(/\d+ of \d+ marked/).textContent()).split(" ")[0]);
-  const before = await marked();
-  await p.keyboard.press("n");
-  check(await p.evaluate(() => document.activeElement?.tagName === "TEXTAREA"), "N focuses the note");
-  await p.keyboard.type("smoke note u d");
-  check(await marked() === before, "typing in the note doesn't trigger shortcuts");
-  await p.keyboard.press("Escape");
-  await p.keyboard.press("u");
+for (const [w, h, name] of [[1440, 900, "desktop"], [1280, 800, "laptop"], [390, 844, "phone"]]) {
+  const p = await browser.newPage({ viewport: { width: w, height: h } });
+  p.on("console", (m) => m.type() === "error" && !/tiktok|youtube|doubleclick|googlevideo/i.test(m.text()) && errors.push(`${name}: ${m.text()}`));
+  p.on("pageerror", (e) => errors.push(`${name}: ${e.message}`));
+  await p.goto(base);
+  await p.getByRole("radio").first().waitFor({ timeout: 15_000 });
+  await p.locator("article[data-video-id]").first().waitFor({ timeout: 15_000 }).catch(() => {});
   await p.waitForTimeout(500);
-  check(await marked() === Math.min(before + 1, 999) || before > 0, "U marks the card");
-  if (shots) await p.screenshot({ path: `${shots}/desktop_review.png`, fullPage: true });
-  await p.keyboard.press("k");
-  check(await p.locator('[aria-label="Marked: select"]').first().isVisible(), "the select mark shows after going back");
-
-  const phone = await page(390, 844);
-  await phone.goto(`${base}/runs/${ready.id}/review`);
-  await phone.getByText("Review trend cards").waitFor({ timeout: 10_000 });
-  const overflow = await phone.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
-  check(!overflow, "review has no horizontal page scroll at phone width");
-  if (shots) await phone.screenshot({ path: `${shots}/phone_review.png`, fullPage: true });
-} else {
-  console.log("skip review checks: no review_ready run");
+  if (shots) await p.screenshot({ path: `${shots}/page_${name}.png`, fullPage: true });
+  check((await p.getByRole("heading", { level: 1 }).textContent()).includes("post next"), `${name}: headline names the character`);
+  check(await p.getByRole("radio").count() >= 1, `${name}: characters come from the folder`);
+  check(await p.getByText("Found videos").isVisible(), `${name}: library is on the same page`);
+  check(!(await p.locator("nav, aside[role=navigation]").count()), `${name}: no navigation menu`);
+  const overflow = await p.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+  check(!overflow, `${name}: no horizontal scroll`);
+  if (name === "desktop") {
+    await p.getByRole("button", { name: /Trending AI-influencer videos/ }).click();
+    await p.getByLabel("Trending video link").fill("https://www.tiktok.com/@a/video/7400000000000000001");
+    await p.keyboard.press("Enter");
+    check(await p.getByText("tiktok.com/@a/video/7400000000000000001").isVisible(), "desktop: trend URL becomes a chip");
+    await p.getByLabel("Trending video link").fill("https://example.com/nope");
+    await p.keyboard.press("Enter");
+    check(await p.getByRole("alert").isVisible(), "desktop: a non-video link is refused with a message");
+    const card = p.locator("article[data-video-id] button[aria-label^='Open']").first();
+    if (await card.count()) {
+      await card.hover();
+      await p.waitForTimeout(250);
+      check(await p.locator("article[data-video-id] iframe").count() === 0, "desktop: no preview before the hover delay");
+      await p.waitForTimeout(500);
+      check(await p.locator("article[data-video-id] iframe").count() === 1, "desktop: hover plays the platform preview");
+      await p.mouse.move(5, 5);
+      await p.waitForTimeout(100);
+      check(await p.locator("article[data-video-id] iframe").count() === 0, "desktop: leaving stops the preview");
+      if (shots) await card.hover().then(() => p.waitForTimeout(3500)).then(() =>
+        p.locator("article[data-video-id]").first().screenshot({ path: `${shots}/hover.png` }));
+    }
+  }
+  await p.close();
 }
-
 check(errors.length === 0, `no console errors${errors.length ? `: ${errors.join(" | ")}` : ""}`);
 await browser.close();
 process.exit(failures.length ? 1 : 0);

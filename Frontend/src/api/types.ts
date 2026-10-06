@@ -1,145 +1,109 @@
-export type RunState =
-  | "created" | "planning" | "running" | "paused_usage" | "curating" | "review_ready" | "stopped" | "failed"
-  | "interrupted";
+export type Platform = "tiktok" | "instagram" | "youtube";
 
-export interface CharacterSummary {
+export type RunState =
+  | "created" | "reading_character" | "studying_trends" | "planning" | "running" | "paused_usage" | "curating"
+  | "review_ready" | "stopped" | "failed" | "interrupted";
+
+export interface Character {
   slug: string;
   name: string;
-  version: number;
+  image_url: string | null;
+  images: string[];
   runs: number;
-  niche_open: boolean | null;
-  canonical_image_url: string | null;
 }
 
-export interface CharacterDetail extends CharacterSummary {
-  brief: string;
-  sections: Record<string, string>;
-  seeds: { url: string; canonical_id: string | null; source: string }[];
-  taste_profile: { version: number; body_md: string; author: string; created_at: string } | null;
-  directions: { key: string; label: string; niche: string | null; alpha: number; beta: number }[];
+export interface CharacterRead {
+  look: string;
+  vibe: string;
+  performance_angle: string;
+  possible_niches: string[];
+  kling_constraints: string;
+  avoid: string;
+}
+
+export interface RunAgent {
+  id: string;
+  role: string;
+  platform: Platform | null;
+  status: "waiting" | "working" | "done" | "failed";
+  goal: string | null;
+}
+
+export interface RunDetail {
+  id: string;
+  state: RunState;
+  character: { slug: string; name: string; image_url: string | null };
+  stop_reason: string | null;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+  active: boolean;
+  inputs: { freshness?: string; trend_urls?: string[]; targets?: { url: string }[] };
+  character_read: CharacterRead | null;
+  round: number;
+  minutes: number;
+  agents: RunAgent[];
+  findings: Record<string, number>;
 }
 
 export interface RunSummary {
   id: string;
-  character: string;
   state: RunState;
-  round: number;
   stop_reason: string | null;
-  error: string | null;
-  explore_ratio: number | null;
-  settings: Record<string, unknown>;
   started_at: string;
   finished_at: string | null;
+  videos: number;
+  satisfaction: number | null;
   active: boolean;
 }
 
-export interface RunTask {
+export type Rating = "up" | "down";
+
+export interface FoundVideo {
   id: string;
-  type: string;
-  platform: string | null;
-  state: string;
-  goal: string | null;
-  direction: string | null;
-  scope: Record<string, string[] | string>;
-  attempts: number;
-  result: Record<string, number | string | null>;
-}
-
-export interface RunDetail extends RunSummary {
-  rounds: { number: number; summary: string | null; rejections: { reason: string; task?: string }[];
-    result: { new_analyzed?: number } | null; started_at: string; finished_at: string | null }[];
-  tasks: RunTask[];
-  findings: Record<string, number>;
-}
-
-export interface RunEvent {
-  id: number;
-  type: string;
-  payload: Record<string, unknown>;
-  created_at: string;
-}
-
-export type Rating = "up" | "down" | "skip";
-
-export interface VideoRef {
+  cluster_id: string | null;
+  run_id: string;
   canonical_id: string;
-  platform: string;
+  platform: Platform;
+  platform_id: string;
   url: string;
+  thumbnail_url: string | null;
   creator: string | null;
   caption: string | null;
-  hashtags: string[];
-  sound: string | null;
-  metrics: { views?: number | null; likes?: number | null; comments?: number | null; shares?: number | null };
+  views: number | null;
   posted_at: string | null;
   duration_s: number | null;
-}
-
-export interface TrendCard {
-  id: string;
-  rank: number;
-  label: string | null;
-  overall: number | null;
-  member_count: number;
-  best: VideoRef;
+  score: number | null;
+  scores: { fit: number | null; feasibility: number | null; momentum: number | null; freshness: number | null };
   why: string | null;
-  scores: { fit: number | null; feasibility: number | null; momentum: number | null; freshness: number | null;
-    overall: number | null };
-  fit_breakdown: Record<string, number> | null;
-  justification: string | null;
-  adaptation_idea: string | null;
-  feasibility_notes: string | null;
+  adaptation: string | null;
+  best_segment: { start_s: number; end_s: number } | null;
+  watch_out: string | null;
   niche_guess: string | null;
-  disagreement: boolean;
-  cross_check: { fit: number; provider: string; justification: string } | null;
-  analyst: { provider: string | null; model: string | null };
-  motion_window: { start_s: number; end_s: number } | null;
-  pose: Record<string, number>;
-  camera_motion: number | null;
-  contact_sheet_url: string | null;
-  members: { url: string; canonical_id: string }[];
+  source: "agent" | "owner";
   feedback: { rating: Rating; note: string | null } | null;
-  has_brief: boolean;
 }
 
-export interface TrendsResponse {
-  run_id: string;
-  state: RunState;
-  cards: TrendCard[];
-  filtered: { video: VideoRef; status: string; reason: string | null; why: string | null;
-    contact_sheet_url: string | null }[];
-  run_feedback: { satisfaction: number; note: string | null } | null;
-}
-
-export interface BriefBody {
-  title: string;
-  concept: string;
-  record_yourself: string;
-  character_orientation: "video" | "image";
-  kling_prompt: string;
-  framing: string;
-  motion_window: { start_s: number; end_s: number };
-  shots: { seconds: number; description: string }[];
-  risks: string[];
-}
-
-export interface Brief {
-  cluster_id: string;
-  run_id?: string;
-  body: BriefBody;
-  body_md: string;
-  provider: string | null;
-  model: string | null;
+export interface StreamEvent {
+  id: number;
+  type: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  payload: Record<string, any>;
   created_at: string;
 }
 
-export interface Weights { fit: number; feasibility: number; momentum: number; freshness: number }
+export interface StartRun {
+  character: string;
+  platforms: Platform[];
+  freshness: "day" | "week" | "month" | "any";
+  minutes: number;
+  trend_urls: string[];
+  targets: { url: string; character: string }[];
+}
 
 export interface ProviderStatus {
   provider: string;
   connected: boolean;
-  detail: string;
-  account: string | null;
   status: string;
   cooling_until: number | null;
-  used_percent: number | null;
 }
