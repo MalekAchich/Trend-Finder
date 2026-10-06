@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import os
 import re
@@ -57,6 +58,27 @@ RESET_EPOCH_RE = re.compile(r"\|(\d{10})\b")
 
 def clean_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in STRIPPED_ENV}
+
+
+# `claude -p` silently drops @-attached images above ~256 KB (measured: 233 KB seen, 278 KB not), and the model
+# then answers as if it had looked. Anything bigger is re-encoded to fit.
+CLAUDE_IMAGE_MAX_BYTES = 240_000
+CLAUDE_IMAGE_MAX_EDGE = 1568  # the API downsizes past this anyway
+
+
+def _fit_image(src: Path) -> bytes:
+    from PIL import Image
+
+    with Image.open(src) as im:
+        im = im.convert("RGB")
+        im.thumbnail((CLAUDE_IMAGE_MAX_EDGE, CLAUDE_IMAGE_MAX_EDGE))
+        while True:
+            for quality in (85, 75, 65, 55, 45):
+                buf = io.BytesIO()
+                im.save(buf, "JPEG", quality=quality, optimize=True)
+                if buf.tell() <= CLAUDE_IMAGE_MAX_BYTES:
+                    return buf.getvalue()
+            im = im.resize((max(1, int(im.width * 0.8)), max(1, int(im.height * 0.8))), Image.LANCZOS)
 
 
 def defuse(text: str) -> str:
@@ -246,12 +268,16 @@ class ClaudeCLIAdapter:
         src = Path(img.path).resolve()
         if not src.is_file():
             raise InvalidRequest(PROVIDER, f"image not found: {img.path}")
-        if " " not in str(src):
+        small = src.stat().st_size <= CLAUDE_IMAGE_MAX_BYTES
+        if small and " " not in str(src):
             return f"@{src}"
         data = src.read_bytes()
-        dest = self.image_dir / f"{hashlib.sha256(data).hexdigest()[:16]}{src.suffix or '.jpg'}"
+        digest = hashlib.sha256(data).hexdigest()[:16]
+        dest = self.image_dir / (f"{digest}{src.suffix or '.jpg'}" if small else f"{digest}-fit.jpg")
         if not dest.exists():
-            dest.write_bytes(data)
+            tmp = dest.with_suffix(f".{uuid.uuid4().hex}.tmp")
+            tmp.write_bytes(data if small else _fit_image(src))
+            tmp.replace(dest)
         return f"@{dest}"
 
     async def _run(self, cmd: list[str], stdin_text: str, timeout_s: float) -> dict[str, Any]:

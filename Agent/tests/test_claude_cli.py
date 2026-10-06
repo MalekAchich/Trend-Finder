@@ -163,3 +163,26 @@ async def test_missing_binary_is_auth_required(tmp_path):
     a = ClaudeCLIAdapter(ClaudeCliAuth(str(tmp_path / "nope" / "claude")), runtime_dir=tmp_path / "rt")
     with pytest.raises(AuthRequired, match="not found"):
         await a.complete(req())
+
+
+async def test_large_image_is_shrunk_under_the_cli_attach_limit(fake_claude):
+    """claude -p silently drops @-images over ~256 KB (found live: the analyst was blind), so big ones are re-encoded."""
+    from pathlib import Path
+
+    import numpy as np
+    from PIL import Image
+
+    from tf_agent.models.claude_cli import CLAUDE_IMAGE_MAX_BYTES
+
+    big = fake_claude.tmp / "canonical.png"
+    Image.fromarray(np.random.default_rng(1).integers(0, 255, (1520, 2688, 3), dtype=np.uint8)).save(big)
+    assert big.stat().st_size > CLAUDE_IMAGE_MAX_BYTES
+    fake_claude.respond(fake_claude.envelope(structured={"ok": True}))
+    r = CompletionRequest(model="opus", system="s", output_schema={"type": "object"},
+                          messages=[Message.user("look", [ImagePart(str(big))])])
+    await adapter(fake_claude).complete(r)
+    ref = Path(next(t for t in fake_claude.calls()[0]["stdin"].split() if t.startswith("@"))[1:])
+    assert ref != big and ref.stat().st_size <= CLAUDE_IMAGE_MAX_BYTES
+    with Image.open(ref) as im:
+        assert im.format == "JPEG" and max(im.size) <= 1568
+        assert abs(im.size[0] / im.size[1] - 2688 / 1520) < 0.02

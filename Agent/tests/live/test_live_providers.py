@@ -75,3 +75,21 @@ async def test_both_providers_read_a_staged_image(tmp_path):
     g = await adapter.complete(CompletionRequest(model="gpt-6-luna", system="Answer per the schema.", messages=[ask],
                                                  output_schema=schema, reasoning_effort="low"))
     assert g.structured == {"number": 742}
+
+
+async def test_claude_sees_a_large_real_image():
+    """The canonical image is ~5 MB; above ~256 KB the CLI drops @-images silently and the model guesses."""
+    from pathlib import Path
+
+    from tf_agent.models.types import ImagePart
+
+    img = Path(__file__).resolve().parents[3].parent / "AI Influencers Characters" / "Nicolaiz" / "Nicolaiz.png"
+    schema = {"type": "object", "properties": {"blazer_color": {"type": "string"}, "trousers_color": {"type": "string"}},
+              "required": ["blazer_color", "trousers_color"]}
+    ask = Message.user("Name the man's blazer color and trouser color. Say 'none' if no image is attached.",
+                       [ImagePart(str(img))])
+    c = await claude().complete(CompletionRequest(model="haiku", system="Answer per the schema.", messages=[ask],
+                                                  output_schema=schema))
+    blazer, trousers = c.structured["blazer_color"].lower(), c.structured["trousers_color"].lower()
+    assert any(w in blazer for w in ("cream", "beige", "ivory", "off-white", "tan", "white")), blazer
+    assert "brown" in trousers, trousers
