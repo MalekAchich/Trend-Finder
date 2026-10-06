@@ -1,1 +1,1 @@
-"""Character packs: profile.md parsing, folder sync and compact agent briefs (04-character-profile-format.md)."""
+"""Characters are image folders (folders.py); the Reader turns the images into the agents brief (read.py). See Docs/04-character-folder.md."""

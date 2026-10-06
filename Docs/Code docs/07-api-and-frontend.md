@@ -1,6 +1,6 @@
 # Code/07: API & Frontend
 
-**Status:** Built (Plan 5, single page). Spec: `Docs/Specs/2026-10-06-single-page-redesign.md`.
+**Status:** Built (Plans 5–6). Spec: `Docs/Specs/2026-10-06-single-page-redesign.md` + Plan 6 (navbar, pages, settings).
 
 `tf serve` runs the API and the built web app on `http://127.0.0.1:8000`. It binds loopback only unless you pass `--allow-remote`. Runs execute inside the same process as background tasks. Unfinished runs resume on startup.
 
@@ -14,8 +14,11 @@ Guards:
 |---|---|
 | `GET /health` | Liveness |
 | `GET /characters` | `[{slug, name, image_url, images[], runs}]`. Syncs the image folders first |
+| `GET /characters/{slug}` | Name, images, the latest character read, the latest taste profile (owner notes included), runs, videos found |
+| `GET /characters/{slug}/videos?days=` | Found videos across all the character's runs, newest found first (`found_at`), optionally only the last N days |
 | `GET /characters/{slug}/runs` | `[{id, state, stop_reason, started_at, finished_at, videos, satisfaction, active}]`, newest first |
 | `POST /runs` | `{character, platforms[], freshness: day\|week\|month\|any, minutes, trend_urls[], targets[{url, character}]}` → `{run_id}`. 422 names a bad URL or an unknown character |
+| `GET /runs?character=&limit=` | Run history: character, state, stop reason, started, finished, videos, score, tokens |
 | `GET /runs/active` | The run that's going, or `null` (the page reconnects to it on load) |
 | `GET /runs/{id}` | State, character, inputs, character read, round, time limit, the agents roster derived from tasks, finding counts |
 | `POST /runs/{id}/stop` | Stop and rank what was found (curates in the background, ends `review_ready`; a second stop → 409) |
@@ -24,7 +27,9 @@ Guards:
 | `GET /runs/{id}/videos` | `FoundVideo[]`: the live set (analysed findings, `cluster_id: null`) while running, the curated set after |
 | `PUT /videos/{cluster_id}/feedback` | `{rating: up\|down\|null, note}`. Saves immediately; `null` clears it |
 | `PUT /runs/{id}/feedback` | `{satisfaction: 1–10, note}`. Finished runs only (409 otherwise) |
-| `GET /providers` | Subscription status (connected, ok/cooling/auth_error) for the toolbar |
+| `GET /providers` | Subscription status (connected, ok/cooling/auth_error) for the navbar |
+| `GET /usage` | Per subscription: status, % of the usage window used, window length and reset (ChatGPT reports these; Claude doesn't), cooling-until, last error, tokens and calls in the last 24 h, average tokens per run (last 20 runs) |
+| `GET /settings/models` · `PUT /settings/models` | Per provider: offered models, the chosen main + fast model and effort, the efforts allowed. PUT `{provider, main, fast, effort|null}` validates and applies immediately (stored in `settings.models`, loaded at start) |
 | `GET /media/{thumbs\|characters}/{path}` | Video thumbnails and character images, confined to their roots (traversal → 404). Video files are never stored or served |
 
 Any other non-`/api` GET serves the web app.
@@ -48,30 +53,24 @@ Every payload carries `agent: {id, role, platform}`. Roles: `lead`, `reader`, `l
 | `provider.switched` | `from`, `to`, `reason` |
 | `round.finished`, `error` | the round summary / `message` |
 
-## Web app (`Frontend/`: Vite + React 19 + TypeScript + Tailwind 4 + TanStack Query)
+## Web app (`Frontend/`: Vite + React 19 + TypeScript + Tailwind 4 + TanStack Query + React Router)
 
-One page and one fixed hybrid theme. There's no router, menu or logo.
+There's a small top navbar (52 px):
+- the animated logo (the intro plays once when the app opens; it loops while a run is active);
+- links: Home, Characters, Runs, Socials, Settings;
+- on the right, the run status and both subscriptions' status.
 
-1. **Toolbar**: what's running, and the status of both subscriptions.
-2. **Composer** (dark):
-   - "What should *Name* post next?"
-   - Character portraits from the folder.
-   - The two optional inputs: trending AI-influencer URLs as chips, and target URL rows tagged with a character.
-   - Platform toggles, freshness, a time-limit dropdown, and Start / Stop.
-3. **Engine** (dark):
-   - Header: character, state, elapsed time.
-   - Agent roster: role, platform, status, current action. Click an agent to filter.
-   - Live stream, with distinct rows for each event type, expandable tool arguments, follow-live, group filters and search.
-   - Strip of the videos saved so far.
-4. **Seam**: the dark-to-light gradient. Lights drift while a run is going. On `video.saved` a light travels from the engine into the library, and the new card scales in. All motion is off under reduced motion.
-5. **Found videos** (light):
-   - Character switcher, then that character's runs (newest first), then a 9:16 grid of cards.
-   - Each card has a thumbnail, platform and score badges, and why it fits.
-   - Hovering 400 ms plays the platform's muted embed (YouTube, TikTok; Instagram shows the thumbnail).
-   - Each card has 👍/👎 and a note. Clicking opens a detail sheet with the player, the 4 scores, the adaptation idea, the best segment to copy and the link.
-   - Each finished run ends with a 1–10 score and a note.
+The fixed hybrid theme is kept on every page: dark on top, the seam, and a grey-ish library below.
+
+| Page | Content |
+|---|---|
+| **Home** | Composer ("What should *Name* post next?", whole-image character cards, both optional inputs openable together with an animated reveal, platforms, freshness, time limit, Start / Stop). The **Engine** (roster, live stream, filters, saved strip). The **seam**, whose lights drift while running and which a yellow pulse sweeps top to bottom when a video is saved. **Found videos** by character and run, with hover previews, 👍/👎 + note, and the run score |
+| **Characters** | Character switcher, the images, "What the agents see" (latest read), "What they learned from your ratings" (taste profile), runs and videos found, then the character's found videos filtered by found date (Today, 7 days, 30 days, All) |
+| **Runs** | History table (filter by character). `/runs/:id` replays the run's stream (agents end as done or failed), with its videos and score |
+| **Settings** | Usage per subscription (ChatGPT window % and reset; Claude status), tokens in the last 24 h, average per run. Models per provider: main, fast, effort, Save |
+| **Socials** | Empty for now |
 
 Tests:
-- `npx vitest run`: the stream reducer, embed URLs, hover intent and API client.
+- `npx vitest run`: the stream reducer, SSE parsing, embed URLs, hover intent, the logo cycle and the API client.
 - `npm run smoke`: a browser check against a running app.
 - `node e2e/live.mjs`: a live run through the page (spends subscription usage).

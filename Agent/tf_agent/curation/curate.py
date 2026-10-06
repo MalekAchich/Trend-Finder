@@ -65,7 +65,7 @@ class Curator:
         async with self._sm() as s:
             rated = (await s.execute(select(CardFeedback.id).join(TrendCluster, TrendCluster.id == CardFeedback.cluster_id)
                                      .where(TrendCluster.run_id == run_id).limit(1))).first()
-        if rated is not None:  # cards were rated: re-curating would delete the owner's ratings and briefs
+        if rated is not None:  # cards were rated: re-curating would delete the owner's ratings
             log.info("run %s already has feedback; keeping its trend cards", run_id)
             return
         rows = await self._rows(run_id)

@@ -1,6 +1,6 @@
 # Trend Finder: Documentation
 
-**Status:** Built (Plans 1–5 done, 2026-10-06). The docs describe the shipped system; each doc's Status line says how closely.
+**Status:** Built (Plans 1–6 done, 2026-10-06). The docs describe the shipped system; each doc's Status line says how closely.
 
 Trend Finder is a local, personal, multi-agent app that finds viral trends and specific target videos (TikTok, Instagram Reels, YouTube Shorts) matching a given AI influencer character. Characters are just images; the agents read them, discover the niche, and rank videos with explainable scores, learning from per-video 👍/👎 and notes. The owner then recreates the picks manually with Higgsfield / Kling 3.0 Motion Control.
 
@@ -26,6 +26,8 @@ In the app (one page):
 3. **Start run** and watch the agents live: the character read, plans, every thought, tool call and rejection.
 4. Saved videos fly into **Found videos** below (character → run → videos). Hover a card to preview it.
 5. Rate videos 👍/👎 with an optional note, and score the run 1–10. The next run starts by learning from that.
+
+The navbar also has **Characters** (what the agents see and learned, found videos by date), **Runs** (history and replays), **Settings** (live usage, model choice per subscription) and **Socials** (coming later).
 
 Everything also works from the terminal: `tf run nicolaiz --trend-url <url> --target <url>[=character]`, `tf runs`, `tf trends <run>`, `tf resume <run>`.
 
