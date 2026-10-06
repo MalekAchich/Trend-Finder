@@ -1,10 +1,9 @@
 import { ChevronDown } from "lucide-react";
 import { useState } from "react";
-import { useCharacterRuns, useRateVideo, useRunVideos, useScoreRun } from "../api/hooks";
-import type { Character, FoundVideo, RunSummary } from "../api/types";
+import { useCharacterRuns, useRunVideos, useScoreRun } from "../api/hooks";
+import type { Character, RunSummary } from "../api/types";
 import { STATE_TEXT } from "./ui";
-import { VideoCard } from "./VideoCard";
-import { VideoSheet } from "./VideoSheet";
+import { VideoGrid } from "./VideoGrid";
 
 interface Props {
   characters: Character[];
@@ -76,31 +75,21 @@ function RunSection({ run, slug, open, live, onToggle, freshIds }: { run: RunSum
 
 function RunVideos({ run, slug, live, freshIds }: { run: RunSummary; slug: string; live: boolean; freshIds: Set<string> }) {
   const videos = useRunVideos(run.id, live);
-  const rate = useRateVideo(run.id);
-  const [opened, setOpened] = useState<FoundVideo | null>(null);
   const list = videos.data ?? [];
   const ended = ["review_ready", "stopped", "failed"].includes(run.state);
-  const current = opened && (list.find((v) => v.id === opened.id) ?? opened);
   return (
     <div className="px-5 pb-6">
       {videos.isSuccess && list.length === 0 && (
         <p className="py-8 text-center text-[13px] text-ink-2">{live ? "Nothing saved yet. Watch the agents above."
           : "This run didn't save any videos. Try other platforms, a longer time limit or a few target videos."}</p>
       )}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-6">
-        {list.map((v) => (
-          <VideoCard key={v.id} video={v} fresh={freshIds.has(v.id)} onOpen={setOpened}
-            onRate={(rating, note) => v.cluster_id && rate.mutate({ clusterId: v.cluster_id, rating, note })} />
-        ))}
-      </div>
-      {rate.isError && <p role="alert" className="mt-3 text-[12.5px] text-bad">Couldn't save that rating: {(rate.error as Error).message}</p>}
+      <VideoGrid videos={list} freshIds={freshIds} />
       {ended && list.length > 0 && <RunScore run={run} slug={slug} />}
-      <VideoSheet video={current} onClose={() => setOpened(null)} />
     </div>
   );
 }
 
-function RunScore({ run, slug }: { run: RunSummary; slug: string }) {
+export function RunScore({ run, slug }: { run: RunSummary; slug: string }) {
   const score = useScoreRun(slug);
   const [value, setValue] = useState<number | null>(run.satisfaction);
   const [note, setNote] = useState("");

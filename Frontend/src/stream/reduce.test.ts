@@ -41,6 +41,16 @@ describe("stream reducer", () => {
     expect(s.agents.t1.action).toBe("Checking gym trends Next I look");
   });
 
+  it("ends every still-working agent when the run is over (replayed old runs never look stuck)", () => {
+    const s = applyEvents(initialStream(), [
+      ev("agent.started", { agent: scout, goal: "find" }),
+      ev("agent.tool_call", { agent: { ...scout, id: "t3" }, tool: "tiktok_search", args: {} }),
+      ev("run.state", { state: "review_ready" }),
+    ]);
+    expect(s.agents.t1.status).toBe("done");
+    expect(s.agents.t3.status).toBe("done");
+  });
+
   it("collects saved videos once each", () => {
     const video = { id: "f1", url: "u", score: 70 };
     const s = applyEvents(initialStream(), [

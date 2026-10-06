@@ -35,6 +35,7 @@ const GROUPS: Record<string, Group> = {
 export const groupOf = (type: string): Group => GROUPS[type] ?? "status";
 
 const FIRST = ["lead", "reader", "learner"];
+const ENDED = ["review_ready", "stopped", "failed"];
 
 export function initialStream(seed: RunAgent[] = []): StreamState {
   const agents: Record<string, AgentView> = {};
@@ -88,6 +89,11 @@ function applyOne(state: StreamState, e: StreamEvent) {
   const agent = p.agent as { id: string; role: string; platform?: string | null } | undefined;
   if (e.type === "run.state") {
     state.runState = p.state as RunState;
+    if (ENDED.includes(String(p.state))) {
+      for (const id of Object.keys(state.agents)) {
+        if (state.agents[id].status === "working") state.agents[id] = { ...state.agents[id], status: "done" };
+      }
+    }
     if (p.state === "planning") touch(state, "lead", "lead", null, { status: "working", action: "planning the round" }, e.created_at);
     if (p.state === "reading_character") touch(state, "reader", "reader", null, { status: "working", action: "looking at the images" }, e.created_at);
     return;

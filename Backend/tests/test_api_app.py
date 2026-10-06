@@ -224,6 +224,7 @@ async def test_run_score_only_after_it_ended(http, ctx):
     await curate(ctx, run_id, finding_id)
     assert (await http.put(f"/api/runs/{run_id}/feedback", json={"satisfaction": 7, "note": "ok"})).status_code == 200
     assert (await http.get("/api/characters/testy/runs")).json()[0]["satisfaction"] == 7
+    assert (await http.get(f"/api/runs/{run_id}")).json()["satisfaction"] == 7
 
 
 async def test_stop_and_resume(http, ctx):

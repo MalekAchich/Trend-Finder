@@ -15,8 +15,9 @@
   --color-line-2: oklch(1 0 0 / 0.14);
 
   /* light zone: the library */
-  --color-paper: oklch(0.972 0.004 95);
-  --color-paper-2: oklch(0.945 0.006 95);
+  --color-paper: oklch(0.905 0.008 118);
+  --color-paper-2: oklch(0.87 0.01 118);
+  --color-card: oklch(0.985 0.003 110);
   --color-ink: oklch(0.22 0.006 250);
   --color-ink-2: oklch(0.47 0.008 250);
   --color-rule: oklch(0.22 0.006 250 / 0.1);
@@ -68,28 +69,44 @@
     border: 1px solid var(--color-line); }
 }
 
-/* the seam between the dark engine and the light library */
-.seam { position: relative; height: 200px; overflow: hidden; isolation: isolate;
-  background: linear-gradient(180deg, var(--color-night) 0%, var(--color-night-2) 18%,
-    oklch(0.42 0.02 200) 55%, var(--color-paper) 100%); }
-.seam-light { position: absolute; width: 46vw; height: 260px; border-radius: 50%; filter: blur(70px); opacity: 0;
-  transition: opacity 1.2s ease; mix-blend-mode: screen; }
-.seam-light.a { left: -6vw; top: -40px; background: oklch(0.938 0.203 119 / 0.55); }
-.seam-light.b { left: 34vw; top: 30px; background: oklch(0.8 0.12 200 / 0.45); }
-.seam-light.c { right: -8vw; top: -20px; background: oklch(0.9 0.16 140 / 0.45); }
-.seam[data-running="true"] .seam-light { opacity: 1; }
+/* the seam between the dark engine and the grey-ish library: interpolated in oklch with many stops, then a fine
+   grain on top, so the gradient never shows bands */
+.seam { position: relative; height: 220px; overflow: hidden; isolation: isolate;
+  background: linear-gradient(in oklch 180deg,
+    var(--color-night) 0%, oklch(0.19 0.004 245) 12%, oklch(0.23 0.007 225) 24%, oklch(0.3 0.012 190) 36%,
+    oklch(0.4 0.02 160) 48%, oklch(0.52 0.026 140) 60%, oklch(0.65 0.026 128) 72%, oklch(0.77 0.02 122) 84%,
+    oklch(0.86 0.012 119) 93%, var(--color-paper) 100%); }
+.seam-light { position: absolute; width: 46vw; height: 260px; border-radius: 50%; filter: blur(80px); opacity: .35;
+  transition: opacity 1.2s ease; mix-blend-mode: soft-light;
+  /* fade the glow in so the seam's top edge stays pure night (no visible line where it starts) */
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 45%); mask-image: linear-gradient(180deg, transparent 0%, #000 45%); }
+.seam-light.a { left: -6vw; top: 50px; background: oklch(0.938 0.203 119 / 0.7); }
+.seam-light.b { left: 34vw; top: 60px; background: oklch(0.92 0.17 105 / 0.6); }
+.seam-light.c { right: -8vw; top: 60px; background: oklch(0.9 0.16 135 / 0.6); }
+.seam[data-running="true"] .seam-light { opacity: 1; mix-blend-mode: screen; }
 .seam[data-running="true"] .seam-light.a { animation: drift-a 14s ease-in-out infinite alternate; }
 .seam[data-running="true"] .seam-light.b { animation: drift-b 18s ease-in-out infinite alternate; }
 .seam[data-running="true"] .seam-light.c { animation: drift-c 16s ease-in-out infinite alternate; }
-@keyframes drift-a { to { transform: translate(22vw, 40px) scale(1.2); } }
+@keyframes drift-a { to { transform: translate(22vw, 30px) scale(1.2); } }
 @keyframes drift-b { to { transform: translate(-18vw, -30px) scale(.85); } }
-@keyframes drift-c { to { transform: translate(-26vw, 30px) scale(1.15); } }
-.seam-flash { position: absolute; inset: 0; background: radial-gradient(60% 120% at var(--x, 50%) 50%,
-  oklch(0.938 0.203 119 / 0.55), transparent 70%); opacity: 0; pointer-events: none; }
+@keyframes drift-c { to { transform: translate(-26vw, 20px) scale(1.15); } }
+.seam-wave { position: absolute; inset: 0; opacity: 0; pointer-events: none; transform: translateY(-110%);
+  background: linear-gradient(in oklch 180deg, transparent 0%, oklch(0.95 0.2 112 / 0) 15%,
+    oklch(0.95 0.19 108 / 0.55) 45%, oklch(0.97 0.15 100 / 0.8) 52%, oklch(0.95 0.19 108 / 0.5) 60%, transparent 90%);
+  mix-blend-mode: screen; }
+.seam-grain { position: absolute; inset: 0; pointer-events: none; opacity: .09; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"); }
 
-.orb { position: fixed; z-index: 60; width: 18px; height: 18px; border-radius: 50%; pointer-events: none;
-  background: radial-gradient(circle, #fff 0%, var(--color-lime) 45%, transparent 72%);
-  box-shadow: 0 0 24px 10px oklch(0.938 0.203 119 / 0.55), 0 0 80px 30px oklch(0.938 0.203 119 / 0.25); }
+/* the logo: intro once on load, idle loops only while a run is active */
+.tf-logo svg { height: 26px; width: auto; display: block; }
+.tf-logo[data-running="false"] .tf-dot { animation: tf-dot-in .4s 1.18s cubic-bezier(.16,1,.3,1) both; }
+.tf-logo[data-running="false"] .tf-sweep { animation: tf-sweep-in 1.35s .12s linear both; }
+.tf-logo[data-running="false"] .tf-ping { animation: none; opacity: 0; }
+
+/* smooth open/close for the composer sections */
+.reveal { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .32s cubic-bezier(.2,.8,.2,1); }
+.reveal[data-open="true"] { grid-template-rows: 1fr; }
+.reveal > div { overflow: hidden; }
 
 .card-enter { animation: card-enter .7s cubic-bezier(.2, .9, .25, 1.2) both; }
 @keyframes card-enter { from { opacity: 0; transform: translateY(18px) scale(.92); filter: blur(6px); }

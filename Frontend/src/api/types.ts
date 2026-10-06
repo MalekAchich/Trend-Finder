@@ -44,6 +44,7 @@ export interface RunDetail {
   minutes: number;
   agents: RunAgent[];
   findings: Record<string, number>;
+  satisfaction: number | null;
 }
 
 export interface RunSummary {
@@ -81,6 +82,7 @@ export interface FoundVideo {
   watch_out: string | null;
   niche_guess: string | null;
   source: "agent" | "owner";
+  found_at: string | null;
   feedback: { rating: Rating; note: string | null } | null;
 }
 
@@ -106,4 +108,49 @@ export interface ProviderStatus {
   connected: boolean;
   status: string;
   cooling_until: number | null;
+}
+
+export interface RunHistoryRow {
+  id: string;
+  character: { slug: string; name: string; image_url: string | null };
+  state: RunState;
+  stop_reason: string | null;
+  started_at: string;
+  finished_at: string | null;
+  videos: number;
+  satisfaction: number | null;
+  tokens: number;
+  active: boolean;
+}
+
+export interface CharacterDetail {
+  slug: string;
+  name: string;
+  image_url: string | null;
+  images: string[];
+  latest_read: CharacterRead | null;
+  taste_md: string | null;
+  runs: number;
+  videos_found: number;
+}
+
+export interface ProviderUsage {
+  provider: string;
+  status: "ok" | "cooling" | "auth_error";
+  used_percent: number | null;
+  window_minutes: number | null;
+  resets_at: number | null;
+  cooling_until: number | null;
+  last_error: string | null;
+  tokens_today: number;
+  calls_today: number;
+  avg_tokens_per_run: number | null;
+}
+
+export interface ModelChoice {
+  models: { id: string; name: string; efforts: string[] }[];
+  main: string | null;
+  fast: string | null;
+  effort: string | null;
+  efforts: string[];
 }

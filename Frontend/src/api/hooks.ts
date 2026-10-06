@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { Character, FoundVideo, ProviderStatus, Rating, RunDetail, RunSummary, StartRun } from "./types";
+import type { Character, CharacterDetail, FoundVideo, ModelChoice, ProviderStatus, ProviderUsage, Rating, RunDetail,
+  RunHistoryRow, RunSummary, StartRun } from "./types";
 
 export const useCharacters = () =>
   useQuery({ queryKey: ["characters"], queryFn: () => api.get<Character[]>("/api/characters") });
@@ -9,7 +10,54 @@ export const useProviders = () =>
   useQuery({ queryKey: ["providers"], queryFn: () => api.get<ProviderStatus[]>("/api/providers"), refetchInterval: 60_000 });
 
 export const useActiveRun = () =>
-  useQuery({ queryKey: ["run", "active"], queryFn: () => api.get<RunDetail | null>("/api/runs/active") });
+  useQuery({ queryKey: ["run", "active"], queryFn: () => api.get<RunDetail | null>("/api/runs/active"),
+    refetchInterval: 15_000 });
+
+export const useRunsHistory = (character: string | null) =>
+  useQuery({ queryKey: ["runs-history", character], refetchInterval: 20_000,
+    queryFn: () => api.get<RunHistoryRow[]>(`/api/runs${character ? `?character=${encodeURIComponent(character)}` : ""}`) });
+
+export const useCharacter = (slug: string | null) =>
+  useQuery({ queryKey: ["character", slug], queryFn: () => api.get<CharacterDetail>(`/api/characters/${slug}`),
+    enabled: !!slug });
+
+export const useCharacterVideos = (slug: string | null, days: number | null) =>
+  useQuery({ queryKey: ["character-videos", slug, days], enabled: !!slug,
+    queryFn: () => api.get<FoundVideo[]>(`/api/characters/${slug}/videos${days ? `?days=${days}` : ""}`) });
+
+export const useUsage = () =>
+  useQuery({ queryKey: ["usage"], queryFn: () => api.get<{ providers: ProviderUsage[] }>("/api/usage"),
+    refetchInterval: 20_000 });
+
+export const useModelSettings = () =>
+  useQuery({ queryKey: ["model-settings"], queryFn: () => api.get<Record<string, ModelChoice>>("/api/settings/models") });
+
+export function useSaveModels() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { provider: string; main: string; fast: string; effort: string | null }) =>
+      api.put<ModelChoice>("/api/settings/models", v),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["model-settings"] }),
+  });
+}
+
+/** One rating mutation for every list a video can appear in (a run's grid, a character's videos). */
+export function useRate() {
+  const qc = useQueryClient();
+  const lists = { predicate: (q: { queryKey: readonly unknown[] }) => ["videos", "character-videos"].includes(String(q.queryKey[0])) };
+  return useMutation({
+    mutationFn: (v: { clusterId: string; rating: Rating | null; note: string | null }) =>
+      api.put(`/api/videos/${v.clusterId}/feedback`, { rating: v.rating, note: v.note }),
+    onMutate: async (v) => {
+      await qc.cancelQueries(lists);
+      const before = qc.getQueriesData<FoundVideo[]>(lists);
+      qc.setQueriesData<FoundVideo[]>(lists, (list) => list?.map((x) => x.cluster_id === v.clusterId
+        ? { ...x, feedback: v.rating ? { rating: v.rating, note: v.note } : null } : x));
+      return { before };
+    },
+    onError: (_e, _v, c) => c?.before.forEach(([key, data]) => qc.setQueryData(key, data)),
+  });
+}
 
 export const useRun = (id: string | null) =>
   useQuery({ queryKey: ["run", id], queryFn: () => api.get<RunDetail>(`/api/runs/${id}`), enabled: !!id,
@@ -39,27 +87,11 @@ export function useStopRun() {
   });
 }
 
-export function useRateVideo(runId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (v: { clusterId: string; rating: Rating | null; note: string | null }) =>
-      api.put(`/api/videos/${v.clusterId}/feedback`, { rating: v.rating, note: v.note }),
-    onMutate: async (v) => {
-      await qc.cancelQueries({ queryKey: ["videos", runId] });
-      const before = qc.getQueryData<FoundVideo[]>(["videos", runId]);
-      qc.setQueryData<FoundVideo[]>(["videos", runId], (list) => list?.map((x) => x.cluster_id === v.clusterId
-        ? { ...x, feedback: v.rating ? { rating: v.rating, note: v.note } : null } : x));
-      return { before };
-    },
-    onError: (_e, _v, c) => qc.setQueryData(["videos", runId], c?.before),
-  });
-}
-
 export function useScoreRun(slug: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { runId: string; satisfaction: number; note: string | null }) =>
       api.put(`/api/runs/${v.runId}/feedback`, { satisfaction: v.satisfaction, note: v.note }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["runs", slug] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["runs", slug] }); qc.invalidateQueries({ queryKey: ["runs-history"] }); },
   });
 }

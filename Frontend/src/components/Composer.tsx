@@ -20,7 +20,8 @@ interface Props {
 }
 
 export function Composer({ characters, selected, onSelect, running, starting, error, onStart, onStop }: Props) {
-  const [open, setOpen] = useState<"trending" | "targets" | null>(null);
+  const [open, setOpen] = useState<{ trending: boolean; targets: boolean }>({ trending: false, targets: false });
+  const toggle = (k: "trending" | "targets") => setOpen((o) => ({ ...o, [k]: !o[k] }));
   const [trendDraft, setTrendDraft] = useState("");
   const [trends, setTrends] = useState<string[]>([]);
   const [targets, setTargets] = useState<{ url: string; character: string }[]>([]);
@@ -45,7 +46,7 @@ export function Composer({ characters, selected, onSelect, running, starting, er
   const start = () => {
     const cleanTargets = targets.filter((t) => t.url.trim());
     const bad = cleanTargets.find((t) => !platformOf(t.url));
-    if (bad) { setLocalError(`That isn't a TikTok, Instagram or YouTube link: ${bad.url}`); setOpen("targets"); return; }
+    if (bad) { setLocalError(`That isn't a TikTok, Instagram or YouTube link: ${bad.url}`); setOpen((o) => ({ ...o, targets: true })); return; }
     if (!selected) return;
     setLocalError(null);
     onStart({ character: selected, platforms, freshness, minutes, trend_urls: trends,
@@ -58,22 +59,22 @@ export function Composer({ characters, selected, onSelect, running, starting, er
       <h1 className="text-[34px] font-semibold leading-tight max-md:text-[27px]">
         {name ? `What should ${name} post next?` : "Pick a character to start"}
       </h1>
-      <div className="mt-9 grid gap-10 lg:grid-cols-[minmax(240px,3fr)_minmax(0,9fr)]">
+      <div className="mt-9 grid gap-10 lg:grid-cols-[minmax(300px,4fr)_minmax(0,8fr)]">
         <div>
           <h2 className="mb-4 text-[13px] font-medium text-mist">Character</h2>
           {characters.length === 0 && (
             <p className="text-sm text-mist">Add a folder with images to <span className="text-snow">AI Influencers Characters</span>,
               then reload.</p>
           )}
-          <div className="flex flex-wrap gap-3.5" role="radiogroup" aria-label="Character">
+          <div className="flex flex-wrap gap-4" role="radiogroup" aria-label="Character">
             {characters.map((c) => {
               const on = c.slug === selected;
               return (
                 <button key={c.slug} role="radio" aria-checked={on} disabled={running} onClick={() => onSelect(c.slug)}
-                  className="group flex w-24 flex-col items-center gap-2.5 text-[12.5px]">
-                  <span className={`block h-24 w-24 overflow-hidden rounded-[10px] border border-line transition
+                  className="group flex flex-col items-center gap-2.5 text-[12.5px]">
+                  <span className={`block overflow-hidden rounded-[10px] border border-line bg-white transition
                     ${on ? "outline-2 outline-offset-3 outline-lime" : "opacity-55 grayscale-[.7] group-hover:opacity-100 group-hover:grayscale-0"}`}>
-                    {c.image_url && <img src={c.image_url} alt="" className="h-full w-full object-cover object-left-top" />}
+                    {c.image_url && <img src={c.image_url} alt="" className="block h-24 w-auto max-w-[220px] object-contain" />}
                   </span>
                   <span className={on ? "text-snow" : "text-mist"}>{c.name}</span>
                 </button>
@@ -85,9 +86,9 @@ export function Composer({ characters, selected, onSelect, running, starting, er
         <div className="min-w-0">
           <h2 className="mb-4 text-[13px] font-medium text-mist">Optional inputs</h2>
           <div className="overflow-hidden rounded-xl border border-line bg-[color-mix(in_oklch,var(--color-panel)_45%,var(--color-night))]">
-            <Section id="trending" icon={<Sparkles size={18} />} open={open === "trending"}
+            <Section id="trending" icon={<Sparkles size={18} />} open={open.trending}
               title="Trending AI-influencer videos" subtitle="Viral AI-influencer posts the agents study for formats"
-              state={trends.length ? `${trends.length} added` : "None"} onToggle={() => setOpen(open === "trending" ? null : "trending")}>
+              state={trends.length ? `${trends.length} added` : "None"} onToggle={() => toggle("trending")}>
               <div className="flex gap-2">
                 <input className="field" placeholder="Paste a TikTok, Reels or Shorts link and press Enter" value={trendDraft}
                   onChange={(e) => setTrendDraft(e.target.value)} onKeyDown={onTrendKey} disabled={running}
@@ -95,7 +96,7 @@ export function Composer({ characters, selected, onSelect, running, starting, er
                 <button className="btn-ghost shrink-0" onClick={addTrend} disabled={running || !trendDraft.trim()}>Add</button>
               </div>
               {trends.length > 0 && (
-                <ul className="mt-3 flex flex-wrap gap-2">
+                <ul className="mt-4 flex flex-wrap gap-2">
                   {trends.map((u) => (
                     <li key={u} className="chip !text-snow">
                       <PlatformIcon platform={platformOf(u)} /> <span className="max-w-[260px] truncate">{shortUrl(u)}</span>
@@ -107,11 +108,11 @@ export function Composer({ characters, selected, onSelect, running, starting, er
               )}
             </Section>
             <div className="border-t border-line" />
-            <Section id="targets" icon={<Link2 size={18} />} open={open === "targets"}
+            <Section id="targets" icon={<Link2 size={18} />} open={open.targets}
               title="Target videos I found" subtitle="Specific videos you think one of your characters should recreate"
               state={targets.filter((t) => t.url.trim()).length ? `${targets.filter((t) => t.url.trim()).length} added` : "None"}
-              onToggle={() => { setOpen(open === "targets" ? null : "targets"); if (!targets.length) setTargets([{ url: "", character: selected ?? "" }]); }}>
-              <ul className="space-y-2">
+              onToggle={() => { toggle("targets"); if (!targets.length) setTargets([{ url: "", character: selected ?? "" }]); }}>
+              <ul className="space-y-3">
                 {targets.map((t, i) => (
                   <li key={i} className="flex gap-2">
                     <input className="field" placeholder="https://www.tiktok.com/@creator/video/…" value={t.url} disabled={running}
@@ -127,7 +128,7 @@ export function Composer({ characters, selected, onSelect, running, starting, er
                   </li>
                 ))}
               </ul>
-              <button className="mt-3 inline-flex items-center gap-1.5 text-[13px] text-mist hover:text-snow" disabled={running}
+              <button className="mt-4 inline-flex items-center gap-1.5 text-[13px] text-mist hover:text-snow" disabled={running}
                 onClick={() => setTargets((ts) => [...ts, { url: "", character: selected ?? "" }])}>
                 <Plus size={14} /> Add another
               </button>
@@ -191,7 +192,11 @@ function Section({ id, icon, title, subtitle, state, open, onToggle, children }:
           <ChevronDown size={16} className={`transition ${open ? "rotate-180" : ""}`} />
         </span>
       </button>
-      {open && <div id={`${id}-editor`} className="px-5 pb-5">{children}</div>}
+      <div className="reveal" data-open={open} id={`${id}-editor`} inert={!open}>
+        <div>
+          <div className="px-6 pb-6 pt-2 max-sm:px-4">{children}</div>
+        </div>
+      </div>
     </div>
   );
 }

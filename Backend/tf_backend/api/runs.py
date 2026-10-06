@@ -66,6 +66,8 @@ async def _run_out(c: AppContext, run: Run, ch: Character) -> dict[str, Any]:
                                  .order_by(Task.created_at))).scalars().all()
         counts = dict((await s.execute(select(Finding.status, func.count()).where(Finding.run_id == run.id)
                                        .group_by(Finding.status))).all())
+        satisfaction = (await s.execute(select(RunFeedback.satisfaction).where(RunFeedback.run_id == run.id))
+                        ).scalar_one_or_none()
     return {
         "id": str(run.id), "state": run.state, "character": await character_card(c, ch),
         "stop_reason": run.stop_reason, "error": run.error, "started_at": run.started_at,
@@ -74,7 +76,7 @@ async def _run_out(c: AppContext, run: Run, ch: Character) -> dict[str, Any]:
         "minutes": round(float((run.settings or {}).get("wall_clock_s", 3600)) / 60),
         "agents": [{"id": str(t.id), "role": t.task_type, "platform": t.platform,
                     "status": TASK_STATUS.get(t.state, t.state), "goal": t.goal} for t in tasks],
-        "findings": counts,
+        "findings": counts, "satisfaction": satisfaction,
     }
 
 

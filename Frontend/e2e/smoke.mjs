@@ -22,11 +22,17 @@ for (const [w, h, name] of [[1440, 900, "desktop"], [1280, 800, "laptop"], [390,
   check((await p.getByRole("heading", { level: 1 }).textContent()).includes("post next"), `${name}: headline names the character`);
   check(await p.getByRole("radio").count() >= 1, `${name}: characters come from the folder`);
   check(await p.getByText("Found videos").isVisible(), `${name}: library is on the same page`);
-  check(!(await p.locator("nav, aside[role=navigation]").count()), `${name}: no navigation menu`);
+  check(await p.getByRole("navigation", { name: "Main" }).isVisible(), `${name}: top navbar`);
+  check(await p.getByLabel("Trend Finder").locator("svg").count() === 1, `${name}: logo`);
   const overflow = await p.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
   check(!overflow, `${name}: no horizontal scroll`);
   if (name === "desktop") {
     await p.getByRole("button", { name: /Trending AI-influencer videos/ }).click();
+    await p.getByRole("button", { name: /Target videos I found/ }).click();
+    await p.waitForTimeout(400);
+    check(await p.getByLabel("Trending video link").isVisible() && await p.getByLabel("Target video 1").isVisible(),
+      "desktop: both optional inputs open at once");
+    if (shots) await p.screenshot({ path: `${shots}/inputs_open.png`, clip: { x: 0, y: 0, width: 1440, height: 760 } });
     await p.getByLabel("Trending video link").fill("https://www.tiktok.com/@a/video/7400000000000000001");
     await p.keyboard.press("Enter");
     check(await p.getByText("tiktok.com/@a/video/7400000000000000001").isVisible(), "desktop: trend URL becomes a chip");
@@ -46,6 +52,24 @@ for (const [w, h, name] of [[1440, 900, "desktop"], [1280, 800, "laptop"], [390,
       if (shots) await card.hover().then(() => p.waitForTimeout(3500)).then(() =>
         p.locator("article[data-video-id]").first().screenshot({ path: `${shots}/hover.png` }));
     }
+  }
+  if (name !== "phone") {
+    for (const [path, text] of [["/characters", "What the agents see"], ["/runs", "Agent runs"], ["/settings", "Usage"],
+      ["/socials", "Nothing here yet"]]) {
+      await p.getByRole("navigation", { name: "Main" }).getByRole("link", { name: path === "/runs" ? "Runs" : path.slice(1, 2).toUpperCase() + path.slice(2) }).click();
+      await p.getByText(text).first().waitFor({ timeout: 10_000 }).catch(() => {});
+      if (path === "/runs") await p.locator("tbody tr").first().waitFor({ timeout: 10_000 }).catch(() => {});
+      await p.waitForTimeout(400);
+      check(await p.getByText(text).first().isVisible(), `${name}: ${path} page`);
+      if (shots && name === "desktop") await p.screenshot({ path: `${shots}/page${path.replace("/", "_")}.png`, fullPage: true });
+    }
+    await p.goto(base + "/runs");
+    await p.locator("tbody a").first().click();
+    await p.getByRole("region", { name: "Live agent run" }).waitFor({ timeout: 10_000 });
+    await p.waitForTimeout(2500);
+    const stuck = await p.locator('[aria-label="working"]').count();
+    check(stuck === 0, `${name}: a finished run's agents aren't stuck on working (${stuck})`);
+    if (shots && name === "desktop") await p.screenshot({ path: `${shots}/page_run.png`, fullPage: true });
   }
   await p.close();
 }
