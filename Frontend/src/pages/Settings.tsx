@@ -18,7 +18,7 @@ export default function Settings() {
     <section className="wrap pb-24 pt-10">
       <h1 className="text-[30px] font-semibold">Settings</h1>
       <h2 className="mt-9 text-[15px] font-semibold">Usage</h2>
-      <p className="mt-1 text-[13px] text-mist">Live from your subscriptions: both report their 5-hour and weekly limits with every call.</p>
+      <p className="mt-1 text-[13px] text-mist">Your subscriptions' 5-hour and weekly limits, as their websites show them. ChatGPT is read live; Claude is refreshed at most every 10 minutes.</p>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         {(usage.data?.providers ?? []).map((u) => <UsageCard key={u.provider} u={u} />)}
       </div>

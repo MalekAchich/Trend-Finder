@@ -283,3 +283,24 @@ async def test_out_of_credits_with_429_is_unavailable_not_a_usage_limit(fake_cla
         model="claude-fable-5-1"))
     with pytest.raises(ModelUnavailable):
         await adapter(fake_claude).complete(req())
+
+
+async def test_last_usage_survives_a_restart(fake_claude):
+    fake_claude.respond(stream_lines(fake_claude.envelope(structured={"ok": True})))
+    await adapter(fake_claude).complete(req(output_schema={"type": "object"}))
+    again = adapter(fake_claude)  # a new process
+    assert again.last_rate is not None and [w.name for w in again.last_rate.windows] == ["five_hour", "seven_day"]
+
+
+async def test_usage_refreshes_with_one_tiny_call_only_when_stale(fake_claude):
+    """Settings: Claude has no usage endpoint; a minimal haiku call refreshes it at most every 10 minutes."""
+    a = adapter(fake_claude)
+    fake_claude.respond(stream_lines(fake_claude.envelope(result="ok"), model="claude-haiku-4-5-20251001"))
+    first = await a.usage()
+    assert first.used_percent == 44.0 and len(fake_claude.calls()) == 1
+    assert flag_value(fake_claude.calls()[0]["argv"], "--model") == "haiku"
+    await a.usage()
+    assert len(fake_claude.calls()) == 1  # fresh: reused
+    a._rate_at -= 601
+    await a.usage()
+    assert len(fake_claude.calls()) == 2

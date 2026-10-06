@@ -181,3 +181,17 @@ async def test_usage_falls_back_to_what_the_adapter_last_saw(http, app_parts):
     sv.adapters["claude"].last_rate = RateInfo(used_percent=12.0, windows=(RateWindow("five_hour", 12.0, 300, None),))
     u = {p["provider"]: p for p in (await http.get("/api/usage")).json()["providers"]}
     assert u["claude"]["windows"][0]["used_percent"] == 12.0
+
+
+async def test_usage_asks_providers_that_can_report_live(http, app_parts):
+    from tf_agent.models.types import RateWindow
+
+    sv, _ = app_parts
+
+    async def live():
+        return RateInfo(used_percent=17.0, windows=(RateWindow("five_hour", 0.0, 300, 1.0), RateWindow("seven_day", 17.0, 10080, 2.0)))
+
+    sv.adapters["chatgpt"].usage = live
+    u = {p["provider"]: p for p in (await http.get("/api/usage")).json()["providers"]}
+    assert [(w["name"], w["used_percent"]) for w in u["chatgpt"]["windows"]] == [("five_hour", 0.0), ("seven_day", 17.0)]
+    assert u["chatgpt"]["used_percent"] == 17.0

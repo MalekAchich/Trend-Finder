@@ -220,3 +220,24 @@ def test_rate_headers_keep_both_windows():
     assert rate.used_percent == 44.0
     assert [(w.name, w.used_percent, w.window_minutes) for w in rate.windows] == [
         ("five_hour", 12.0, 300), ("seven_day", 44.0, 10080)]
+
+
+async def test_usage_reads_both_windows_without_spending_anything():
+    """Settings: ChatGPT's usage endpoint gives the same numbers as the website, live, at no cost."""
+    def handler(request):
+        assert request.url.path == "/backend-api/wham/usage" and request.method == "GET"
+        return httpx.Response(200, json={"plan_type": "plus", "rate_limit": {
+            "allowed": True, "limit_reached": False,
+            "primary_window": {"used_percent": 0, "limit_window_seconds": 18000, "reset_at": 1791341414},
+            "secondary_window": {"used_percent": 17, "limit_window_seconds": 604800, "reset_at": 1791730392}}})
+
+    adapter, _ = make(handler)
+    rate = await adapter.usage()
+    assert rate.used_percent == 17
+    assert [(w.name, w.used_percent, w.window_minutes, w.resets_at) for w in rate.windows] == [
+        ("five_hour", 0.0, 300, 1791341414.0), ("seven_day", 17.0, 10080, 1791730392.0)]
+
+
+async def test_usage_failure_is_none_not_an_error():
+    adapter, _ = make(lambda r: httpx.Response(403, text="<html>blocked</html>"))
+    assert await adapter.usage() is None

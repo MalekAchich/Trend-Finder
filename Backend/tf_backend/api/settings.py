@@ -61,13 +61,14 @@ async def usage(request: Request, c: AppContext = Depends(ctx)) -> dict[str, Any
         avg = dict((p, int(round(a or 0))) for p, a in (await s.execute(
             select(per_run.c.provider, func.avg(per_run.c.t)).group_by(per_run.c.provider))).all())
     out = []
-    for name in sv.adapters:
+    for name, adapter in sv.adapters.items():
         st = sv.governor.status(name)
-        rate = sv.governor.last_rate(name) or getattr(sv.adapters[name], "last_rate", None)
+        live = getattr(adapter, "usage", None)
+        rate = (await live() if live else None) or sv.governor.last_rate(name) or getattr(adapter, "last_rate", None)
         cooling = st.cooling_until if st.cooling_until and st.cooling_until > time.time() else None
         out.append({
             "provider": name, "status": st.status if cooling or st.status == "auth_error" else "ok",
-            "used_percent": st.used_percent if st.used_percent is not None else (rate.used_percent if rate else None), "window_minutes": rate.window_minutes if rate else None,
+            "used_percent": rate.used_percent if rate else st.used_percent, "window_minutes": rate.window_minutes if rate else None,
             "resets_at": rate.resets_at if rate else None, "cooling_until": cooling, "last_error": st.last_error,
             "tokens_today": today.get(name, (0, 0))[0], "calls_today": today.get(name, (0, 0))[1],
             "avg_tokens_per_run": avg.get(name),

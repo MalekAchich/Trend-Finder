@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import mimetypes
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -33,6 +34,7 @@ from tf_agent.models.types import (
     Usage,
 )
 
+log = logging.getLogger(__name__)
 PROVIDER = "chatgpt"
 CLIENT_VERSIONS = ("1.0.0", "2.0.0", "0.99.0")
 USAGE_LIMIT_CODES = ("usage_limit_reached", "rate_limit_exceeded", "insufficient_quota")
@@ -267,6 +269,32 @@ class ChatGPTOAuthAdapter:
             return CompletionResponse(provider=PROVIDER, model=req.model, text=text, tool_calls=calls,
                                       structured=structured, usage=usage, rate=rate, reasoning=reasoning)
         raise AuthRequired(PROVIDER, "still unauthorized after token refresh: run `tf login chatgpt`")
+
+    async def usage(self) -> RateInfo | None:
+        """The subscription's 5-hour and weekly windows, as the website shows them (no model call, no cost)."""
+        url = self.base_url.rsplit("/codex", 1)[0] + "/wham/usage"
+        try:
+            headers = await self._headers("application/json")
+            async with self._client_factory(20) as client:
+                r = await client.get(url, headers=headers)
+            if r.status_code != 200:
+                return None
+            limits = (r.json() or {}).get("rate_limit") or {}
+        except (httpx.HTTPError, ValueError, ProviderError) as e:
+            log.info("chatgpt usage lookup failed: %s", e)
+            return None
+        windows = []
+        for key, name in (("primary_window", "five_hour"), ("secondary_window", "seven_day")):
+            w = limits.get(key)
+            if isinstance(w, dict) and w.get("used_percent") is not None:
+                seconds = w.get("limit_window_seconds")
+                windows.append(RateWindow(name, float(w["used_percent"]), int(seconds) // 60 if seconds else None,
+                                          float(w["reset_at"]) if w.get("reset_at") else None))
+        if not windows:
+            return None
+        top = max(windows, key=lambda w: w.used_percent)
+        return RateInfo(used_percent=top.used_percent, window_minutes=top.window_minutes, resets_at=top.resets_at,
+                        windows=tuple(windows))
 
     async def list_models(self) -> list[ModelInfo]:
         headers = await self._headers("application/json")

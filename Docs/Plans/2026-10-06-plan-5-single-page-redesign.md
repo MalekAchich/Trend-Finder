@@ -17,7 +17,7 @@
 
 ## Global Constraints
 
-- All earlier constraints hold: subscription auth only, Postgres on 5433, never touch 5432, secrets never logged, loopback + host check, `x-trendfinder-client` on mutations.
+- All earlier constraints hold: subscription auth only, Postgres on 5433 (the Trend Finder database only), secrets never logged, loopback + host check, `x-trendfinder-client` on mutations.
 - No profile, bio or persona text is required or shown anywhere. A character = image files in its folder.
 - Per video, only URL, metadata, analysis numbers and one thumbnail of ≤ 40 KB at 360 px wide persist. Video files are deleted right after analysis. Contact sheets are deleted after the run's curation.
 - Event payloads always carry `agent: {id, role, platform}`. Thought text is ≤ 1,200 chars and tool result summaries ≤ 300.

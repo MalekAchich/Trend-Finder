@@ -58,7 +58,7 @@ Characters stay outside: `CHARACTERS_DIR="../AI Influencers Characters"`.
 
 | Service | Image | Port | Notes |
 |---|---|---|---|
-| `db` | `pgvector/pgvector:pg17` | 127.0.0.1:5433 | Named volume; healthcheck (5432 is taken by another project on this machine) |
+| `db` | `pgvector/pgvector:pg17` | 127.0.0.1:5433 | Named volume; healthcheck |
 | `searxng` | `searxng/searxng` | 8888 | JSON format enabled in `config/searxng/settings.yml`; local only |
 
 The backend and frontend run natively (D-25).

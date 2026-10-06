@@ -156,6 +156,7 @@ OUT_OF_CREDITS_RE = re.compile(r"out of usage credits", re.I)
 WINDOW_MINUTES = {"five_hour": 300, "seven_day": 10080}
 MODEL_NAME_RE = re.compile(r"^claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?$")
 RESOLVE_TTL_S = 24 * 3600
+USAGE_TTL_S = 600  # Settings refreshes Claude's usage at most every 10 minutes
 
 
 def display_name(model_id: str) -> str:
@@ -300,7 +301,8 @@ class ClaudeCLIAdapter:
         self.cwd = self.runtime_dir / "cwd"
         self.image_dir = self.runtime_dir / "images"
         self.mcp_config = self.runtime_dir / "empty-mcp.json"
-        self.last_rate: RateInfo | None = None  # the latest usage windows the CLI reported
+        self._rate_at = 0.0
+        self.last_rate: RateInfo | None = self._load_rate()  # the latest usage windows the CLI reported
         self.cwd.mkdir(parents=True, exist_ok=True)
         self.image_dir.mkdir(parents=True, exist_ok=True)
         if not self.mcp_config.exists():
@@ -350,7 +352,8 @@ class ClaudeCLIAdapter:
             raise MalformedResponse(PROVIDER, "claude -p did not return JSON") from None
         rate = _rate_from(envelope.get("_rate"))
         if rate is not None:
-            self.last_rate = rate
+            self.last_rate, self._rate_at = rate, time.time()
+            self._save_rate(envelope.get("_rate"))
         if OUT_OF_CREDITS_RE.search(str(envelope.get("result") or "")):  # a model the plan lacks, not a usage limit
             raise ModelUnavailable(PROVIDER, str(envelope.get("result"))[:300])
         if envelope.get("is_error") or envelope.get("subtype") not in (None, "success"):
@@ -403,6 +406,35 @@ class ClaudeCLIAdapter:
                                       structured=structured, usage=usage, rate=rate)
         return CompletionResponse(provider=PROVIDER, model=model, text=str(envelope.get("result") or ""),
                                   usage=usage, rate=rate)
+
+    # ---- the last usage windows the CLI reported, kept across restarts ----
+    def _save_rate(self, info: dict[str, Any] | None) -> None:
+        try:
+            tmp = self.runtime_dir / f"last-usage.{uuid.uuid4().hex}.tmp"
+            tmp.write_text(json.dumps({"info": info or {}, "at": time.time()}))
+            tmp.replace(self.runtime_dir / "last-usage.json")
+        except OSError as e:
+            log.info("could not save claude usage: %s", e)
+
+    def _load_rate(self) -> RateInfo | None:
+        try:
+            saved = json.loads((self.runtime_dir / "last-usage.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        self._rate_at = float(saved.get("at") or 0)
+        return _rate_from(saved.get("info"))
+
+    async def usage(self) -> RateInfo | None:
+        """Claude has no usage endpoint: reuse the last reported windows, refreshed by a tiny call when stale."""
+        if self.last_rate is not None and time.time() - self._rate_at < USAGE_TTL_S:
+            return self.last_rate
+        cmd = [self.auth.bin, *isolation_flags(self.mcp_config), "--model", "haiku",
+               "--system-prompt", "Reply with the single word ok."]
+        try:
+            await self._run(cmd, "ok?", 60)
+        except ProviderError as e:
+            log.info("claude usage refresh failed: %s", e)
+        return self.last_rate
 
     # ---- which concrete model each alias means right now (asked from the CLI itself, cached for a day) ----
     @property
