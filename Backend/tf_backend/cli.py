@@ -482,10 +482,15 @@ def serve(
     if not (FRONTEND_DIST / "index.html").exists():
         typer.echo("The web app isn't built yet; the API still works. Build it with: cd Frontend && npm run build",
                    err=True)
+    if allow_remote:
+        import os
+
+        os.environ["TF_ALLOWED_HOSTS"] = "*"
     url = f"http://{'127.0.0.1' if host in LOOPBACK else host}:{port}"
     typer.echo(f"Trend Finder at {url}  (Ctrl+C to stop)")
     if open_browser:
         import threading
 
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
-    uvicorn.run("tf_backend.main:app", host=host, port=port, log_level="info")
+    # live-run SSE streams never end on their own; without a deadline Ctrl+C waits for every open tab
+    uvicorn.run("tf_backend.main:app", host=host, port=port, log_level="info", timeout_graceful_shutdown=5)

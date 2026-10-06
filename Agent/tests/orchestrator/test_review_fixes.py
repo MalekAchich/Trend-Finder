@@ -227,7 +227,8 @@ async def test_analyzer_crash_fails_the_finding(db_sessionmaker, tmp_path):
     assert "pipeline exploded" in out["error"]
 
 
-async def test_stop_curates_and_ends_stopped(db_sessionmaker, tmp_path):
+async def test_stop_curates_and_ends_review_ready(db_sessionmaker, tmp_path):
+    """Plan 4 final #1: a stopped run's cards must stay reviewable (07: stop "curates; ends in review_ready")."""
     curated = []
 
     class RecordingCurator:
@@ -238,4 +239,43 @@ async def test_stop_curates_and_ends_stopped(db_sessionmaker, tmp_path):
     orch.curator = RecordingCurator()
     run_id = await orch.create_run("testy", SETTINGS)
     outcome = await orch.stop_and_curate(run_id)
-    assert outcome.state == "stopped" and curated and curated[0][1]["fit"] == 0.4
+    assert outcome.state == "review_ready" and outcome.stop_reason == "stopped by the owner"
+    assert curated and curated[0][1]["fit"] == 0.4
+
+
+class FlakyCurator:
+    def __init__(self):
+        self.calls = 0
+
+    async def curate(self, run_id, character, weights=None):
+        self.calls += 1
+        if self.calls == 1:
+            raise ConnectionError("db blip during curation")
+
+
+async def _rounds(sm, run_id):
+    async with sm() as s:
+        return len((await s.execute(select(Round).where(Round.run_id == run_id))).scalars().all())
+
+
+async def test_curation_crash_keeps_the_stop_decision(db_sessionmaker, tmp_path):
+    """Plan 4 final #3: a resumed run whose curation crashed curates again instead of planning more rounds."""
+    orch = await build(db_sessionmaker, tmp_path, World())
+    orch.curator = FlakyCurator()
+    run_id = await orch.create_run("testy", SETTINGS)
+    first = await orch.execute(run_id)
+    assert first.state == "interrupted" and first.stop_reason
+    rounds = await _rounds(db_sessionmaker, run_id)
+    second = await orch.execute(run_id)
+    assert second.state == "review_ready" and second.stop_reason == first.stop_reason
+    assert await _rounds(db_sessionmaker, run_id) == rounds and orch.curator.calls == 2
+
+
+async def test_failed_stop_curation_resumes_into_curation(db_sessionmaker, tmp_path):
+    orch = await build(db_sessionmaker, tmp_path, World())
+    orch.curator = FlakyCurator()
+    run_id = await orch.create_run("testy", SETTINGS)
+    failed = await orch.stop_and_curate(run_id)
+    assert failed.state == "interrupted" and failed.stop_reason == "stopped by the owner"
+    done = await orch.execute(run_id)
+    assert done.state == "review_ready" and await _rounds(db_sessionmaker, run_id) == 0

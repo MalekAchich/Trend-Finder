@@ -54,8 +54,12 @@ export function reviewReducer(state: ReviewState, action: ReviewAction): ReviewS
       return { ...state, index: clamp(state.index - 1, n) };
     case "goto":
       return { ...state, index: clamp(action.index, n) };
-    case "note":
-      return { ...state, drafts: { ...state.drafts, [id]: action.note } };
+    case "note": {
+      const drafts = { ...state.drafts, [id]: action.note };
+      const rated = state.ratings[id];
+      if (!rated) return { ...state, drafts };
+      return { ...state, drafts, ratings: { ...state.ratings, [id]: { ...rated, note: action.note.trim() || null } } };
+    }
     case "rate": {
       const note = state.drafts[id]?.trim() || null;
       const ratings = { ...state.ratings, [id]: { rating: action.rating, note } };

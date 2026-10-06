@@ -35,6 +35,16 @@ describe("review reducer", () => {
     expect(s.ratings.a).toEqual({ rating: "down", note: "changed my mind" });
   });
 
+  it("keeps a note typed after the card was rated", () => {
+    let s = initialReview(["a", "b"]);
+    s = reviewReducer(s, { type: "rate", rating: "up" });
+    s = reviewReducer(s, { type: "prev" });
+    s = reviewReducer(s, { type: "note", note: "love the deadpan here" });
+    expect(s.ratings.a).toEqual({ rating: "up", note: "love the deadpan here" });
+    s = reviewReducer(s, { type: "note", note: "  " });
+    expect(s.ratings.a).toEqual({ rating: "up", note: null });
+  });
+
   it("knows when everything is rated", () => {
     let s = initialReview(["a"]);
     expect(s.complete).toBe(false);

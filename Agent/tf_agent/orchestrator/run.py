@@ -11,6 +11,8 @@ import logging
 import random
 import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -49,6 +51,7 @@ from tf_db.models import (
 log = logging.getLogger(__name__)
 WORK_KINDS = ("scout", "radar", "deep_dive")
 TERMINAL_STATES = ("review_ready", "stopped", "failed")
+STOPPED_BY_OWNER = "stopped by the owner"
 RESUMABLE_STATES = ("created", "planning", "running", "paused_usage", "curating", "interrupted")
 
 
@@ -189,13 +192,21 @@ class Orchestrator:
 
         A Postgres advisory lock guarantees a single loop per run, even across processes (CLI + API).
         """
+        async with self._run_lock(run_id) as owned:
+            if not owned:
+                return await self._outcome(run_id)  # another loop already drives this run
+            return await self._execute_locked(run_id)
+
+    @asynccontextmanager
+    async def _run_lock(self, run_id: uuid.UUID) -> AsyncIterator[bool]:
         key = int(run_id) & 0x7FFF_FFFF_FFFF_FFFF
         engine = self._sm.kw["bind"]
         async with engine.connect() as lock_conn:
             if not (await lock_conn.execute(text("select pg_try_advisory_lock(:k)"), {"k": key})).scalar_one():
-                return await self._outcome(run_id)  # another loop already drives this run
+                yield False
+                return
             try:
-                return await self._execute_locked(run_id)
+                yield True
             finally:
                 async def unlock() -> None:
                     try:
@@ -219,7 +230,7 @@ class Orchestrator:
         weights = settings.weights or self.weights or await self._saved_weights()
         analysis = AnalysisStage(self._sm, self.analyzer, self.roles, self.store, ch, weights)
         try:
-            if run.state == "curating" and run.stop_reason:
+            if run.stop_reason and run.state in ("curating", "interrupted"):
                 stop_reason = run.stop_reason  # the stop decision was made before a crash: don't plan again
             else:
                 stop_reason = await self._loop(run, settings, ch, analysis, clock)
@@ -231,7 +242,7 @@ class Orchestrator:
             raise  # leave the run resumable
         except Exception as e:  # infrastructure trouble: keep everything, allow resume
             log.exception("run %s interrupted", run_id)
-            await self._finish(run_id, "interrupted", None, error=f"{type(e).__name__}: {e}"[:500])
+            await self._interrupt(run_id, e)
         finally:
             await asyncio.shield(self._save_used(run_id, clock))
         return await self._outcome(run_id)
@@ -259,17 +270,33 @@ class Orchestrator:
             log.warning("could not record active time for run %s: %s", run_id, e)
 
     async def stop_and_curate(self, run_id: uuid.UUID) -> RunOutcome:
-        """Owner pressed Stop: drop pending work, curate what was found, end as `stopped`."""
-        async with self._sm() as s:
-            run = await s.get(Run, run_id)
-        await self.queue.cancel_queued(run_id)
-        await self._set_stop_decision(run_id, "stopped by the owner")
-        try:
-            await self._curate(run_id, await self._character(run), (run.settings or {}).get("weights"))
-        except Exception as e:
-            log.warning("curation after stop failed for %s: %s", run_id, e)
-        await self._finish(run_id, "stopped", "stopped by the owner")
+        """Owner pressed Stop: drop pending work, curate what was found, end `review_ready` (reason kept)."""
+        async with self._run_lock(run_id) as owned:
+            if not owned:
+                return await self._outcome(run_id)  # a loop still owns the run; it will curate itself
+            async with self._sm() as s:
+                run = await s.get(Run, run_id)
+            await self.queue.cancel_queued(run_id)
+            await self._set_stop_decision(run_id, STOPPED_BY_OWNER)
+            try:
+                await self._curate(run_id, await self._character(run), (run.settings or {}).get("weights"))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # resumable: a resume curates again (the stop decision is kept)
+                log.exception("curation after stop failed for %s", run_id)
+                await self._interrupt(run_id, e)
+            else:
+                await self._finish(run_id, "review_ready", STOPPED_BY_OWNER)
         return await self._outcome(run_id)
+
+    async def _interrupt(self, run_id: uuid.UUID, error: BaseException) -> None:
+        """Mark a run resumable after infrastructure trouble, keeping any stop decision already made."""
+        async with self._sm() as s:
+            await s.execute(update(Run).where(Run.id == run_id).values(
+                state="interrupted", error=f"{type(error).__name__}: {error}"[:500], finished_at=func.now()))
+            await s.commit()
+            reason = (await s.execute(select(Run.stop_reason).where(Run.id == run_id))).scalar_one_or_none()
+        await self.blackboard.record_event(run_id, "run.state", {"state": "interrupted", "stop_reason": reason})
 
     async def _loop(self, run: Run, settings: RunSettings, ch: LoadedCharacter, analysis: AnalysisStage,
                     clock: ActiveClock) -> str:

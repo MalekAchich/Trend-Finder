@@ -17,7 +17,7 @@ def dist(tmp_path):
 
 
 async def _get(app, path):
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as c:
         return await c.get(path)
 
 

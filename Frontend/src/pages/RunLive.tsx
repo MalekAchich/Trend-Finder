@@ -88,7 +88,8 @@ export default function RunLive() {
         {!finished && <span className="text-sm text-graphite">{connected ? "Live" : "Reconnecting…"}</span>}
         <div className="ml-auto flex gap-2">
           {r.state === "review_ready" && <Link className="btn btn-primary" to={`/runs/${id}/review`}>Review trend cards</Link>}
-          {!finished && r.active && <button className="btn" onClick={() => stop.mutate()} disabled={stop.isPending}>Stop and rank what's found</button>}
+          {!finished && r.active && r.state !== "curating" && <button className="btn" onClick={() => stop.mutate()} disabled={stop.isPending}>Stop and rank what's found</button>}
+          {r.active && r.state === "curating" && <span className="self-center text-sm text-graphite">Ranking what was found…</span>}
           {!finished && !r.active && <button className="btn" onClick={() => resume.mutate()} disabled={resume.isPending}>Resume run</button>}
         </div>
       </div>

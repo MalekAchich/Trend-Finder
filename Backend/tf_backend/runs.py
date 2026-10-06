@@ -30,6 +30,7 @@ class RunManager:
         self._factory = orchestrator_factory
         self._orchestrator: Any = None
         self._tasks: dict[uuid.UUID, asyncio.Task[Any]] = {}
+        self._stopping: set[uuid.UUID] = set()
         self._lock = asyncio.Lock()
 
     async def orchestrator(self) -> Any:
@@ -44,10 +45,14 @@ class RunManager:
         return task is not None and not task.done()
 
     def _launch(self, orch: Any, run_id: uuid.UUID) -> None:
-        task = asyncio.create_task(orch.execute(run_id), name=f"run-{run_id}")
+        self._track(asyncio.create_task(orch.execute(run_id), name=f"run-{run_id}"), run_id)
+
+    def _track(self, task: asyncio.Task[Any], run_id: uuid.UUID, stopping: bool = False) -> None:
         self._tasks[run_id] = task
 
         def done(t: asyncio.Task[Any]) -> None:
+            if stopping:
+                self._stopping.discard(run_id)
             if not t.cancelled() and t.exception() is not None:
                 log.error("run %s crashed: %s", run_id, t.exception())
 
@@ -74,17 +79,27 @@ class RunManager:
             self._launch(await self.orchestrator(), run_id)
 
     async def stop(self, run_id: uuid.UUID) -> None:
+        """Cancel the loop, then curate what was found in the background (the run stays active until ranked)."""
         state = await self._state(run_id)
         if state in TERMINAL:
             raise RunError(f"this run is already {state}")
-        task = self._tasks.get(run_id)
-        if task is not None and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        orch = self._orchestrator
-        if orch is not None and hasattr(orch, "stop_and_curate"):
-            await orch.stop_and_curate(run_id)  # keep what was found: curate, then end as `stopped`
+        if run_id in self._stopping:
+            raise RunError("this run is already stopping; its trend cards are being ranked")
+        self._stopping.add(run_id)
+        try:
+            task = self._tasks.get(run_id)
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            orch = await self.orchestrator()
+        except BaseException:
+            self._stopping.discard(run_id)
+            raise
+        if hasattr(orch, "stop_and_curate"):
+            self._track(asyncio.create_task(orch.stop_and_curate(run_id), name=f"stop-{run_id}"), run_id,
+                        stopping=True)
             return
+        self._stopping.discard(run_id)
         await TaskQueue(self._sm).cancel_queued(run_id)
         async with self._sm() as s:
             await s.execute(update(Run).where(Run.id == run_id).values(

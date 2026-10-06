@@ -1,4 +1,5 @@
 """Trend cards, owner feedback (→ learner) and production briefs."""
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Literal
@@ -10,7 +11,9 @@ from sqlalchemy import select
 from tf_agent.characters.sync import load_character
 from tf_agent.learning.briefs import BriefError
 from tf_agent.learning.learner import CardRating, FeedbackError
+from tf_agent.models.errors import AllProvidersUnavailable, ProviderError
 from tf_agent.pipeline import PIPELINE_VERSION
+from tf_agent.roles.runners import RoleOutputError
 from tf_backend.api.deps import ctx, require_client_header
 from tf_backend.app_context import AppContext
 from tf_db.models import (
@@ -54,7 +57,7 @@ def _video(v: Video) -> dict[str, Any]:
 
 
 @router.get("/runs/{run_id}/trends")
-async def trends(run_id: str, include_filtered: bool = False, c: AppContext = Depends(ctx)) -> dict[str, Any]:
+async def trends(run_id: str, include: str | None = None, c: AppContext = Depends(ctx)) -> dict[str, Any]:
     rid = _uuid(run_id, "run")
     async with c.sessionmaker() as s:
         run = await s.get(Run, rid)
@@ -77,7 +80,7 @@ async def trends(run_id: str, include_filtered: bool = False, c: AppContext = De
                                    .where(TrendCluster.run_id == rid))).all()
         run_fb = await s.get(RunFeedback, rid)
         filtered = []
-        if include_filtered:
+        if include == "filtered":
             frows = (await s.execute(select(Finding, Video, VideoAnalysis)
                                      .join(Video, Video.canonical_id == Finding.canonical_id)
                                      .outerjoin(VideoAnalysis, (VideoAnalysis.canonical_id == Finding.canonical_id)
@@ -158,6 +161,13 @@ async def make_brief(cluster_id: str, c: AppContext = Depends(ctx)) -> dict[str,
         brief = await c.briefs.generate(cid, character)
     except BriefError as e:
         raise HTTPException(409, str(e)) from e
+    except AllProvidersUnavailable as e:
+        wait = f" in about {max(1, round((e.earliest_reset - time.time()) / 60))} min" if e.earliest_reset else " later"
+        raise HTTPException(503, f"both AI subscriptions are at their usage limit; try again{wait}") from e
+    except RoleOutputError as e:
+        raise HTTPException(502, "the AI returned an unusable brief twice; try again") from e
+    except ProviderError as e:
+        raise HTTPException(502, f"the AI provider failed ({e}); try again") from e
     return _brief_out(brief)
 
 

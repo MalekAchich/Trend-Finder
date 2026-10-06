@@ -56,6 +56,8 @@ class FakeOrchestrator:
         self.blackboard = Blackboard(sm)
         self.release = asyncio.Event()
         self.executed = []
+        self.stops = []
+        self.curate_release = asyncio.Event()
 
     async def create_run(self, slug, settings):
         async with self._sm() as s:
@@ -80,6 +82,17 @@ class FakeOrchestrator:
             await s.commit()
         await self.blackboard.record_event(run_id, "run.state", {"state": "review_ready"})
 
+    async def stop_and_curate(self, run_id):
+        self.stops.append(run_id)
+        async with self._sm() as s:
+            await s.execute(update(Run).where(Run.id == run_id).values(state="curating",
+                                                                       stop_reason="stopped by the owner"))
+            await s.commit()
+        await self.curate_release.wait()
+        async with self._sm() as s:
+            await s.execute(update(Run).where(Run.id == run_id).values(state="review_ready"))
+            await s.commit()
+
 
 @pytest.fixture
 async def ctx(db_sessionmaker, tmp_path):
@@ -103,7 +116,7 @@ async def ctx(db_sessionmaker, tmp_path):
 @pytest.fixture
 async def http(ctx):
     app = create_app(services=None, context=ctx)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=H) as c:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1", headers=H) as c:
         yield c
     await ctx.runs.shutdown()
 
@@ -174,11 +187,25 @@ async def test_start_list_detail_and_events_of_a_run(http, ctx):
 
 
 async def test_stop_and_resume(http, ctx):
+    """Plan 4 final #1/#2: stop curates in the background, stays active (no second curation), ends reviewable."""
     run_id = (await http.post("/api/runs", json={"slug": "testy"})).json()["run_id"]
     await asyncio.sleep(0.05)
+    assert (await http.post(f"/api/runs/{run_id}/stop")).status_code == 200
+    await asyncio.sleep(0.05)
+    run = (await http.get(f"/api/runs/{run_id}")).json()
+    assert run["state"] == "curating" and run["active"] is True
+    assert (await http.post(f"/api/runs/{run_id}/resume")).status_code == 200  # no-op while curating
     r = await http.post(f"/api/runs/{run_id}/stop")
-    assert r.status_code == 200 and (await http.get(f"/api/runs/{run_id}")).json()["state"] == "stopped"
-    assert (await http.post(f"/api/runs/{run_id}/resume")).status_code == 409  # stopped runs are final
+    assert r.status_code == 409 and "already stopping" in r.json()["detail"]
+    assert len(ctx.orchestrator.executed) == 1 and len(ctx.orchestrator.stops) == 1
+    ctx.orchestrator.curate_release.set()
+    for _ in range(50):
+        if (await http.get(f"/api/runs/{run_id}")).json()["state"] == "review_ready":
+            break
+        await asyncio.sleep(0.02)
+    run = (await http.get(f"/api/runs/{run_id}")).json()
+    assert run["state"] == "review_ready" and run["active"] is False
+    assert (await http.post(f"/api/runs/{run_id}/resume")).status_code == 409  # finished runs are final
 
 
 async def test_trends_feedback_and_briefs(http, ctx):
@@ -230,7 +257,7 @@ async def test_settings_weights(http):
 
 async def test_mutations_need_the_client_header(ctx):
     app = create_app(services=None, context=ctx)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as bare:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as bare:
         assert (await bare.post("/api/runs", json={"slug": "testy"})).status_code == 403
         assert (await bare.put("/api/settings", json={"weights": {}})).status_code == 403
         assert (await bare.get("/api/characters")).status_code == 200
@@ -260,3 +287,40 @@ async def test_resume_on_startup_requeues_orphaned_tasks_and_includes_interrupte
     async with ctx.sessionmaker() as s:
         assert (await s.execute(select(Task.state).where(Task.run_id == run_id))).scalar_one() == "queued"
     await ctx.runs.shutdown()
+
+
+async def test_filtered_videos_use_the_spec_query(http, ctx):
+    """Plan 4 final #5: the UI and spec 07 ask for `?include=filtered`."""
+    run_id, _ = await make_reviewable_run(ctx)
+    async with ctx.sessionmaker() as s:
+        s.add(Video(canonical_id="tiktok:2", platform="tiktok", url="https://www.tiktok.com/@u/video/2", metrics={}))
+        await s.flush()
+        s.add(Finding(run_id=run_id, canonical_id="tiktok:2", status="filtered_feasibility"))
+        await s.commit()
+    assert (await http.get(f"/api/runs/{run_id}/trends")).json()["filtered"] == []
+    filtered = (await http.get(f"/api/runs/{run_id}/trends?include=filtered")).json()["filtered"]
+    assert [f["video"]["canonical_id"] for f in filtered] == ["tiktok:2"]
+
+
+async def test_brief_failures_explain_themselves(http, ctx, monkeypatch):
+    """Plan 4 final #8: provider limits or bad model output → a readable error, not a bare 500."""
+    import time
+
+    from tf_agent.models.errors import AllProvidersUnavailable
+    from tf_agent.roles.runners import RoleOutputError
+
+    _, cluster_id = await make_reviewable_run(ctx)
+
+    async def limited(*a, **k):
+        raise AllProvidersUnavailable("brief", time.time() + 1800)
+
+    monkeypatch.setattr(ctx.briefs, "generate", limited)
+    r = await http.post(f"/api/trends/{cluster_id}/brief")
+    assert r.status_code == 503 and "usage limit" in r.json()["detail"] and "30 min" in r.json()["detail"]
+
+    async def garbled(*a, **k):
+        raise RoleOutputError("brief: invalid output after repair: title missing")
+
+    monkeypatch.setattr(ctx.briefs, "generate", garbled)
+    r = await http.post(f"/api/trends/{cluster_id}/brief")
+    assert r.status_code == 502 and "try again" in r.json()["detail"]

@@ -45,6 +45,7 @@ def test_serve_runs_the_api_with_the_built_ui_on_loopback(monkeypatch, tmp_path)
     assert out.exit_code == 0, out.output
     assert calls["app"] == "tf_backend.main:app" and calls["host"] == "127.0.0.1" and calls["port"] == 8000
     assert "http://127.0.0.1:8000" in out.output
+    assert 0 < calls["timeout_graceful_shutdown"] <= 10  # open live-run streams must not block Ctrl+C
 
 
 def test_serve_refuses_a_public_host_without_opt_in(monkeypatch):

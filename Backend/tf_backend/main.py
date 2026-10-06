@@ -1,7 +1,9 @@
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
 
 from tf_backend.api import characters, health, media, providers, runs, settings, trends
@@ -9,6 +11,7 @@ from tf_backend.app_context import AppContext
 from tf_backend.services import Services
 
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "Frontend" / "dist"
+LOCAL_HOSTS = ["127.0.0.1", "localhost", "[::1]"]
 
 
 def create_app(services: Services | None = None, context: AppContext | None = None,
@@ -32,6 +35,10 @@ def create_app(services: Services | None = None, context: AppContext | None = No
             await cleanup()
 
     app = FastAPI(title="Trend Finder", version="0.1.0", lifespan=lifespan)
+    # No login: a DNS-rebinding page could otherwise reach 127.0.0.1 under its own name. `tf serve --allow-remote`
+    # sets TF_ALLOWED_HOSTS=*.
+    hosts = [h.strip() for h in os.environ.get("TF_ALLOWED_HOSTS", "").split(",") if h.strip()] or LOCAL_HOSTS
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
     if services is not None:
         app.state.services = services
     if context is not None:

@@ -48,7 +48,7 @@ def services():
 @pytest.fixture
 async def http(services):
     app = create_app(services)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1",
                                  headers={"x-trendfinder-client": "test"}) as c:
         yield c
 
@@ -97,7 +97,7 @@ async def test_listing_providers_does_not_clear_auth_error(http, services):
 
 async def test_mutating_routes_require_client_header(services):
     app = create_app(services)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as bare:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as bare:
         assert (await bare.post("/api/providers/claude/logout")).status_code == 403
         assert (await bare.post("/api/providers/chatgpt/login/start", json={})).status_code == 403
         assert (await bare.get("/api/providers")).status_code == 200
