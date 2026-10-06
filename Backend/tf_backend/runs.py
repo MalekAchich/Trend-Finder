@@ -13,11 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tf_agent.orchestrator.blackboard import Blackboard
 from tf_agent.orchestrator.queue import TaskQueue
+from tf_agent.orchestrator.run import RESUMABLE_STATES as RESUMABLE
+from tf_agent.orchestrator.run import TERMINAL_STATES as TERMINAL
 from tf_db.models import Run
 
 log = logging.getLogger(__name__)
-TERMINAL = ("review_ready", "stopped", "failed")
-RESUMABLE = ("created", "planning", "running", "paused_usage", "curating", "interrupted")
 
 
 class RunError(Exception):

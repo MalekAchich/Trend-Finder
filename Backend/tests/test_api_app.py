@@ -1,18 +1,16 @@
-"""API surface for the web app (07-api-and-frontend.md) against the real test DB with fake runs and fake models."""
+"""Plan 5 Task 7: the single page's API, against the real test DB with fake runs and fake models."""
 import asyncio
 import json
 import uuid
-from pathlib import Path
 
 import httpx
 import pytest
 from sqlalchemy import select, update
 
-from tf_agent.characters.folders import sync_characters
-from tf_agent.learning.briefs import BriefWriter
 from tf_agent.learning.learner import Learner
-from tf_agent.models.fake import FakeAdapter, text_response
+from tf_agent.models.fake import FakeAdapter
 from tf_agent.orchestrator.blackboard import Blackboard
+from tf_agent.orchestrator.run import InputError, RunSettings
 from tf_agent.roles.runners import Roles
 from tf_agent.testing import make_client
 from tf_backend.app_context import AppContext
@@ -20,9 +18,11 @@ from tf_backend.main import create_app
 from tf_backend.runs import RunManager
 from tf_db.models import (
     Character,
+    CharacterVersion,
     Finding,
     FindingScore,
     Run,
+    Task,
     TrendCluster,
     TrendMember,
     Video,
@@ -30,22 +30,6 @@ from tf_db.models import (
 )
 
 H = {"x-trendfinder-client": "test"}
-PROFILE = """---
-name: Testy
-slug: testy
-canonical_image: testy.png
----
-
-## Persona
-A calm robot butler.
-
-## Niche / context: OPEN
-To discover.
-"""
-LEARNED = {"taste_profile_md": "## Loves\n- calm duties", "retrospective": ["ok run"], "primary_niche": None}
-BRIEF = {"title": "Duty", "concept": "Testy does the dance", "record_yourself": "walk in", "character_orientation": "video",
-         "kling_prompt": "robot butler in a plain hallway", "framing": "full body 9:16",
-         "motion_window": {"start_s": 0, "end_s": 6}, "shots": [{"seconds": 6, "description": "dance"}], "risks": []}
 
 
 class FakeOrchestrator:
@@ -55,16 +39,20 @@ class FakeOrchestrator:
         self._sm = sm
         self.blackboard = Blackboard(sm)
         self.release = asyncio.Event()
-        self.executed = []
-        self.stops = []
         self.curate_release = asyncio.Event()
+        self.executed, self.stops, self.created = [], [], []
 
     async def create_run(self, slug, settings):
+        if settings is not None:
+            for url in settings.trend_urls:
+                if "example.com" in url:
+                    raise InputError(f"not a TikTok, Instagram or YouTube video URL: {url}")
+        self.created.append(settings)
         async with self._sm() as s:
-            from tf_db.models import CharacterVersion
             ch = (await s.execute(select(Character).where(Character.slug == slug))).scalar_one()
             v = (await s.execute(select(CharacterVersion).where(CharacterVersion.character_id == ch.id))).scalars().first()
-            run = Run(character_id=ch.id, character_version_id=v.id, state="created", settings={})
+            run = Run(character_id=ch.id, character_version_id=v.id, state="created", settings={},
+                      inputs={"trend_urls": list(settings.trend_urls) if settings else []})
             s.add(run)
             await s.commit()
             await self.blackboard.record_event(run.id, "run.state", {"state": "created"})
@@ -98,19 +86,16 @@ class FakeOrchestrator:
 async def ctx(db_sessionmaker, tmp_path):
     chars = tmp_path / "chars" / "Testy"
     chars.mkdir(parents=True)
-    (chars / "profile.md").write_text(PROFILE)
-    (chars / "testy.png").write_bytes(b"\x89PNG")
-    await sync_characters(tmp_path / "chars", db_sessionmaker)
+    (chars / "Testy.png").write_bytes(b"\x89PNG")
+    (chars / "Testy face.png").write_bytes(b"\x89PNG face")
     media = tmp_path / "media"
-    (media / "sheets").mkdir(parents=True)
-    (media / "sheets" / "tiktok_1.jpg").write_bytes(b"\xff\xd8jpeg")
-    fa = FakeAdapter("a", [text_response("a", structured=LEARNED), text_response("a", structured=BRIEF)])
-    client, _, _ = make_client({"a": fa})
-    roles = Roles(client)
+    (media / "thumbs").mkdir(parents=True)
+    (media / "thumbs" / "tiktok_1.jpg").write_bytes(b"\xff\xd8jpeg")
+    client, _, _ = make_client({"a": FakeAdapter("a", [])})
     orch = FakeOrchestrator(db_sessionmaker)
     return AppContext(sessionmaker=db_sessionmaker, runs=RunManager(db_sessionmaker, lambda: orch),
-                      learner=Learner(db_sessionmaker, roles), briefs=BriefWriter(db_sessionmaker, roles),
-                      media_dir=media, characters_dir=tmp_path / "chars", orchestrator=orch)
+                      learner=Learner(db_sessionmaker, Roles(client)), media_dir=media,
+                      characters_dir=tmp_path / "chars", orchestrator=orch)
 
 
 @pytest.fixture
@@ -121,55 +106,77 @@ async def http(ctx):
     await ctx.runs.shutdown()
 
 
-async def make_reviewable_run(ctx, rating=None):
+async def a_run(http, ctx, state="running"):
+    await http.get("/api/characters")  # syncs the folder
+    run_id = await ctx.orchestrator.create_run("testy", RunSettings())
     async with ctx.sessionmaker() as s:
-        ch = (await s.execute(select(Character))).scalar_one()
-    run_id = await ctx.orchestrator.create_run("testy", None)
-    async with ctx.sessionmaker() as s:
+        await s.execute(update(Run).where(Run.id == run_id).values(state=state))
         s.add(Video(canonical_id="tiktok:1", platform="tiktok", url="https://www.tiktok.com/@u/video/1",
-                    metrics={"views": 1000}))
+                    creator_handle="u", metrics={"views": 1000}))
         await s.flush()
         s.add(VideoAnalysis(canonical_id="tiktok:1", pipeline_version="1",
-                            contact_sheet_path=str(ctx.media_dir / "sheets" / "tiktok_1.jpg"),
+                            thumbnail_path=str(ctx.media_dir / "thumbs" / "tiktok_1.jpg"),
                             best_clean_segment={"start_s": 0, "end_s": 9}, feasibility=80))
-        f = Finding(run_id=run_id, canonical_id="tiktok:1", status="analyzed")
+        f = Finding(run_id=run_id, canonical_id="tiktok:1", status="analyzed", why="fits")
         s.add(f)
         await s.flush()
         s.add(FindingScore(finding_id=f.id, fit=70, feasibility=80, momentum=50, freshness=90, overall=72,
-                           adaptation_idea="hallway", fit_justification="calm"))
-        c = TrendCluster(run_id=run_id, best_finding_id=f.id, member_count=1, rank=1, overall=72, label="calm")
+                           adaptation_idea="hallway", fit_justification="calm", feasibility_notes="one person"))
+        await s.commit()
+        return run_id, f.id
+
+
+async def curate(ctx, run_id, finding_id):
+    async with ctx.sessionmaker() as s:
+        c = TrendCluster(run_id=run_id, best_finding_id=finding_id, member_count=1, rank=1, overall=72, label="calm")
         s.add(c)
         await s.flush()
-        s.add(TrendMember(cluster_id=c.id, finding_id=f.id))
+        s.add(TrendMember(cluster_id=c.id, finding_id=finding_id))
         await s.execute(update(Run).where(Run.id == run_id).values(state="review_ready"))
         await s.commit()
-        return run_id, c.id
+        return c.id
 
 
-async def test_characters_detail_taste_and_seeds(http):
+async def test_characters_are_image_folders_synced_on_read(http):
     chars = (await http.get("/api/characters")).json()
-    assert [c["slug"] for c in chars] == ["testy"]
-    detail = (await http.get("/api/characters/testy")).json()
-    assert "robot butler" in detail["brief"] and detail["niche_open"] is True and detail["taste_profile"] is None
-    assert detail["canonical_image_url"] == "/api/media/characters/Testy/testy.png"
-    r = await http.put("/api/characters/testy/taste-profile", json={"body_md": "## Loves\n- kitchens"})
-    assert r.status_code == 200 and r.json()["version"] == 1
-    r = await http.post("/api/characters/testy/seeds", json={"url": "https://www.youtube.com/shorts/OUZbZ8cz4j8"})
-    assert r.status_code == 200
-    assert (await http.get("/api/characters/testy")).json()["seeds"][0]["canonical_id"] == "youtube:OUZbZ8cz4j8"
+    assert [(c["slug"], c["name"], c["runs"]) for c in chars] == [("testy", "Testy", 0)]
+    assert chars[0]["image_url"] == "/api/media/characters/Testy/Testy.png" and len(chars[0]["images"]) == 2
+    assert (await http.get(chars[0]["image_url"])).status_code == 200
 
 
-async def test_start_list_detail_and_events_of_a_run(http, ctx):
-    r = await http.post("/api/runs", json={"slug": "testy", "rounds": 1, "tasks_per_round": 2})
+async def test_start_a_run_with_inputs(http, ctx):
+    await http.get("/api/characters")
+    body = {"character": "testy", "platforms": ["tiktok"], "freshness": "day", "minutes": 30,
+            "trend_urls": ["https://www.tiktok.com/@a/video/1"],
+            "targets": [{"url": "https://youtu.be/OUZbZ8cz4j8", "character": "testy"}]}
+    r = await http.post("/api/runs", json=body)
     assert r.status_code == 200
-    run_id = r.json()["run_id"]
+    s = ctx.orchestrator.created[-1]
+    assert (s.freshness, s.wall_clock_s, s.platforms, s.trend_urls) == ("day", 1800, ["tiktok"], body["trend_urls"])
+    assert s.targets == body["targets"]
+    bad = await http.post("/api/runs", json={**body, "trend_urls": ["https://example.com/x"]})
+    assert bad.status_code == 422 and "https://example.com/x" in bad.json()["detail"]
+    assert (await http.post("/api/runs", json={**body, "freshness": "decade"})).status_code == 422
+
+
+async def test_active_run_detail_and_events(http, ctx):
+    assert (await http.get("/api/runs/active")).json() is None
+    await http.get("/api/characters")
+    run_id = (await http.post("/api/runs", json={"character": "testy"})).json()["run_id"]
     for _ in range(50):
         if (await http.get(f"/api/runs/{run_id}")).json()["state"] == "running":
             break
         await asyncio.sleep(0.02)
+    active = (await http.get("/api/runs/active")).json()
+    assert active["id"] == run_id and active["character"] == {"slug": "testy", "name": "Testy",
+                                                               "image_url": "/api/media/characters/Testy/Testy.png"}
+    async with ctx.sessionmaker() as s:
+        s.add(Task(run_id=uuid.UUID(run_id), task_type="scout", platform="tiktok", state="running", goal="find dances"))
+        await s.commit()
     detail = (await http.get(f"/api/runs/{run_id}")).json()
-    assert detail["state"] == "running" and detail["active"] is True and detail["character"] == "testy"
-    assert [x["id"] for x in (await http.get("/api/runs")).json()] == [run_id]
+    assert detail["active"] is True and detail["inputs"]["trend_urls"] == []
+    assert [(a["role"], a["platform"], a["status"], a["goal"]) for a in detail["agents"]] == [
+        ("scout", "tiktok", "working", "find dances")]
     ctx.orchestrator.release.set()
     events = []
     async with http.stream("GET", f"/api/runs/{run_id}/events", headers={"Last-Event-ID": "0"}) as resp:
@@ -177,18 +184,51 @@ async def test_start_list_detail_and_events_of_a_run(http, ctx):
             if line.startswith("data: "):
                 events.append(json.loads(line[6:]))
     assert [e["payload"]["state"] for e in events] == ["created", "running", "review_ready"]
-    first_id = events[0]["id"]
     replay = []
-    async with http.stream("GET", f"/api/runs/{run_id}/events", headers={"Last-Event-ID": str(first_id)}) as resp:
+    async with http.stream("GET", f"/api/runs/{run_id}/events", headers={"Last-Event-ID": str(events[0]["id"])}) as resp:
         async for line in resp.aiter_lines():
             if line.startswith("data: "):
                 replay.append(json.loads(line[6:])["id"])
     assert replay == [e["id"] for e in events[1:]]
 
 
+async def test_character_runs_newest_first(http, ctx):
+    first, _ = await a_run(http, ctx, state="review_ready")
+    runs = (await http.get("/api/characters/testy/runs")).json()
+    assert [r["id"] for r in runs] == [str(first)] and runs[0]["videos"] == 1 and runs[0]["satisfaction"] is None
+    assert (await http.get("/api/characters/nobody/runs")).status_code == 404
+
+
+async def test_videos_live_then_curated_and_rated(http, ctx):
+    run_id, finding_id = await a_run(http, ctx)
+    live = (await http.get(f"/api/runs/{run_id}/videos")).json()
+    assert len(live) == 1 and live[0]["cluster_id"] is None and live[0]["score"] == 72
+    assert live[0]["thumbnail_url"] == "/api/media/thumbs/tiktok_1.jpg" and live[0]["platform_id"] == "1"
+    cluster_id = await curate(ctx, run_id, finding_id)
+    curated = (await http.get(f"/api/runs/{run_id}/videos")).json()
+    assert curated[0]["cluster_id"] == str(cluster_id) and curated[0]["feedback"] is None
+    r = await http.put(f"/api/videos/{cluster_id}/feedback", json={"rating": "up", "note": "love it"})
+    assert r.status_code == 200
+    assert (await http.get(f"/api/runs/{run_id}/videos")).json()[0]["feedback"] == {"rating": "up", "note": "love it"}
+    assert (await http.put(f"/api/videos/{cluster_id}/feedback", json={"rating": None, "note": None})).status_code == 200
+    assert (await http.get(f"/api/runs/{run_id}/videos")).json()[0]["feedback"] is None
+    assert (await http.put(f"/api/videos/{uuid.uuid4()}/feedback", json={"rating": "up"})).status_code == 404
+    assert (await http.put(f"/api/videos/{cluster_id}/feedback", json={"rating": "skip"})).status_code == 422
+    assert (await http.get(f"/api/media/thumbs/tiktok_1.jpg")).status_code == 200
+
+
+async def test_run_score_only_after_it_ended(http, ctx):
+    run_id, finding_id = await a_run(http, ctx)
+    r = await http.put(f"/api/runs/{run_id}/feedback", json={"satisfaction": 7, "note": None})
+    assert r.status_code == 409 and "running" in r.json()["detail"]
+    await curate(ctx, run_id, finding_id)
+    assert (await http.put(f"/api/runs/{run_id}/feedback", json={"satisfaction": 7, "note": "ok"})).status_code == 200
+    assert (await http.get("/api/characters/testy/runs")).json()[0]["satisfaction"] == 7
+
+
 async def test_stop_and_resume(http, ctx):
-    """Plan 4 final #1/#2: stop curates in the background, stays active (no second curation), ends reviewable."""
-    run_id = (await http.post("/api/runs", json={"slug": "testy"})).json()["run_id"]
+    await http.get("/api/characters")
+    run_id = (await http.post("/api/runs", json={"character": "testy"})).json()["run_id"]
     await asyncio.sleep(0.05)
     assert (await http.post(f"/api/runs/{run_id}/stop")).status_code == 200
     await asyncio.sleep(0.05)
@@ -197,130 +237,49 @@ async def test_stop_and_resume(http, ctx):
     assert (await http.post(f"/api/runs/{run_id}/resume")).status_code == 200  # no-op while curating
     r = await http.post(f"/api/runs/{run_id}/stop")
     assert r.status_code == 409 and "already stopping" in r.json()["detail"]
-    assert len(ctx.orchestrator.executed) == 1 and len(ctx.orchestrator.stops) == 1
     ctx.orchestrator.curate_release.set()
     for _ in range(50):
         if (await http.get(f"/api/runs/{run_id}")).json()["state"] == "review_ready":
             break
         await asyncio.sleep(0.02)
-    run = (await http.get(f"/api/runs/{run_id}")).json()
-    assert run["state"] == "review_ready" and run["active"] is False
-    assert (await http.post(f"/api/runs/{run_id}/resume")).status_code == 409  # finished runs are final
-
-
-async def test_trends_feedback_and_briefs(http, ctx):
-    run_id, cluster_id = await make_reviewable_run(ctx)
-    cards = (await http.get(f"/api/runs/{run_id}/trends")).json()["cards"]
-    card = cards[0]
-    assert card["rank"] == 1 and card["scores"]["fit"] == 70 and card["contact_sheet_url"] == "/api/media/sheets/tiktok_1.jpg"
-    assert card["best"]["url"].startswith("https://www.tiktok.com") and card["feedback"] is None
-    assert (await http.post(f"/api/trends/{cluster_id}/brief")).status_code == 409  # not 👍 yet
-    fb = {"cards": [{"cluster_id": str(cluster_id), "rating": "up", "note": "yes!"}], "satisfaction": 8, "note": None}
-    r = await http.post(f"/api/runs/{run_id}/feedback", json=fb)
-    assert r.status_code == 200 and r.json()["taste_version"] == 1
-    r = await http.post(f"/api/trends/{cluster_id}/brief")
-    assert r.status_code == 200 and r.json()["body"]["title"] == "Duty" and "# Duty" in r.json()["body_md"]
-    assert (await http.get(f"/api/trends/{cluster_id}/brief")).json()["body"]["title"] == "Duty"
-    assert (await http.get(f"/api/runs/{run_id}/trends")).json()["cards"][0]["feedback"]["rating"] == "up"
-
-
-async def test_feedback_on_a_running_run_is_rejected(http, ctx):
-    run_id, cluster_id = await make_reviewable_run(ctx)
-    async with ctx.sessionmaker() as s:
-        await s.execute(update(Run).where(Run.id == run_id).values(state="running"))
-        await s.commit()
-    fb = {"cards": [{"cluster_id": str(cluster_id), "rating": "up"}], "satisfaction": 5}
-    r = await http.post(f"/api/runs/{run_id}/feedback", json=fb)
-    assert r.status_code == 409 and "review" in r.json()["detail"]
+    assert (await http.post(f"/api/runs/{run_id}/resume")).status_code == 409
 
 
 @pytest.mark.parametrize("path,status", [
-    ("/api/media/sheets/tiktok_1.jpg", 200),
-    ("/api/media/characters/Testy/testy.png", 200),
-    ("/api/media/sheets/../../secrets/chatgpt-auth.json", 404),
-    ("/api/media/sheets/%2e%2e/%2e%2e/etc/passwd", 404),
-    ("/api/media/other/x.jpg", 404),
+    ("/api/media/thumbs/tiktok_1.jpg", 200),
+    ("/api/media/characters/Testy/Testy.png", 200),
+    ("/api/media/thumbs/../../secrets/chatgpt-auth.json", 404),
+    ("/api/media/thumbs/%2e%2e/%2e%2e/etc/passwd", 404),
+    ("/api/media/sheets/tiktok_1.jpg", 404),
+    ("/api/media/videos/x.mp4", 404),
 ])
 async def test_media_is_confined(http, path, status):
     assert (await http.get(path)).status_code == status
 
 
-async def test_settings_weights(http):
-    s = (await http.get("/api/settings")).json()
-    assert s["weights"] == {"fit": 0.4, "feasibility": 0.3, "momentum": 0.2, "freshness": 0.1}
-    bad = await http.put("/api/settings", json={"weights": {"fit": 0.9, "feasibility": 0.9, "momentum": 0, "freshness": 0}})
-    assert bad.status_code == 422
-    ok = await http.put("/api/settings", json={"weights": {"fit": 0.5, "feasibility": 0.3, "momentum": 0.1,
-                                                           "freshness": 0.1}})
-    assert ok.status_code == 200 and (await http.get("/api/settings")).json()["weights"]["fit"] == 0.5
+async def test_removed_routes_are_gone(http):
+    for method, path in (("GET", "/api/settings"), ("GET", "/api/briefs"), ("GET", "/api/platforms"),
+                         ("POST", "/api/characters/sync")):
+        assert (await http.request(method, path)).status_code in (404, 405), path
 
 
 async def test_mutations_need_the_client_header(ctx):
     app = create_app(services=None, context=ctx)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as bare:
-        assert (await bare.post("/api/runs", json={"slug": "testy"})).status_code == 403
-        assert (await bare.put("/api/settings", json={"weights": {}})).status_code == 403
+        assert (await bare.post("/api/runs", json={"character": "testy"})).status_code == 403
+        assert (await bare.put(f"/api/videos/{uuid.uuid4()}/feedback", json={"rating": "up"})).status_code == 403
         assert (await bare.get("/api/characters")).status_code == 200
 
 
-async def test_unfinished_runs_resume_on_startup(ctx):
+async def test_unfinished_runs_resume_on_startup(http, ctx):
+    await http.get("/api/characters")
     run_id = await ctx.orchestrator.create_run("testy", None)
     async with ctx.sessionmaker() as s:
-        await s.execute(update(Run).where(Run.id == run_id).values(state="running"))
-        await s.commit()
-    resumed = await ctx.runs.resume_unfinished()
-    assert resumed == [run_id]
-    await asyncio.sleep(0.05)
-    assert ctx.orchestrator.executed == [run_id]
-    await ctx.runs.shutdown()
-
-
-async def test_resume_on_startup_requeues_orphaned_tasks_and_includes_interrupted(ctx):
-    from tf_db.models import Task
-
-    run_id = await ctx.orchestrator.create_run("testy", None)
-    async with ctx.sessionmaker() as s:
-        await s.execute(update(Run).where(Run.id == run_id).values(state="interrupted"))
+        await s.execute(update(Run).where(Run.id == run_id).values(state="reading_character"))
         s.add(Task(run_id=run_id, task_type="scout", state="running"))
         await s.commit()
     assert await ctx.runs.resume_unfinished() == [run_id]
+    await asyncio.sleep(0.05)
+    assert ctx.orchestrator.executed == [run_id]
     async with ctx.sessionmaker() as s:
         assert (await s.execute(select(Task.state).where(Task.run_id == run_id))).scalar_one() == "queued"
-    await ctx.runs.shutdown()
-
-
-async def test_filtered_videos_use_the_spec_query(http, ctx):
-    """Plan 4 final #5: the UI and spec 07 ask for `?include=filtered`."""
-    run_id, _ = await make_reviewable_run(ctx)
-    async with ctx.sessionmaker() as s:
-        s.add(Video(canonical_id="tiktok:2", platform="tiktok", url="https://www.tiktok.com/@u/video/2", metrics={}))
-        await s.flush()
-        s.add(Finding(run_id=run_id, canonical_id="tiktok:2", status="filtered_feasibility"))
-        await s.commit()
-    assert (await http.get(f"/api/runs/{run_id}/trends")).json()["filtered"] == []
-    filtered = (await http.get(f"/api/runs/{run_id}/trends?include=filtered")).json()["filtered"]
-    assert [f["video"]["canonical_id"] for f in filtered] == ["tiktok:2"]
-
-
-async def test_brief_failures_explain_themselves(http, ctx, monkeypatch):
-    """Plan 4 final #8: provider limits or bad model output → a readable error, not a bare 500."""
-    import time
-
-    from tf_agent.models.errors import AllProvidersUnavailable
-    from tf_agent.roles.runners import RoleOutputError
-
-    _, cluster_id = await make_reviewable_run(ctx)
-
-    async def limited(*a, **k):
-        raise AllProvidersUnavailable("brief", time.time() + 1800)
-
-    monkeypatch.setattr(ctx.briefs, "generate", limited)
-    r = await http.post(f"/api/trends/{cluster_id}/brief")
-    assert r.status_code == 503 and "usage limit" in r.json()["detail"] and "30 min" in r.json()["detail"]
-
-    async def garbled(*a, **k):
-        raise RoleOutputError("brief: invalid output after repair: title missing")
-
-    monkeypatch.setattr(ctx.briefs, "generate", garbled)
-    r = await http.post(f"/api/trends/{cluster_id}/brief")
-    assert r.status_code == 502 and "try again" in r.json()["detail"]

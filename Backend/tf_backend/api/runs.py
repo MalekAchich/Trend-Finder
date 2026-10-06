@@ -1,59 +1,56 @@
-"""Runs: start, list, detail, stop, resume, and live events over SSE (Last-Event-ID replay)."""
+"""Runs: start (with the owner's URLs), the active run, detail with its agents, stop, resume, live events (SSE)."""
 import asyncio
 import json
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
+from tf_agent.characters.folders import sync_characters
 from tf_agent.orchestrator.blackboard import Blackboard, EventCursor
-from tf_agent.orchestrator.run import RunSettings
+from tf_agent.orchestrator.run import InputError, RunSettings
+from tf_backend.api.characters import character_card
 from tf_backend.api.deps import ctx, require_client_header
 from tf_backend.app_context import AppContext
 from tf_backend.runs import TERMINAL, RunError
-from tf_db.models import Character, Direction, Finding, Round, Run, Task
+from tf_db.models import Character, Finding, Run, Task
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+TASK_STATUS = {"queued": "waiting", "running": "working", "succeeded": "done", "failed": "failed",
+               "cancelled": "done"}
+
+
+class TargetIn(BaseModel):
+    url: str = Field(min_length=10, max_length=500)
+    character: str = Field(min_length=1, max_length=64)
 
 
 class RunIn(BaseModel):
-    slug: str
-    platforms: list[str] = Field(default_factory=lambda: ["tiktok", "youtube", "instagram"])
-    rounds: int = Field(3, ge=1, le=10)
-    tasks_per_round: int = Field(12, ge=1, le=16)
-    target_findings: int = Field(20, ge=1, le=200)
-    good_score: float = Field(60.0, ge=0, le=100)
-    minutes: float = Field(60.0, ge=1, le=600)
-    workers: int = Field(8, ge=1, le=16)
+    character: str = Field(min_length=1, max_length=64)
+    platforms: list[Literal["tiktok", "instagram", "youtube"]] = Field(
+        default_factory=lambda: ["tiktok", "youtube", "instagram"], min_length=1)
+    freshness: Literal["day", "week", "month", "any"] = "week"
+    minutes: float = Field(60.0, ge=5, le=600)
+    trend_urls: list[str] = Field(default_factory=list, max_length=20)
+    targets: list[TargetIn] = Field(default_factory=list, max_length=20)
 
 
 @router.post("", dependencies=[Depends(require_client_header)])
 async def start_run(body: RunIn, c: AppContext = Depends(ctx)) -> dict[str, str]:
-    settings = RunSettings(platforms=body.platforms, rounds=body.rounds, tasks_per_round=body.tasks_per_round,
-                           target_findings=body.target_findings, good_score=body.good_score,
-                           wall_clock_s=body.minutes * 60, workers=body.workers)
+    await sync_characters(c.characters_dir, c.sessionmaker)
+    settings = RunSettings(platforms=list(body.platforms), wall_clock_s=body.minutes * 60, freshness=body.freshness,
+                           trend_urls=[u.strip() for u in body.trend_urls if u.strip()],
+                           targets=[t.model_dump() for t in body.targets])
     try:
-        run_id = await c.runs.start(body.slug, settings)
+        run_id = await c.runs.start(body.character, settings)
+    except InputError as e:
+        raise HTTPException(422, str(e)) from e
     except Exception as e:  # unknown character etc.
         raise HTTPException(422, str(e)) from e
     return {"run_id": str(run_id)}
-
-
-def _run_row(r: Run, slug: str, active: bool) -> dict[str, Any]:
-    return {"id": str(r.id), "character": slug, "state": r.state, "round": r.current_round,
-            "stop_reason": r.stop_reason, "error": r.error, "explore_ratio": r.explore_ratio_used,
-            "settings": r.settings, "started_at": r.started_at, "finished_at": r.finished_at, "active": active}
-
-
-@router.get("")
-async def list_runs(limit: int = 30, c: AppContext = Depends(ctx)) -> list[dict[str, Any]]:
-    async with c.sessionmaker() as s:
-        rows = (await s.execute(select(Run, Character.slug).join(Character, Character.id == Run.character_id)
-                                .order_by(Run.started_at.desc()).limit(limit))).all()
-    return [_run_row(r, slug, c.runs.is_active(r.id)) for r, slug in rows]
 
 
 def _uuid(raw: str) -> uuid.UUID:
@@ -63,33 +60,44 @@ def _uuid(raw: str) -> uuid.UUID:
         raise HTTPException(404, "unknown run") from None
 
 
+async def _run_out(c: AppContext, run: Run, ch: Character) -> dict[str, Any]:
+    async with c.sessionmaker() as s:
+        tasks = (await s.execute(select(Task).where(Task.run_id == run.id, Task.task_type != "analyze")
+                                 .order_by(Task.created_at))).scalars().all()
+        counts = dict((await s.execute(select(Finding.status, func.count()).where(Finding.run_id == run.id)
+                                       .group_by(Finding.status))).all())
+    return {
+        "id": str(run.id), "state": run.state, "character": await character_card(c, ch),
+        "stop_reason": run.stop_reason, "error": run.error, "started_at": run.started_at,
+        "finished_at": run.finished_at, "active": c.runs.is_active(run.id), "inputs": run.inputs or {},
+        "character_read": run.character_read, "round": run.current_round,
+        "minutes": round(float((run.settings or {}).get("wall_clock_s", 3600)) / 60),
+        "agents": [{"id": str(t.id), "role": t.task_type, "platform": t.platform,
+                    "status": TASK_STATUS.get(t.state, t.state), "goal": t.goal} for t in tasks],
+        "findings": counts,
+    }
+
+
+@router.get("/active")
+async def active_run(c: AppContext = Depends(ctx)) -> dict[str, Any] | None:
+    async with c.sessionmaker() as s:
+        rows = (await s.execute(select(Run, Character).join(Character, Character.id == Run.character_id)
+                                .where(Run.state.not_in(TERMINAL)).order_by(Run.started_at.desc()))).all()
+    for run, ch in rows:
+        if c.runs.is_active(run.id) or run.state != "interrupted":
+            return await _run_out(c, run, ch)
+    return None
+
+
 @router.get("/{run_id}")
 async def run_detail(run_id: str, c: AppContext = Depends(ctx)) -> dict[str, Any]:
     rid = _uuid(run_id)
     async with c.sessionmaker() as s:
-        row = (await s.execute(select(Run, Character.slug).join(Character, Character.id == Run.character_id)
+        row = (await s.execute(select(Run, Character).join(Character, Character.id == Run.character_id)
                                .where(Run.id == rid))).one_or_none()
-        if row is None:
-            raise HTTPException(404, "unknown run")
-        run, slug = row
-        rounds = (await s.execute(select(Round).where(Round.run_id == rid).order_by(Round.number))).scalars().all()
-        tasks = (await s.execute(select(Task, Direction.label).outerjoin(Direction, Direction.id == Task.direction_id)
-                                 .where(Task.run_id == rid).order_by(Task.created_at))).all()
-        counts = dict((await s.execute(select(Finding.status, func.count()).where(Finding.run_id == rid)
-                                       .group_by(Finding.status))).all())
-    return {
-        **_run_row(run, slug, c.runs.is_active(rid)),
-        "rounds": [{"number": r.number, "summary": (r.plan or {}).get("reasoning_summary"),
-                    "rejections": r.plan_rejections or [], "result": r.summary, "started_at": r.started_at,
-                    "finished_at": r.finished_at} for r in rounds],
-        "tasks": [{"id": str(t.id), "type": t.task_type, "platform": t.platform, "state": t.state, "goal": t.goal,
-                   "direction": label, "scope": {k: v for k, v in (t.scope or {}).items() if k != "lead_info"},
-                   "attempts": t.attempts,
-                   "result": {k: (len(v) if isinstance(v, list) else v) for k, v in (t.result or {}).items()
-                              if k in ("accepted", "rejected", "leads", "provider", "steps", "failed", "overall",
-                                       "filtered", "error")}} for t, label in tasks],
-        "findings": counts,
-    }
+    if row is None:
+        raise HTTPException(404, "unknown run")
+    return await _run_out(c, *row)
 
 
 @router.post("/{run_id}/stop", dependencies=[Depends(require_client_header)])

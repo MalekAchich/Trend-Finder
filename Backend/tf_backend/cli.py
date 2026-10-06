@@ -419,7 +419,7 @@ async def _print_trends(sessionmaker, run_id, top: int) -> None:
             typer.echo(f"    idea: {sc.adaptation_idea[:220]}")
         if a is not None and a.best_clean_segment:
             seg = a.best_clean_segment
-            typer.echo(f"    motion window: {seg['start_s']:.1f}s → {seg['end_s']:.1f}s   sheet: {a.contact_sheet_path}")
+            typer.echo(f"    motion window: {seg['start_s']:.1f}s → {seg['end_s']:.1f}s")
 
 
 @app.command()

@@ -13,11 +13,6 @@ def test_search_rejects_unknown_platform():
     assert result.exit_code == 2 and "tiktok, instagram, shorts" in result.output
 
 
-def test_character_commands_exist():
-    out = CliRunner().invoke(app, ["--help"]).output
-    assert "sync-characters" in out and "seed" in out
-
-
 def test_run_commands_exist():
     out = CliRunner().invoke(app, ["--help"]).output
     for name in ("run", "resume", "runs", "trends"):

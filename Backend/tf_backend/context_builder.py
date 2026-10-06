@@ -5,7 +5,6 @@ from collections.abc import Awaitable, Callable
 
 from tf_agent.config import AppSettings
 from tf_agent.curation.curate import Curator
-from tf_agent.learning.briefs import BriefWriter
 from tf_agent.learning.learner import Learner
 from tf_agent.orchestrator.run import Orchestrator
 from tf_agent.pipeline.analyze import process_pool_runner
@@ -24,16 +23,17 @@ async def build_context(settings: AppSettings | None = None) -> tuple[AppContext
     roles = Roles(services.client)
     stack = build_tool_stack(s, sm)
     pools: list[process_pool_runner] = []
+    learner = Learner(sm, roles)
 
     def make_orchestrator() -> Orchestrator:  # built on first run: the process pool only starts when needed
         heavy = process_pool_runner(max_workers=2, whisper_model=s.whisper_model)
         pools.append(heavy)
         analyzer = build_analyzer(s, stack, heavy, max_parallel=2)
-        return Orchestrator(sm, roles, stack, analyzer, stack.store, curator=Curator(sm, roles))
+        return Orchestrator(sm, roles, stack, analyzer, stack.store, curator=Curator(sm, roles), learner=learner)
 
     runs = RunManager(sm, make_orchestrator)
-    context = AppContext(sessionmaker=sm, runs=runs, learner=Learner(sm, roles), briefs=BriefWriter(sm, roles),
-                         media_dir=s.media_dir, characters_dir=s.characters_dir, registry=stack.registry,
+    context = AppContext(sessionmaker=sm, runs=runs, learner=learner,
+                         media_dir=s.media_dir, characters_dir=s.characters_dir,
                          sse_poll_s=1.0)
 
     async def cleanup() -> None:
