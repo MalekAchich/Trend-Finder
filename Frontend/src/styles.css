@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@theme {
+  --color-table: #eef1ea;
+  --color-paper: #fbfcf8;
+  --color-ink: #20231d;
+  --color-graphite: #6b7064;
+  --color-rule: #d5dacd;
+  --color-grease: #c62e1f;
+  --color-olive: #55632f;
+  --font-sans: "Archivo", ui-sans-serif, system-ui, sans-serif;
+  --font-marker: "Permanent Marker", "Segoe Print", cursive;
+}
+
+@layer base {
+  html { background: var(--color-table); color: var(--color-ink); }
+  body { font-family: var(--font-sans); font-variation-settings: "wdth" 100; -webkit-font-smoothing: antialiased; }
+  h1, h2, h3 { font-variation-settings: "wdth" 125; letter-spacing: -0.01em; }
+  h1 { font-size: 1.75rem; font-weight: 700; line-height: 1.15; }
+  h2 { font-size: 1.15rem; font-weight: 650; line-height: 1.25; }
+  h3 { font-size: 0.95rem; font-weight: 650; }
+  :focus-visible { outline: 2px solid var(--color-grease); outline-offset: 2px; border-radius: 3px; }
+  .num { font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  .btn { display: inline-flex; align-items: center; gap: .4rem; border-radius: 6px; padding: .5rem .9rem;
+    font-weight: 600; font-size: .9rem; border: 1px solid var(--color-ink); background: var(--color-paper); }
+  .btn:hover { background: #fff; }
+  .btn-primary { background: var(--color-grease); border-color: var(--color-grease); color: #fff; }
+  .btn-primary:hover { background: #ad2618; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .field { width: 100%; border: 1px solid var(--color-rule); background: var(--color-paper); border-radius: 6px;
+    padding: .45rem .6rem; font: inherit; }
+  .field:focus { border-color: var(--color-ink); outline: none; }
+  .print { background: var(--color-paper); box-shadow: 0 1px 0 #c9cfbf, 0 6px 18px -12px rgb(32 35 29 / .45); }
+}
+
+@keyframes draw { from { stroke-dashoffset: var(--len); } to { stroke-dashoffset: 0; } }
+.mark-stroke { stroke-dasharray: var(--len); animation: draw .38s ease-out both; }
+@media (prefers-reduced-motion: reduce) { .mark-stroke { animation: none; } }

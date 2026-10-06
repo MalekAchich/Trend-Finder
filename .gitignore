@@ -9,3 +9,4 @@ secrets/
 .superpowers/
 Frontend/node_modules/
 Frontend/dist/
+Frontend/*.tsbuildinfo

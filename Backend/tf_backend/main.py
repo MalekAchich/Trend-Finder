@@ -1,8 +1,8 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 
 from tf_backend.api import characters, health, media, providers, runs, settings, trends
 from tf_backend.app_context import AppContext
@@ -11,7 +11,8 @@ from tf_backend.services import Services
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "Frontend" / "dist"
 
 
-def create_app(services: Services | None = None, context: AppContext | None = None) -> FastAPI:
+def create_app(services: Services | None = None, context: AppContext | None = None,
+               frontend_dist: Path | None = FRONTEND_DIST) -> FastAPI:
     injected = services is not None or context is not None
 
     @asynccontextmanager
@@ -37,9 +38,26 @@ def create_app(services: Services | None = None, context: AppContext | None = No
         app.state.context = context
     for module in (health, providers, characters, runs, trends, settings, media):
         app.include_router(module.router, prefix="/api")
-    if FRONTEND_DIST.is_dir():
-        app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+    if frontend_dist is not None and frontend_dist.is_dir():
+        _serve_web_app(app, frontend_dist.resolve())
     return app
+
+
+def _serve_web_app(app: FastAPI, dist: Path) -> None:
+    """Built files as-is; any other non-API path is a client-side route, so it gets index.html."""
+    index = dist / "index.html"
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def web_app(path: str) -> FileResponse:
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(404, "Not Found")
+        file = (dist / path).resolve()
+        if path and file.is_relative_to(dist) and file.is_file():
+            return FileResponse(file, headers={"Cache-Control": "public, max-age=31536000, immutable"}
+                                if file.parent.name == "assets" else None)
+        if "." in path.rsplit("/", 1)[-1]:  # a missing file, not a page
+            raise HTTPException(404, "Not Found")
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
 
 app = create_app()
