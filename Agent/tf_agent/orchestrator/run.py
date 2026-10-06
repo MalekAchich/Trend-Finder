@@ -367,6 +367,9 @@ class Orchestrator:
                     update_.retrospective)
                 await self.blackboard.record_event(run_id, "agent.thought", {
                     "agent": {"id": "learner", "role": "learner", "platform": None}, "text": text_[:1200]})
+                await self.blackboard.record_event(run_id, "agent.finished", {
+                    "agent": {"id": "learner", "role": "learner", "platform": None}, "accepted": 0, "rejected": 0,
+                    "leads": 0, "failed": None})
             elif update_ is not None and update_.error:
                 await self.blackboard.record_event(run_id, "error", {
                     "agent": {"id": "learner", "role": "learner", "platform": None},

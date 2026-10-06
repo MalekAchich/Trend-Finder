@@ -116,6 +116,8 @@ async def test_ratings_refresh_the_taste_profile_before_the_read(db_sessionmaker
         assert (await s.execute(select(TasteProfile.version))).scalars().all() == [1]
     types = await types_of(db_sessionmaker, second)
     assert types.index("agent.thought") < types.index("character.read")
+    events = await Blackboard(db_sessionmaker).events_after(second, 0, limit=5000)
+    assert any(e["type"] == "agent.finished" and e["payload"]["agent"]["role"] == "learner" for e in events)
 
 
 async def test_phases_announce_once_and_trend_study_shows_up_as_an_agent(db_sessionmaker, tmp_path):
