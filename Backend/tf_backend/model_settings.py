@@ -35,7 +35,8 @@ def current(sv: Services, provider: str) -> dict[str, Any]:
     aliases = sv.registry.aliases.get(provider, {})
     main, fast = aliases.get("best"), aliases.get("fast")
     return {
-        "models": [{"id": m.model_id, "name": m.display_name or m.model_id, "efforts": list(m.reasoning_levels)}
+        "models": [{"id": m.model_id, "name": m.display_name or m.model_id, "efforts": list(m.reasoning_levels),
+                    "unavailable": m.unavailable}
                    for m in sorted(sv.registry.models(provider), key=lambda m: m.priority) if not m.hidden],
         "main": main, "fast": fast, "effort": sv.client.effort_override.get(provider),
         "efforts": efforts_for(sv, provider, [m for m in (main, fast) if m]),
@@ -45,10 +46,12 @@ def current(sv: Services, provider: str) -> dict[str, Any]:
 def validate(sv: Services, provider: str, main: str, fast: str, effort: str | None) -> None:
     if provider not in sv.adapters:
         raise ChoiceError(f"unknown provider {provider}")
-    known = {m.model_id for m in sv.registry.models(provider)}
+    known = {m.model_id: m for m in sv.registry.models(provider)}
     for model in (main, fast):
         if known and model not in known:
             raise ChoiceError(f"{model} isn't offered by {provider} right now")
+        if known and known[model].unavailable:
+            raise ChoiceError(f"{known[model].display_name or model} is {known[model].unavailable}")
     if effort is not None and effort not in efforts_for(sv, provider, [main, fast]):
         raise ChoiceError(f"effort {effort} isn't available for {main} and {fast}")
 

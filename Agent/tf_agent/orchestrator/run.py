@@ -25,7 +25,7 @@ from tf_agent.characters.folders import LoadedCharacter, load_character
 from tf_agent.characters.read import CharacterRead, render_brief
 from tf_agent.loop.agent import AgentEvent
 from tf_agent.loop.tools import Tool
-from tf_agent.models.errors import AllProvidersUnavailable, InvalidRequest
+from tf_agent.models.errors import AllProvidersUnavailable, ContentRefused, InvalidRequest
 from tf_agent.orchestrator.analysis import AnalysisStage, CandidateSink
 from tf_agent.orchestrator.blackboard import Blackboard
 from tf_agent.orchestrator.queue import Requeue, TaskQueue, WorkerPool
@@ -173,6 +173,16 @@ class Orchestrator:
         self._providers = itertools.cycle(list(roles.client.adapters) or [None])
         if getattr(roles.client, "on_switch", "absent") is None:
             roles.client.on_switch = self._on_switch
+        if getattr(roles.client, "on_refused", "absent") is None:
+            roles.client.on_refused = self._on_refused
+
+    async def _on_refused(self, ctx: Any, err: ContentRefused) -> None:
+        if ctx.run_id is None:
+            return
+        agent = {"id": str(ctx.task_id) if ctx.task_id else ctx.role, "role": ctx.role, "platform": None}
+        await self.blackboard.record_event(ctx.run_id, "agent.refused", {
+            "agent": agent, "provider": err.provider, "request_id": err.request_id, "detail": err.detail,
+            "message": err.message[:400]})
 
     async def _on_switch(self, ctx: Any, from_provider: str, to_provider: str, reason: str) -> None:
         if ctx.run_id is None:
@@ -447,10 +457,7 @@ class Orchestrator:
         for t in targets:
             try:
                 item = await self.tools.get_video(t.url)
-            except ToolFailure as e:
-                await self.blackboard.record_event(run_id, "candidate.rejected", {
-                    "agent": OWNER, "canonical_id": t.canonical_id, "reason": f"your target: {e.error.message}"})
-            else:
+                await self.store.upsert_videos([item])  # skeletons (e.g. Instagram without cookies) aren't stored
                 async with self._sm() as s:
                     stmt = pg_insert(Finding).values(run_id=run_id, canonical_id=item.canonical_id, source="owner",
                                                      why="picked by you").on_conflict_do_nothing()
@@ -459,6 +466,12 @@ class Orchestrator:
                 if finding_id is not None:
                     await self.queue.enqueue(run_id, None, "analyze", scope={"finding_id": str(finding_id),
                                                                              "canonical_id": item.canonical_id})
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # one bad target never stops the run (and is never retried forever)
+                reason = e.error.message if isinstance(e, ToolFailure) else f"{type(e).__name__}: {e}"[:200]
+                await self.blackboard.record_event(run_id, "candidate.rejected", {
+                    "agent": OWNER, "canonical_id": t.canonical_id, "reason": f"your target: {reason}"})
             async with self._sm() as s:
                 await s.execute(update(Target).where(Target.id == t.id).values(status="used", run_id=run_id))
                 await s.commit()
@@ -864,6 +877,10 @@ class Orchestrator:
                           "all providers usage-limited") from e
         except asyncio.CancelledError:
             raise
+        except ContentRefused as e:  # not retried: the same prompt would be refused again; it needs fixing
+            reason = f"refused by {e.provider} ({e.detail or 'safety filter'}, request {e.request_id or '?'})"
+            await emit("agent.finished", accepted=0, rejected=0, leads=0, failed=reason)
+            return {"failed": reason, "refused": True}
         except Exception as e:  # the stream must always show how a worker ended
             await emit("agent.finished", accepted=0, rejected=0, leads=0, failed=f"{type(e).__name__}: {e}"[:300])
             raise

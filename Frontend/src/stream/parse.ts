@@ -10,3 +10,8 @@ export function parseEvent(raw: MessageEvent): StreamEvent | null {
     return null;
   }
 }
+
+const FINAL = ["review_ready", "stopped", "failed"];
+
+/** The run is over: the server ends the stream, so the page must stop EventSource's automatic reconnects. */
+export const endsStream = (e: StreamEvent) => e.type === "run.state" && FINAL.includes(String(e.payload.state));

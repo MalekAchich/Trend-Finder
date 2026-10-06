@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -29,7 +30,14 @@ def db_reachable(url: str) -> bool:
     return _run_in_thread(ping, url)
 
 
+def _require_test_database(url: str) -> None:
+    name = make_url(url).database or ""
+    if not name.endswith("_test"):
+        raise RuntimeError(f"refusing to reset {name!r}: only databases whose name ends in _test are reset")
+
+
 async def _reset(url: str) -> None:
+    _require_test_database(url)
     engine = create_async_engine(url, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
@@ -44,10 +52,12 @@ async def _reset(url: str) -> None:
 
 
 def reset_schema_sync(url: str) -> None:
+    _require_test_database(url)
     _run_in_thread(_reset, url)
 
 
 async def truncate_all(engine: AsyncEngine) -> None:
+    _require_test_database(engine.url.render_as_string(hide_password=False))
     names = ", ".join(f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables))
     if names:
         async with engine.begin() as conn:

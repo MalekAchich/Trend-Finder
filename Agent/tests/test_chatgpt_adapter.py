@@ -210,3 +210,13 @@ async def test_reasoning_summary_is_returned():
     adapter, _ = make(lambda r: httpx.Response(200, headers=RATE_HEADERS, content=sse(*events)))
     resp = await adapter.complete(req(tools=[ADD], reasoning_effort="medium"))
     assert resp.reasoning == "Searching gym trends first." and resp.tool_calls[0].name == "add"
+
+
+def test_rate_headers_keep_both_windows():
+    rate = parse_rate_headers(httpx.Headers({
+        "x-codex-primary-used-percent": "12", "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": "1791300000", "x-codex-secondary-used-percent": "44",
+        "x-codex-secondary-window-minutes": "10080", "x-codex-secondary-reset-at": "1791700000"}))
+    assert rate.used_percent == 44.0
+    assert [(w.name, w.used_percent, w.window_minutes) for w in rate.windows] == [
+        ("five_hour", 12.0, 300), ("seven_day", 44.0, 10080)]

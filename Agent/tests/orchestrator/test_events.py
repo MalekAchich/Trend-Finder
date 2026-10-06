@@ -92,3 +92,31 @@ async def test_a_crashing_worker_still_reports_finished(db_sessionmaker, tmp_pat
     started = {e["payload"]["agent"]["id"] for e in events if e["type"] == "agent.started"}
     finished = {e["payload"]["agent"]["id"] for e in events if e["type"] == "agent.finished"}
     assert started and started == finished
+
+
+async def test_a_refused_worker_is_reported_and_not_retried(db_sessionmaker, tmp_path):
+    from sqlalchemy import select
+
+    from tf_agent.models.errors import ContentRefused
+    from tf_db.models import Task
+
+    world = World()
+    orig = world.complete
+
+    async def refuse(req):
+        if req.tools:
+            raise ContentRefused("a", "safeguards flagged this message. Details: `[reasoning_extraction]` "
+                                      "Request ID: req_abc123")
+        return await orig(req)
+
+    world.complete = refuse
+    orch = await build(db_sessionmaker, tmp_path, world)
+    run_id = await orch.create_run("testy", SETTINGS)
+    assert (await orch.execute(run_id)).state == "review_ready"
+    events = await events_of(db_sessionmaker, run_id)
+    refused = [e["payload"] for e in events if e["type"] == "agent.refused"]
+    assert refused and refused[0]["request_id"] == "req_abc123" and refused[0]["detail"] == "reasoning_extraction"
+    assert refused[0]["agent"]["role"] == "scout"
+    async with db_sessionmaker() as s:
+        attempts = (await s.execute(select(Task.attempts).where(Task.task_type == "scout"))).scalars().all()
+    assert attempts and max(attempts) == 1  # a refusal isn't retried: the prompt needs fixing

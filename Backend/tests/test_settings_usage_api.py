@@ -27,7 +27,8 @@ from tf_db.models import (
 )
 
 H = {"x-trendfinder-client": "test"}
-CLAUDE = [ModelInfo("claude", "opus", "latest opus", priority=1), ModelInfo("claude", "sonnet", "latest sonnet", priority=2)]
+CLAUDE = [ModelInfo("claude", "fable", "Fable 5.1", priority=1, unavailable="not included in your plan"),
+          ModelInfo("claude", "opus", "Opus 5.5", priority=2), ModelInfo("claude", "sonnet", "Sonnet 5.5", priority=3)]
 GPT = [ModelInfo("chatgpt", "gpt-6-astra", "GPT-6-Astra", priority=1, reasoning_levels=("low", "medium", "high")),
        ModelInfo("chatgpt", "gpt-6-luna", "GPT-6-Luna", priority=2, reasoning_levels=("low", "medium"))]
 
@@ -66,6 +67,8 @@ async def test_model_choices_list_and_apply(http, app_parts):
     assert (gpt["main"], gpt["fast"], gpt["effort"]) == ("gpt-6-astra", "gpt-6-luna", None)
     assert [x["id"] for x in gpt["models"]] == ["gpt-6-astra", "gpt-6-luna"] and gpt["efforts"] == ["low", "medium"]
     assert m["claude"]["efforts"] == ["low", "medium", "high", "xhigh", "max"]
+    fable = next(x for x in m["claude"]["models"] if x["id"] == "fable")
+    assert fable["name"] == "Fable 5.1" and fable["unavailable"] == "not included in your plan"
     r = await http.put("/api/settings/models", json={"provider": "chatgpt", "main": "gpt-6-luna", "fast": "gpt-6-luna",
                                                      "effort": "medium"})
     assert r.status_code == 200
@@ -78,6 +81,7 @@ async def test_model_choices_list_and_apply(http, app_parts):
     ({"provider": "chatgpt", "main": "gpt-6-astra", "fast": "gpt-6-luna", "effort": "high"}, "high"),
     ({"provider": "claude", "main": "opus", "fast": "sonnet", "effort": "ultra"}, "ultra"),
     ({"provider": "gemini", "main": "x", "fast": "y", "effort": None}, "gemini"),
+    ({"provider": "claude", "main": "fable", "fast": "sonnet", "effort": None}, "not included in your plan"),
 ])
 async def test_bad_model_choices_are_refused(http, body, needle):
     r = await http.put("/api/settings/models", json=body)
@@ -114,12 +118,18 @@ async def run_with_tokens(ctx, tokens: list[tuple[str, int, int]], state="review
 
 async def test_usage_reports_windows_and_tokens(http, app_parts):
     sv, ctx = app_parts
+    from tf_agent.models.types import RateWindow
+
     await sv.governor.observe_rate("chatgpt", RateInfo(used_percent=44.0, window_minutes=300, resets_at=1791300000.0))
+    await sv.governor.observe_rate("claude", RateInfo(used_percent=44.0, window_minutes=10080, resets_at=1791792000.0,
+                                                      windows=(RateWindow("five_hour", 43.0, 300, 1791337200.0),
+                                                               RateWindow("seven_day", 44.0, 10080, 1791792000.0))))
     await run_with_tokens(ctx, [("chatgpt", 1000, 200), ("claude", 3000, 100)])
     await run_with_tokens(ctx, [("chatgpt", 3000, 600)])
     u = {p["provider"]: p for p in (await http.get("/api/usage")).json()["providers"]}
     assert u["chatgpt"]["used_percent"] == 44.0 and u["chatgpt"]["window_minutes"] == 300
-    assert u["claude"]["used_percent"] is None and u["claude"]["status"] == "ok"
+    assert u["claude"]["used_percent"] == 44.0 and u["claude"]["status"] == "ok"
+    assert [(w["name"], w["used_percent"]) for w in u["claude"]["windows"]] == [("five_hour", 43.0), ("seven_day", 44.0)]
     assert u["chatgpt"]["tokens_today"] == 4800 and u["chatgpt"]["calls_today"] == 2
     assert u["chatgpt"]["avg_tokens_per_run"] == 2400 and u["claude"]["avg_tokens_per_run"] == 3100
 
@@ -161,3 +171,13 @@ async def test_character_detail_and_videos_by_found_date(http, app_parts):
     every = (await http.get("/api/characters/testy/videos")).json()
     assert [v["canonical_id"] for v in every] == ["tiktok:1", "tiktok:2"]
     assert (await http.get(f"/api/characters/{uuid.uuid4()}")).status_code == 404
+
+
+async def test_usage_falls_back_to_what_the_adapter_last_saw(http, app_parts):
+    """The startup model check talks to the Claude CLI directly; its usage numbers still reach Settings."""
+    from tf_agent.models.types import RateWindow
+
+    sv, _ = app_parts
+    sv.adapters["claude"].last_rate = RateInfo(used_percent=12.0, windows=(RateWindow("five_hour", 12.0, 300, None),))
+    u = {p["provider"]: p for p in (await http.get("/api/usage")).json()["providers"]}
+    assert u["claude"]["windows"][0]["used_percent"] == 12.0

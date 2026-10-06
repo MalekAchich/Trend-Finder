@@ -164,14 +164,31 @@ async def test_switch_hook_reports_fallback():
     assert (await client.complete(req(), CTX)).provider == "b" and len(switches) == 1  # a is cooling: no switch
 
 
-async def test_refusal_falls_back_without_cooling_the_provider():
+async def test_refusal_is_reported_and_logged_not_handed_to_another_provider(tmp_path):
+    """Owner (2026-10-06): fix refusals rather than fall back. The call fails loudly, with everything needed to fix it."""
+    import json as _json
+
     from tf_agent.models.errors import ContentRefused
 
-    a = FakeAdapter("a", [ContentRefused("a", "safeguards flagged this message")])
+    text = ("API Error: Opus 5.5's safeguards flagged this message (https://www.anthropic.com/legal/aup). "
+            "Details: `[reasoning_extraction]` Request ID: req_011CfmMEQCVbNDgQByPKp1CA")
+    a = FakeAdapter("a", [ContentRefused("a", text)])
     b = FakeAdapter("b", [text_response("b", "from b")])
     client, gov, _ = make_client({"a": a, "b": b})
-    assert (await client.complete(req(), CTX)).provider == "b"
-    assert gov.available("a") is True  # a refusal is about the message, not the subscription
+    client.refusal_log = tmp_path / "refusals.jsonl"
+    seen = []
+
+    async def on_refused(ctx, err):
+        seen.append((ctx.role, err.request_id, err.detail))
+
+    client.on_refused = on_refused
+    with pytest.raises(ContentRefused):
+        await client.complete(req(), CTX)
+    assert b.requests == [] and gov.available("a") is True
+    assert seen == [("scout", "req_011CfmMEQCVbNDgQByPKp1CA", "reasoning_extraction")]
+    row = _json.loads(client.refusal_log.read_text().splitlines()[0])
+    assert row["request_id"] == "req_011CfmMEQCVbNDgQByPKp1CA" and row["role"] == "scout"
+    assert row["system"] == "s" and "hi" in row["messages"]
 
 
 async def test_provider_effort_override_wins_over_the_role_effort():
@@ -189,3 +206,18 @@ async def test_governor_keeps_the_last_rate_window():
     gov = UsageGovernor(["a"], 4)
     await gov.observe_rate("a", RateInfo(used_percent=44.0, window_minutes=300, resets_at=1791300000.0))
     assert gov.last_rate("a").window_minutes == 300 and gov.last_rate("b") is None
+
+
+async def test_an_effort_the_resolved_model_cannot_take_is_dropped():
+    """Review #2: an effort saved for one model must not break calls once the alias resolves to another."""
+    from tf_agent.models.types import ModelInfo
+
+    a = FakeAdapter("a", [text_response("a", "x"), text_response("a", "y")],
+                    models=[ModelInfo("a", "a-model", reasoning_levels=("low", "medium"))])
+    client, _, _ = make_client({"a": a})
+    await client.router.registry.refresh()
+    client.effort_override["a"] = "ultra"
+    await client.complete(req(), CTX)
+    client.effort_override["a"] = "medium"
+    await client.complete(req(), CTX)
+    assert [r.reasoning_effort for r in a.requests] == [None, "medium"]

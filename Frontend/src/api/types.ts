@@ -145,10 +145,11 @@ export interface ProviderUsage {
   tokens_today: number;
   calls_today: number;
   avg_tokens_per_run: number | null;
+  windows: { name: string; used_percent: number; window_minutes: number | null; resets_at: number | null }[];
 }
 
 export interface ModelChoice {
-  models: { id: string; name: string; efforts: string[] }[];
+  models: { id: string; name: string; efforts: string[]; unavailable: string | null }[];
   main: string | null;
   fast: string | null;
   effort: string | null;

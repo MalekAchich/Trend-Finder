@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Protocol
 
 from tf_agent.models.base import ProviderAdapter
@@ -64,7 +67,9 @@ class ModelClient:
         self.max_attempts = max_attempts
         self.backoff_s = backoff_s
         self._sleep = sleep
-        self.effort_override: dict[str, str] = {}  # the owner's per-provider effort (Settings), beats role efforts
+        self.effort_override: dict[str, str] = {}
+        self.refusal_log: Path | None = None  # every refusal with what was sent, so the prompt can be fixed
+        self.on_refused: Callable[[CallContext, ContentRefused], Awaitable[None]] | None = None  # the owner's per-provider effort (Settings), beats role efforts
         # awaited when a call falls back to a later provider: (ctx, from_provider, to_provider, reason)
         self.on_switch: Callable[[CallContext, str, str, str], Awaitable[None]] | None = None
 
@@ -87,6 +92,36 @@ class ModelClient:
         except Exception as e:  # the ledger must never break a model call
             log.warning("call ledger write failed: %s", e)
 
+    def _supported_effort(self, provider: str, model: str, effort: str | None) -> str | None:
+        """Drop an effort the resolved model doesn't offer (the provider would reject the whole call)."""
+        if effort is None:
+            return None
+        info = next((m for m in self.router.registry.models(provider) if m.model_id == model), None)
+        if info is not None and info.reasoning_levels and effort not in info.reasoning_levels:
+            log.info("%s %s doesn't offer effort %s; using its default", provider, model, effort)
+            return None
+        return effort
+
+    async def _refused(self, ctx: CallContext, cand: RouteCandidate, req: CompletionRequest,
+                       err: ContentRefused) -> None:
+        if self.refusal_log is not None:
+            row = {"at": datetime.now(UTC).isoformat(), "role": ctx.role, "provider": cand.provider,
+                   "model": req.model, "run_id": str(ctx.run_id) if ctx.run_id else None,
+                   "task_id": str(ctx.task_id) if ctx.task_id else None, "request_id": err.request_id,
+                   "detail": err.detail, "message": err.message[:1000], "system": req.system[:4000],
+                   "messages": "\n".join(f"[{m.role}] {m.text()}" for m in req.messages)[-8000:]}
+            try:
+                self.refusal_log.parent.mkdir(parents=True, exist_ok=True)
+                with self.refusal_log.open("a") as f:
+                    f.write(json.dumps(row) + "\n")
+            except OSError as e:
+                log.warning("refusal log write failed: %s", e)
+        if self.on_refused is not None:
+            try:
+                await self.on_refused(ctx, err)
+            except Exception as e:  # narration must never mask the refusal
+                log.warning("refusal hook failed: %s", e)
+
     async def complete(self, req: CompletionRequest, ctx: CallContext, only: str | None = None,
                        prefer: str | None = None) -> CompletionResponse:
         last_error: Exception | None = None
@@ -101,7 +136,8 @@ class ModelClient:
                 except Exception as e:  # narration must never break a model call
                     log.warning("switch hook failed: %s", e)
             adapter = self.adapters[cand.provider]
-            effort = self.effort_override.get(cand.provider) or cand.effort or req.reasoning_effort
+            effort = self._supported_effort(cand.provider, cand.model,
+                                            self.effort_override.get(cand.provider) or cand.effort or req.reasoning_effort)
             concrete = replace(req, model=cand.model, reasoning_effort=effort)
             for attempt in range(1, self.max_attempts + 1):
                 started = time.monotonic()
@@ -120,10 +156,10 @@ class ModelClient:
                     await self.governor.mark_cooling(cand.provider, e.reset_at, e.message)
                     last_error = e
                     break
-                except ContentRefused as e:  # about this message, not the account: try the next provider
+                except ContentRefused as e:  # owner: fix refusals, never hand the call to another provider
                     await self._record(ctx, cand, concrete, started, None, e)
-                    last_error = e
-                    break
+                    await self._refused(ctx, cand, concrete, e)
+                    raise
                 except AuthRequired as e:
                     await self._record(ctx, cand, concrete, started, None, e)
                     await self.governor.mark_auth_error(cand.provider, e.message)

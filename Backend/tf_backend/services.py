@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -57,6 +58,7 @@ async def build_services(settings: AppSettings | None = None, *, with_db: bool =
     if store is not None:
         await governor.load()
     client = ModelClient(adapters, router, governor, ledger)
+    client.refusal_log = Path(__file__).resolve().parents[2] / "logs" / "refusals.jsonl"
     return Services(s, chatgpt_auth, claude_auth, adapters, registry, router, governor, client, engine, sm)
 
 

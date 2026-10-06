@@ -3,6 +3,12 @@ import { useModelSettings, useSaveModels, useUsage } from "../api/hooks";
 import type { ModelChoice, ProviderUsage } from "../api/types";
 
 const NAME: Record<string, string> = { claude: "Claude", chatgpt: "ChatGPT" };
+function resetText(epoch: number): string {
+  const d = new Date(epoch * 1000);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : d.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+}
 const at = (epoch: number | null) => epoch ? new Date(epoch * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : null;
 
 export default function Settings() {
@@ -12,7 +18,7 @@ export default function Settings() {
     <section className="wrap pb-24 pt-10">
       <h1 className="text-[30px] font-semibold">Settings</h1>
       <h2 className="mt-9 text-[15px] font-semibold">Usage</h2>
-      <p className="mt-1 text-[13px] text-mist">Live from your subscriptions. ChatGPT reports how much of its window is used; Claude only says when it's at its limit.</p>
+      <p className="mt-1 text-[13px] text-mist">Live from your subscriptions: both report their 5-hour and weekly limits with every call.</p>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         {(usage.data?.providers ?? []).map((u) => <UsageCard key={u.provider} u={u} />)}
       </div>
@@ -36,17 +42,21 @@ function UsageCard({ u }: { u: ProviderUsage }) {
         <span className={`flex items-center gap-1.5 text-[12.5px] ${cooling ? "text-warn" : u.status === "ok" ? "text-lime" : "text-bad"}`}>
           <span className={`h-1.5 w-1.5 rounded-full ${cooling ? "bg-warn" : u.status === "ok" ? "bg-lime" : "bg-bad"}`} />{label}</span>
       </div>
-      {u.used_percent != null ? (
-        <div className="mt-4">
-          <div className="flex justify-between text-[12.5px] text-mist">
-            <span>{u.window_minutes ? `${u.window_minutes >= 1440 ? "Weekly" : `${Math.round(u.window_minutes / 60)}-hour`} window` : "Usage window"}</span>
-            <span className="num">{Math.round(u.used_percent)}% used{at(u.resets_at) ? `, resets ${at(u.resets_at)}` : ""}</span>
-          </div>
-          <div className="mt-1.5 h-2 rounded-full bg-white/10">
-            <div className={`h-2 rounded-full ${u.used_percent > 85 ? "bg-warn" : "bg-lime"}`} style={{ width: `${Math.min(u.used_percent, 100)}%` }} />
-          </div>
+      {u.windows.length > 0 ? (
+        <div className="mt-4 space-y-3">
+          {u.windows.map((w) => (
+            <div key={w.name}>
+              <div className="flex justify-between text-[12.5px] text-mist">
+                <span>{w.name === "seven_day" ? "Weekly limit" : w.name === "five_hour" ? "5-hour limit" : w.name}</span>
+                <span className="num">{Math.round(w.used_percent)}% used{at(w.resets_at) ? `, resets ${resetText(w.resets_at!)}` : ""}</span>
+              </div>
+              <div className="mt-1.5 h-2 rounded-full bg-white/10">
+                <div className={`h-2 rounded-full ${w.used_percent > 85 ? "bg-warn" : "bg-lime"}`} style={{ width: `${Math.min(w.used_percent, 100)}%` }} />
+              </div>
+            </div>
+          ))}
         </div>
-      ) : <p className="mt-4 text-[12.5px] text-mist">{cooling && u.last_error ? u.last_error : "No usage percentage reported."}</p>}
+      ) : <p className="mt-4 text-[12.5px] text-mist">{cooling && u.last_error ? u.last_error : "Shown after the next call to this subscription."}</p>}
       <dl className="num mt-5 grid grid-cols-3 gap-3 text-[12.5px]">
         <div><dt className="text-mist">Tokens, last 24 h</dt><dd className="mt-0.5 text-[17px] font-semibold">{u.tokens_today.toLocaleString()}</dd></div>
         <div><dt className="text-mist">Calls, last 24 h</dt><dd className="mt-0.5 text-[17px] font-semibold">{u.calls_today.toLocaleString()}</dd></div>
@@ -72,7 +82,9 @@ function ModelCard({ provider, choice }: { provider: string; choice: ModelChoice
   const options = (value: string) => (
     <>
       {!offered(value) && value && <option value={value}>{value} (not offered now)</option>}
-      {choice.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+      {choice.models.map((m) => (
+        <option key={m.id} value={m.id} disabled={!!m.unavailable}>{m.name}{m.unavailable ? ` (${m.unavailable})` : ""}</option>
+      ))}
     </>
   );
   return (

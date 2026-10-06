@@ -45,7 +45,7 @@ async def test_tool_step_uses_isolation_flags_and_stdin(fake_claude):
     for flag in ("-p", "--strict-mcp-config", "--no-session-persistence"):
         assert flag in argv
     assert flag_value(argv, "--tools") == "" and flag_value(argv, "--setting-sources") == ""
-    assert flag_value(argv, "--output-format") == "json" and flag_value(argv, "--model") == "opus"
+    assert flag_value(argv, "--output-format") == "stream-json" and flag_value(argv, "--model") == "opus"
     assert flag_value(argv, "--system-prompt") == "You are a scout."
     schema = json.loads(flag_value(argv, "--json-schema"))
     assert schema["properties"]["calls"]["items"]["properties"]["name"]["enum"] == ["add"]
@@ -145,16 +145,13 @@ async def test_empty_calls_is_malformed(fake_claude):
         await adapter(fake_claude).complete(req(tools=[ADD]))
 
 
-async def test_status_models_and_health(fake_claude, monkeypatch):
+
+
+async def test_status_and_health(fake_claude, monkeypatch):
     monkeypatch.setenv("FAKE_CLAUDE_STATUS", json.dumps(
         {"loggedIn": True, "email": "nico@example.com", "subscriptionType": "max"}))
-    (fake_claude.tmp / "stats.json").write_text(json.dumps({"modelUsage": {
-        "claude-opus-5-5": {}, "claude-opus-4-1-20250805": {}, "claude-haiku-4-5-20251001": {}}}))
     a = adapter(fake_claude)
     assert a.auth.status()["connected"] is True
-    assert sorted(a.auth.discover_models()) == ["claude-haiku-4-5-20251001", "claude-opus-5-5"]
-    ids = [m.model_id for m in await a.list_models()]
-    assert ids[:3] == ["opus", "sonnet", "haiku"] and "claude-opus-5-5" in ids
     h = await a.health()
     assert h.connected is True and h.account == "nico@example.com (max)"
 
@@ -214,3 +211,75 @@ async def test_effort_is_passed_to_the_cli(fake_claude):
                           messages=[Message.user("hi")])
     await adapter(fake_claude).complete(r)
     assert flag_value(fake_claude.calls()[0]["argv"], "--effort") == "high"
+
+
+def stream_lines(env, model="claude-opus-5-5", five=0.43, week=0.44):
+    events = [
+        {"type": "system", "subtype": "init", "model": model},
+        {"type": "assistant", "message": {"model": model}},
+        {"type": "rate_limit_event", "rate_limit_info": {
+            "status": "allowed", "resetsAt": 1791337200, "rateLimitType": "five_hour",
+            "unifiedWindows": {"five_hour": {"utilization": five, "resetsAt": 1791337200},
+                               "seven_day": {"utilization": week, "resetsAt": 1791792000}}}},
+        env,
+    ]
+    return "\n".join(json.dumps(e) for e in events) + "\n"
+
+
+async def test_stream_output_gives_the_real_model_and_both_usage_windows(fake_claude):
+    """Plan 6 fix: Claude reports its usage windows in stream-json mode; plain json mode dropped them."""
+    fake_claude.respond(stream_lines(fake_claude.envelope(structured={"ok": True}, model="claude-opus-5-5")))
+    r = await adapter(fake_claude).complete(req(output_schema={"type": "object"}))
+    argv = fake_claude.calls()[0]["argv"]
+    assert flag_value(argv, "--output-format") == "stream-json" and "--verbose" in argv
+    assert r.model == "claude-opus-5-5" and r.structured == {"ok": True}
+    assert r.rate.used_percent == 44.0
+    assert [(w.name, w.used_percent, w.window_minutes, w.resets_at) for w in r.rate.windows] == [
+        ("five_hour", 43.0, 300, 1791337200.0), ("seven_day", 44.0, 10080, 1791792000.0)]
+
+
+async def test_out_of_credits_answer_is_an_error_not_a_reply(fake_claude):
+    """Found live: on a model the plan doesn't include, the CLI 'succeeds' with an out-of-credits message."""
+    from tf_agent.models.errors import ModelUnavailable
+
+    fake_claude.respond(stream_lines(fake_claude.envelope(
+        result="You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai"),
+        model="claude-fable-5-1"))
+    with pytest.raises(ModelUnavailable):
+        await adapter(fake_claude).complete(req())
+
+
+async def test_models_are_the_cli_aliases_with_their_real_names(fake_claude):
+    """Plan 6 fix: not a stale local stats cache; each alias is resolved by the CLI itself (cached for a day)."""
+    a = adapter(fake_claude)
+    fake_claude.respond(stream_lines(fake_claude.envelope(result="ok"), model="claude-sonnet-5-5"))
+    models = {m.model_id: m for m in await a.list_models()}
+    assert list(models) == ["fable", "opus", "sonnet", "haiku"]
+    assert models["sonnet"].display_name == "Sonnet 5.5" and models["sonnet"].unavailable is None
+    calls = len(fake_claude.calls())
+    assert calls == 4 and all(flag_value(c["argv"], "--model") in models for c in fake_claude.calls())
+    await a.list_models()
+    assert len(fake_claude.calls()) == calls  # cached: no new probes
+    fake_claude.respond(stream_lines(fake_claude.envelope(result="You're out of usage credits."), "claude-fable-5-1"))
+    a.resolved_path.unlink()
+    models = {m.model_id: m for m in await a.list_models()}
+    assert models["fable"].unavailable == "not included in your plan"
+
+
+def test_display_names():
+    from tf_agent.models.claude_cli import display_name
+
+    assert display_name("claude-opus-5-5") == "Opus 5.5"
+    assert display_name("claude-haiku-4-5-20251001") == "Haiku 4.5"
+    assert display_name("claude-fable-5-1") == "Fable 5.1"
+
+
+async def test_out_of_credits_with_429_is_unavailable_not_a_usage_limit(fake_claude):
+    """Found live: the CLI also sends this as is_error + 429; that must not cool the whole Claude provider."""
+    from tf_agent.models.errors import ModelUnavailable
+
+    fake_claude.respond(stream_lines(fake_claude.envelope(
+        result="You're out of usage credits. Switch to another model.", is_error=True, api_error_status=429),
+        model="claude-fable-5-1"))
+    with pytest.raises(ModelUnavailable):
+        await adapter(fake_claude).complete(req())

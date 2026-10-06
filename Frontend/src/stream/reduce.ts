@@ -28,7 +28,7 @@ const GROUPS: Record<string, Group> = {
   "agent.tool_call": "tools", "agent.tool_result": "tools", "agent.started": "tools", "agent.finished": "tools",
   "analysis.started": "tools", "analysis.finished": "tools",
   "video.saved": "videos",
-  "candidate.rejected": "problems", "error": "problems", "provider.switched": "problems",
+  "candidate.rejected": "problems", "error": "problems", "provider.switched": "problems", "agent.refused": "problems",
   "run.state": "status",
 };
 
@@ -71,6 +71,7 @@ export function describe(e: StreamEvent): string {
     case "analysis.finished": return `${p.verdict} ${p.canonical_id} ${p.reason ?? ""}`;
     case "video.saved": return `saved ${p.video?.url ?? ""}`;
     case "provider.switched": return `${p.from} → ${p.to}: ${p.reason ?? ""}`;
+    case "agent.refused": return `refused by ${p.provider} (${p.detail ?? "safety filter"}, request ${p.request_id ?? "?"})`;
     case "error": return String(p.message ?? "");
     case "run.state": return String(p.state ?? "");
     default: return "";
@@ -124,6 +125,9 @@ function applyOne(state: StreamState, e: StreamEvent) {
       break;
     case "agent.finished":
       touch(state, id, role, platform, { status: p.failed ? "failed" : "done", action: describe(e) }, e.created_at);
+      break;
+    case "agent.refused":
+      touch(state, id, role, platform, { status: "failed", action: describe(e) }, e.created_at);
       break;
     case "analysis.finished":
       touch(state, id, role, platform, { status: p.verdict === "failed" ? "failed" : "done", action: describe(e) }, e.created_at);

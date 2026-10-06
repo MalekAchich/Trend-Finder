@@ -124,7 +124,8 @@ class FakeStack:
         cid = canonical_id(url)
         item = VideoItem(canonical_id=cid, platform=platform_of(url), url=url, metrics=Metrics(views=5000),
                          media_access="login_required" if cid.startswith("instagram") else "ok")
-        await self.store.upsert_videos([item])
+        if item.media_access != "login_required":  # like PlatformTools: Instagram skeletons aren't stored
+            await self.store.upsert_videos([item])
         return item
 
 

@@ -1,3 +1,5 @@
+import re
+
 class ProviderError(Exception):
     def __init__(self, provider: str, message: str) -> None:
         super().__init__(f"[{provider}] {message}")
@@ -37,4 +39,18 @@ class AllProvidersUnavailable(ProviderError):
 
 
 class ContentRefused(ProviderError):
-    """The provider's safety layer declined this message. Another provider may answer; the account is fine."""
+    """The provider's safety layer declined this message. The account is fine; the prompt needs fixing."""
+
+    @property
+    def request_id(self) -> str | None:
+        m = re.search(r"Request ID: (req_[A-Za-z0-9]+)", self.message)
+        return m.group(1) if m else None
+
+    @property
+    def detail(self) -> str | None:
+        m = re.search(r"Details: `\[([a-z_]+)\]`", self.message)
+        return m.group(1) if m else None
+
+
+class ModelUnavailable(ProviderError):
+    """This model can't be used on the current subscription (e.g. Claude answers "out of usage credits")."""

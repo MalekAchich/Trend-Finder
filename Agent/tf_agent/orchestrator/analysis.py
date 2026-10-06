@@ -13,7 +13,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from tf_agent.models.errors import AllProvidersUnavailable, InvalidRequest
+from tf_agent.models.errors import AllProvidersUnavailable, ContentRefused, InvalidRequest
 from tf_agent.orchestrator.found import found_video
 from tf_agent.orchestrator.queue import Requeue, TaskQueue
 from tf_agent.pipeline.result import VideoAnalysisResult
@@ -162,6 +162,11 @@ class AnalysisStage:
         except AllProvidersUnavailable as e:
             reset = e.earliest_reset or time.time() + 900
             raise Requeue(datetime.fromtimestamp(reset, UTC), "all providers usage-limited") from e
+        except ContentRefused as e:  # not retried: the prompt needs fixing (logged with the request id)
+            await self._status(finding_id, "failed")
+            await self._finished(task, cid, "failed", item.platform,
+                                 f"the analyst was refused ({e.detail or 'safety filter'}, request {e.request_id or '?'})")
+            return {"error": "refused", "request_id": e.request_id}
         except (RoleOutputError, InvalidRequest) as e:
             await self._status(finding_id, "failed")
             await self._finished(task, cid, "failed", item.platform, f"analyst error: {str(e)[:160]}")

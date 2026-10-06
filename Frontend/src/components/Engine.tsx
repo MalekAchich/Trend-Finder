@@ -269,6 +269,14 @@ function EventRow({ e, startedAt }: { e: StreamEvent; startedAt: number }) {
     case "provider.switched":
       return row(<ArrowRightLeft size={13} className="text-warn" />,
         <p className="text-warn">{who} switched from {p.from} to {p.to}{p.reason ? `: ${p.reason}` : ""}</p>);
+    case "agent.refused":
+      return row(<AlertTriangle size={13} className="text-bad" />, (
+        <div className="rounded-lg border border-bad/40 bg-bad/[0.07] p-2.5">
+          <p className="text-bad">{who} was refused by {p.provider === "chatgpt" ? "ChatGPT" : "Claude"}
+            {p.detail ? ` (${String(p.detail).replace(/_/g, " ")})` : ""}. Not retried: the prompt needs a fix.</p>
+          {p.request_id && <p className="mt-0.5 text-[12px] text-mist">Request {p.request_id}, details in logs/refusals.jsonl</p>}
+        </div>
+      ));
     case "error":
       return row(<AlertTriangle size={13} className="text-bad" />, <p className="text-bad">{who} {p.message}</p>);
     case "round.finished":

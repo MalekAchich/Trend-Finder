@@ -8,12 +8,14 @@ import asyncio
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import shutil
 import signal
 import subprocess
 import tempfile
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -24,6 +26,7 @@ from tf_agent.models.errors import (
     ContentRefused,
     AuthRequired,
     InvalidRequest,
+    ModelUnavailable,
     MalformedResponse,
     ProviderError,
     TransientProviderError,
@@ -35,15 +38,17 @@ from tf_agent.models.types import (
     ImagePart,
     ModelInfo,
     ProviderHealth,
+    RateInfo,
+    RateWindow,
     ToolCall,
     ToolSpec,
     Usage,
 )
 
+log = logging.getLogger(__name__)
 PROVIDER = "claude"
 URL_RE = re.compile(r"https?://[^\s)>\"]+")
-MODEL_RE = re.compile(r"^claude-(haiku|sonnet|opus)-(\d+)-(\d+)(?:-(\d{8}))?$")
-CLAUDE_ALIASES = ("opus", "sonnet", "haiku")
+CLAUDE_ALIASES = ("fable", "opus", "sonnet", "haiku")  # what `claude --model` accepts for "latest X"
 # Variables that would move Claude calls off the owner's subscription (API key, proxy, cloud providers).
 STRIPPED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
                 "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_OAUTH_TOKEN")
@@ -88,7 +93,8 @@ def defuse(text: str) -> str:
 
 
 def isolation_flags(empty_mcp_config: Path) -> list[str]:
-    return ["-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", "",
+    # stream-json (+ --verbose) also reports the concrete model and the subscription's usage windows
+    return ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "dontAsk", "--tools", "",
             "--no-session-persistence", "--strict-mcp-config", "--mcp-config", str(empty_mcp_config),
             "--setting-sources", ""]
 
@@ -146,6 +152,48 @@ def render_prompt(req: CompletionRequest, image_ref: Callable[[ImagePart], str])
 
 
 CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+OUT_OF_CREDITS_RE = re.compile(r"out of usage credits", re.I)
+WINDOW_MINUTES = {"five_hour": 300, "seven_day": 10080}
+MODEL_NAME_RE = re.compile(r"^claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?$")
+RESOLVE_TTL_S = 24 * 3600
+
+
+def display_name(model_id: str) -> str:
+    m = MODEL_NAME_RE.match(model_id)
+    return f"{m[1].title()} {m[2]}.{m[3]}" if m else model_id
+
+
+def _envelope_from(stdout: str) -> dict[str, Any]:
+    """Accepts stream-json lines (init, rate_limit_event, …, result) or a single json envelope."""
+    events = [json.loads(line) for line in stdout.splitlines() if line.strip().startswith("{")]
+    if not events:
+        raise json.JSONDecodeError("no JSON output", stdout, 0)
+    envelope = next((e for e in reversed(events) if e.get("type") == "result"), None)
+    if envelope is None:
+        if len(events) == 1:
+            return events[0]
+        raise json.JSONDecodeError("no result event", stdout, 0)
+    envelope = dict(envelope)
+    for e in events:
+        if e.get("type") == "system" and e.get("subtype") == "init" and e.get("model"):
+            envelope["_model"] = e["model"]
+        if e.get("type") == "rate_limit_event":
+            envelope["_rate"] = e.get("rate_limit_info") or {}
+    return envelope
+
+
+def _rate_from(info: dict[str, Any] | None) -> RateInfo | None:
+    windows = []
+    for name, w in ((info or {}).get("unifiedWindows") or {}).items():
+        if isinstance(w, dict) and w.get("utilization") is not None:
+            resets = w.get("resetsAt")
+            windows.append(RateWindow(name, round(float(w["utilization"]) * 100, 1), WINDOW_MINUTES.get(name),
+                                      float(resets) if resets else None))
+    if not windows:
+        return None
+    top = max(windows, key=lambda w: w.used_percent)
+    return RateInfo(used_percent=top.used_percent, window_minutes=top.window_minutes, resets_at=top.resets_at,
+                    windows=tuple(windows))
 REFUSAL_RE = re.compile(r"safeguards flagged|usage policy|acceptable use policy|\banthropic\.com/legal/aup", re.I)
 
 
@@ -240,20 +288,6 @@ class ClaudeCliAuth:
         subprocess.run([self.bin, "auth", "logout"], capture_output=True, text=True, timeout=20,
                        stdin=subprocess.DEVNULL, env=clean_env())
 
-    def discover_models(self) -> list[str]:
-        try:
-            usage = json.loads(self.stats_path.read_text()).get("modelUsage", {})
-        except Exception:
-            usage = {}
-        latest: dict[str, tuple[tuple[int, int, int], str]] = {}
-        for model_id in usage:
-            m = MODEL_RE.match(model_id)
-            if m:
-                key = (int(m[2]), int(m[3]), int(m[4] or 0))
-                if m[1] not in latest or key > latest[m[1]][0]:
-                    latest[m[1]] = (key, model_id)
-        return [v[1] for v in latest.values()]
-
 
 class ClaudeCLIAdapter:
     name = PROVIDER
@@ -266,6 +300,7 @@ class ClaudeCLIAdapter:
         self.cwd = self.runtime_dir / "cwd"
         self.image_dir = self.runtime_dir / "images"
         self.mcp_config = self.runtime_dir / "empty-mcp.json"
+        self.last_rate: RateInfo | None = None  # the latest usage windows the CLI reported
         self.cwd.mkdir(parents=True, exist_ok=True)
         self.image_dir.mkdir(parents=True, exist_ok=True)
         if not self.mcp_config.exists():
@@ -305,7 +340,7 @@ class ClaudeCLIAdapter:
         stdout = out.decode(errors="replace").strip()
         stderr = err.decode(errors="replace").strip()
         try:
-            envelope = json.loads(stdout)
+            envelope = _envelope_from(stdout)
         except json.JSONDecodeError:
             failure = classify_failure(f"{stdout}\n{stderr}", None)
             if proc.returncode != 0 and type(failure) is ProviderError:
@@ -313,6 +348,11 @@ class ClaudeCLIAdapter:
             if proc.returncode != 0:
                 raise failure
             raise MalformedResponse(PROVIDER, "claude -p did not return JSON") from None
+        rate = _rate_from(envelope.get("_rate"))
+        if rate is not None:
+            self.last_rate = rate
+        if OUT_OF_CREDITS_RE.search(str(envelope.get("result") or "")):  # a model the plan lacks, not a usage limit
+            raise ModelUnavailable(PROVIDER, str(envelope.get("result"))[:300])
         if envelope.get("is_error") or envelope.get("subtype") not in (None, "success"):
             raise classify_failure(f"{envelope.get('result') or ''} {stderr}", envelope.get("api_error_status"))
         return envelope
@@ -338,7 +378,10 @@ class ClaudeCLIAdapter:
                              ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")),
             output_tokens=raw_usage.get("output_tokens"),
         )
-        model = next(iter(envelope.get("modelUsage") or {}), req.model)
+        model = envelope.get("_model") or next(iter(envelope.get("modelUsage") or {}), req.model)
+        if req.model in CLAUDE_ALIASES and model != req.model:
+            self._remember(req.model, model, None)
+        rate = _rate_from(envelope.get("_rate"))
         structured = envelope.get("structured_output")
 
         if req.tools:
@@ -347,8 +390,9 @@ class ClaudeCLIAdapter:
                      for c in (calls_raw or []) if isinstance(c, dict) and c.get("name")]
             if not calls:
                 raise MalformedResponse(PROVIDER, "tool step returned no calls")
-            return CompletionResponse(provider=PROVIDER, model=model, text=str(structured.get("note") or structured.get("thought") or ""),
-                                      tool_calls=calls, usage=usage)
+            return CompletionResponse(provider=PROVIDER, model=model,
+                                      text=str(structured.get("note") or structured.get("thought") or ""),
+                                      tool_calls=calls, usage=usage, rate=rate)
         if req.output_schema is not None:
             if not isinstance(structured, dict):
                 try:
@@ -356,16 +400,55 @@ class ClaudeCLIAdapter:
                 except json.JSONDecodeError:
                     raise MalformedResponse(PROVIDER, "structured output missing") from None
             return CompletionResponse(provider=PROVIDER, model=model, text=json.dumps(structured),
-                                      structured=structured, usage=usage)
+                                      structured=structured, usage=usage, rate=rate)
         return CompletionResponse(provider=PROVIDER, model=model, text=str(envelope.get("result") or ""),
-                                  usage=usage)
+                                  usage=usage, rate=rate)
+
+    # ---- which concrete model each alias means right now (asked from the CLI itself, cached for a day) ----
+    @property
+    def resolved_path(self) -> Path:
+        return self.runtime_dir / "resolved-models.json"
+
+    def _resolved(self) -> dict[str, dict[str, Any]]:
+        try:
+            return json.loads(self.resolved_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _remember(self, alias: str, model: str | None, unavailable: str | None) -> None:
+        data = self._resolved()
+        data[alias] = {"model": model, "unavailable": unavailable, "at": time.time()}
+        tmp = self.resolved_path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(self.resolved_path)
+
+    async def _probe(self, alias: str) -> None:
+        cmd = [self.auth.bin, *isolation_flags(self.mcp_config), "--model", alias,
+               "--system-prompt", "Reply with the single word ok."]
+        try:
+            envelope = await self._run(cmd, "ok?", 90)
+        except ModelUnavailable:
+            self._remember(alias, None, "not included in your plan")
+            return
+        except ProviderError as e:  # offline or limited: try again next time
+            log.info("could not resolve claude alias %s: %s", alias, e)
+            return
+        self._remember(alias, envelope.get("_model") or next(iter(envelope.get("modelUsage") or {}), None), None)
 
     async def list_models(self) -> list[ModelInfo]:
-        infos = [ModelInfo(PROVIDER, alias, display_name=f"latest {alias}", priority=i + 1)
-                 for i, alias in enumerate(CLAUDE_ALIASES)]
-        infos += [ModelInfo(PROVIDER, mid, display_name=mid, priority=10)
-                  for mid in await asyncio.to_thread(self.auth.discover_models)]
-        return infos
+        known = self._resolved()
+        stale = [a for a in CLAUDE_ALIASES
+                 if a not in known or time.time() - float(known[a].get("at") or 0) > RESOLVE_TTL_S]
+        if stale:
+            await asyncio.gather(*(self._probe(a) for a in stale))
+            known = self._resolved()
+        out = []
+        for i, alias in enumerate(CLAUDE_ALIASES):
+            info = known.get(alias) or {}
+            concrete = info.get("model")
+            out.append(ModelInfo(PROVIDER, alias, display_name=display_name(concrete) if concrete else f"Latest {alias}",
+                                 priority=i + 1, unavailable=info.get("unavailable")))
+        return out
 
     async def health(self) -> ProviderHealth:
         st = await asyncio.to_thread(self.auth.status)

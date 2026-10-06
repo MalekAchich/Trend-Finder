@@ -53,7 +53,7 @@ export function VideoCard({ video, fresh, onOpen, onRate }: Props) {
   );
 }
 
-function Feedback({ rated, note, rateable, onRate }: { rated: Rating | null; note: string | null; rateable: boolean;
+export function Feedback({ rated, note, rateable, onRate }: { rated: Rating | null; note: string | null; rateable: boolean;
   onRate: (r: Rating | null, n: string | null) => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note ?? "");

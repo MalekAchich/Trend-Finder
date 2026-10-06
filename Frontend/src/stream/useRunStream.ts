@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { FoundVideo, RunAgent, StreamEvent } from "../api/types";
-import { parseEvent } from "./parse";
+import { endsStream, parseEvent } from "./parse";
 import { applyEvents, initialStream, type StreamState } from "./reduce";
 
 export const EVENT_TYPES = [
   "run.state", "character.read", "trend.studied", "plan.created", "agent.started", "agent.thought", "agent.tool_call",
   "agent.tool_result", "agent.finished", "candidate.rejected", "analysis.started", "analysis.finished", "video.saved",
-  "provider.switched", "round.finished", "error",
+  "provider.switched", "agent.refused", "round.finished", "error",
 ];
 
 /**
@@ -44,6 +44,10 @@ export function useRunStream(runId: string | null, seed: RunAgent[], onLiveSave?
       pending.push(e);
       if (!frame) frame = requestAnimationFrame(flush);
       if (e.type === "video.saved" && Date.parse(e.created_at) > openedAt - 4000) saveRef.current?.(e.payload.video);
+      if (endsStream(e)) {  // finished: keep the events, stop reconnecting
+        source.close();
+        setConnected(false);
+      }
     };
     for (const t of EVENT_TYPES) source.addEventListener(t, onEvent as EventListener);
     source.onopen = () => setConnected(true);

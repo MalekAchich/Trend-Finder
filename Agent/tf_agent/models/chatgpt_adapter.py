@@ -27,6 +27,7 @@ from tf_agent.models.types import (
     ModelInfo,
     ProviderHealth,
     RateInfo,
+    RateWindow,
     TextPart,
     ToolCall,
     Usage,
@@ -116,10 +117,14 @@ def parse_rate_headers(headers: Mapping[str, str]) -> RateInfo | None:
     for name in ("primary", "secondary"):
         used = _num(headers, f"x-codex-{name}-used-percent", float)
         if used is not None:
-            windows.append(RateInfo(used_percent=used,
-                                    window_minutes=_num(headers, f"x-codex-{name}-window-minutes", int),
-                                    resets_at=_num(headers, f"x-codex-{name}-reset-at", float)))
-    return max(windows, key=lambda w: w.used_percent or 0.0) if windows else None
+            minutes = _num(headers, f"x-codex-{name}-window-minutes", int)
+            label = "five_hour" if name == "primary" else "seven_day"
+            windows.append(RateWindow(label, used, minutes, _num(headers, f"x-codex-{name}-reset-at", float)))
+    if not windows:
+        return None
+    top = max(windows, key=lambda w: w.used_percent)
+    return RateInfo(used_percent=top.used_percent, window_minutes=top.window_minutes, resets_at=top.resets_at,
+                    windows=tuple(windows))
 
 
 def _reset_at(headers: Mapping[str, str]) -> float | None:

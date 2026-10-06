@@ -44,3 +44,14 @@ def test_upgrade_matches_orm_and_downgrade_is_clean(_db_schema):
         assert tables == {"alembic_version"}
     finally:
         reset_schema_sync(url)
+
+
+def test_schema_reset_refuses_anything_but_a_test_database():
+    """Review #12: another project's production DB runs on this machine; the reset must never touch a real DB."""
+    import pytest
+
+    # unroutable hosts only: even if the guard regressed, nothing real could be reached
+    for url in ("postgresql+asyncpg://nobody:nothing@guard-check.invalid:1/trendfinder",
+                "postgresql+asyncpg://nobody:nothing@guard-check.invalid:1/prod_db"):
+        with pytest.raises(RuntimeError, match="_test"):
+            reset_schema_sync(url)

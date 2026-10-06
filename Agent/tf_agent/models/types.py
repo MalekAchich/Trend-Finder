@@ -90,10 +90,20 @@ class Usage:
 
 
 @dataclass(frozen=True)
+class RateWindow:
+    name: str  # "five_hour" | "seven_day"
+    used_percent: float
+    window_minutes: int | None = None
+    resets_at: float | None = None
+
+
+@dataclass(frozen=True)
 class RateInfo:
+    """The binding (fullest) usage window, plus every window the provider reported."""
     used_percent: float | None = None
     window_minutes: int | None = None
     resets_at: float | None = None
+    windows: tuple[RateWindow, ...] = ()
 
 
 @dataclass
@@ -118,6 +128,7 @@ class ModelInfo:
     priority: int = 100
     hidden: bool = False
     reasoning_levels: tuple[str, ...] = ()
+    unavailable: str | None = None  # e.g. "not included in your plan"
 
 
 @dataclass(frozen=True)

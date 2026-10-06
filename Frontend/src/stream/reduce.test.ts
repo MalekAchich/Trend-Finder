@@ -51,6 +51,12 @@ describe("stream reducer", () => {
     expect(s.agents.t3.status).toBe("done");
   });
 
+  it("marks a refused agent as failed and files the refusal under problems", () => {
+    const s = applyEvents(initialStream(), [ev("agent.refused", { agent: scout, provider: "claude", detail: "x", request_id: "req_1" })]);
+    expect(s.agents.t1.status).toBe("failed");
+    expect(groupOf("agent.refused")).toBe("problems");
+  });
+
   it("collects saved videos once each", () => {
     const video = { id: "f1", url: "u", score: 70 };
     const s = applyEvents(initialStream(), [
