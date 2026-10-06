@@ -279,3 +279,21 @@ async def test_failed_stop_curation_resumes_into_curation(db_sessionmaker, tmp_p
     assert failed.state == "interrupted" and failed.stop_reason == "stopped by the owner"
     done = await orch.execute(run_id)
     assert done.state == "review_ready" and await _rounds(db_sessionmaker, run_id) == 0
+
+async def test_contact_sheets_are_cleaned_after_curation(db_sessionmaker, tmp_path, monkeypatch):
+    """Plan 5 Task 3: sheets live only until the run is curated (both the normal end and an owner stop)."""
+    import tf_agent.orchestrator.run as run_mod
+
+    cleaned = []
+
+    async def fake_cleanup(sm, run_id):
+        cleaned.append(run_id)
+        return 0
+
+    monkeypatch.setattr(run_mod, "cleanup_run_media", fake_cleanup)
+    orch = await build(db_sessionmaker, tmp_path, World())
+    run_id = await orch.create_run("testy", SETTINGS)
+    assert (await orch.execute(run_id)).state == "review_ready" and cleaned == [run_id]
+    other = await orch.create_run("testy", SETTINGS)
+    await orch.stop_and_curate(other)
+    assert cleaned == [run_id, other]

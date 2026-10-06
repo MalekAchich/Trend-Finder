@@ -26,7 +26,7 @@ from tf_agent.pipeline.frames import key_frames, sample_frames
 from tf_agent.pipeline.motion import camera_motion
 from tf_agent.pipeline.pose import PoseAnalyzer, PoseStats
 from tf_agent.pipeline.result import VideoAnalysisResult
-from tf_agent.pipeline.retention import MediaRetention
+from tf_agent.pipeline.media import make_thumbnail
 from tf_agent.pipeline.sheet import make_contact_sheet
 from tf_agent.pipeline.transcript import Transcriber
 from tf_agent.tools.normalize import canonical_id, platform_of
@@ -137,19 +137,16 @@ class VideoAnalyzer:
     """One shared instance per process: analyses are single-flight per video and bounded by `max_parallel`."""
 
     def __init__(self, downloader: Downloader, *, media_dir: Path, heavy_runner: HeavyRunner,
-                 store: AnalysisStore | None = None, retention: MediaRetention | None = None,
-                 max_parallel: int = 2, fps: float = 2.0, max_duration_s: float = 600.0,
+                 store: AnalysisStore | None = None, max_parallel: int = 2, fps: float = 2.0, max_duration_s: float = 600.0,
                  heavy_timeout_s: float = 300.0) -> None:
         self.downloader = downloader
         self.media_dir = Path(media_dir)
         self.runner = heavy_runner
         self.store = store
-        self.retention = retention
         self.fps = fps
         self.max_duration_s = max_duration_s
         self.heavy_timeout_s = heavy_timeout_s
         self._slots = asyncio.Semaphore(max_parallel)
-        self._busy_dirs: set[Path] = set()
         self._inflight: dict[str, asyncio.Future[VideoAnalysisResult]] = {}
 
     async def _save(self, result: VideoAnalysisResult) -> VideoAnalysisResult:
@@ -181,7 +178,9 @@ class VideoAnalyzer:
             return VideoAnalysisResult.filtered(cid, "invalid_item")  # never fetch a URL that isn't this video
         if self.store is not None:
             existing = await self.store.get_analysis(cid, PIPELINE_VERSION)
-            if existing is not None:
+            stale = (existing is not None and not existing.filtered_reason
+                     and not (existing.contact_sheet_path and Path(existing.contact_sheet_path).exists()))
+            if existing is not None and not stale:  # stale: the sheet was cleaned up after an earlier run
                 return existing
             await self.store.upsert_videos([item])
         if item.media_access == "login_required":
@@ -191,24 +190,11 @@ class VideoAnalyzer:
         async with self._slots:
             return await self._analyze_media(item)
 
-    def _enforce_retention(self) -> None:
-        if self.retention is None:
-            return
-        try:
-            self.retention.enforce(self._busy_dirs)
-        except Exception as e:  # housekeeping must never mask an analysis result
-            log.warning("media retention failed: %s", e)
-
     async def _analyze_media(self, item: VideoItem) -> VideoAnalysisResult:
         cid = item.canonical_id
         safe = cid.replace(":", "_")  # canonical IDs are validated: [A-Za-z0-9_-] only
         video_dir, work = self.media_dir / "videos" / safe, self.media_dir / "frames" / safe
-        self._busy_dirs.update({video_dir, work})
         try:
-            if self.retention is not None and not self.retention.can_download():
-                self._enforce_retention()
-                if not self.retention.can_download():
-                    return VideoAnalysisResult.filtered(cid, "media_quota_full")  # not persisted: retry later
             try:
                 video = await self.downloader.download(item.url, video_dir)
             except ToolFailure as e:
@@ -217,9 +203,9 @@ class VideoAnalyzer:
             try:
                 meta = await probe(video)
             except (PipelineError, TimeoutError, ValueError, KeyError):
-                return await self._save(VideoAnalysisResult.filtered(cid, "probe_failed", media_path=str(video)))
+                return await self._save(VideoAnalysisResult.filtered(cid, "probe_failed"))
             if meta.duration_s > self.max_duration_s:
-                return await self._save(VideoAnalysisResult.filtered(cid, "too_long", media_path=str(video)))
+                return await self._save(VideoAnalysisResult.filtered(cid, "too_long"))
             step, sheet = "frames", None
             try:
                 cuts = await scene_cuts(video)
@@ -231,26 +217,34 @@ class VideoAnalyzer:
                 try:
                     heavy = await asyncio.wait_for(self.runner(job), self.heavy_timeout_s)
                 except TimeoutError:
-                    return VideoAnalysisResult.filtered(cid, "analysis_failed:heavy_timeout", media_path=str(video),
+                    return VideoAnalysisResult.filtered(cid, "analysis_failed:heavy_timeout",
                                                         contact_sheet_path=str(sheet))
             except (PipelineError, TimeoutError, ValueError, OSError, BrokenProcessPool, RuntimeError,
                     AttributeError, ExceptionGroup) as e:
                 log.warning("analysis of %s failed at %s: %s", cid, step, e)
-                return VideoAnalysisResult.filtered(cid, f"analysis_failed:{step}", media_path=str(video),
+                return VideoAnalysisResult.filtered(cid, f"analysis_failed:{step}",
                                                     contact_sheet_path=str(sheet) if sheet else None)
             stats = PoseStats(**heavy.pose)
             segments = clean_segments([t for t, _ in frames], stats.per_frame_single, cuts, heavy.motion_per_frame)
             best = segments[0] if segments else None
             cut_rate = len(cuts) / max(meta.duration_s, 1e-6) * 10
             score, reason = feasibility(stats, heavy.camera_motion, cut_rate, best)
+            at = (best[0] + best[1]) / 2 if best else meta.duration_s / 2
+            thumb = await self._thumbnail(video, self.media_dir / "thumbs" / f"{safe}.jpg", at)
             return await self._save(VideoAnalysisResult(
                 canonical_id=cid, probe=meta.as_dict(), cuts=cuts, cut_rate=round(cut_rate, 3),
                 transcript=heavy.transcript, pose=heavy.pose, camera_motion=round(heavy.camera_motion, 3),
                 best_clean_segment={"start_s": best[0], "end_s": best[1]} if best else None,
                 feasibility=score, filtered_reason=reason,
                 fingerprint={"frame_hashes": frame_hashes([p for _, p in keys])},
-                contact_sheet_path=str(sheet), media_path=str(video)))
-        finally:
+                contact_sheet_path=str(sheet), thumbnail_path=thumb))
+        finally:  # the video itself is never kept (only its URL, numbers and thumbnail)
             shutil.rmtree(work, ignore_errors=True)
-            self._busy_dirs.difference_update({video_dir, work})
-            self._enforce_retention()
+            shutil.rmtree(video_dir, ignore_errors=True)
+
+    async def _thumbnail(self, video: Path, out: Path, at_s: float) -> str | None:
+        try:
+            return str(await make_thumbnail(video, out, at_s))
+        except (PipelineError, TimeoutError, OSError) as e:  # a missing thumbnail never costs the analysis
+            log.warning("thumbnail for %s failed: %s", video, e)
+            return None

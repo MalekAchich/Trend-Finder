@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tf_agent.config import AppSettings
 from tf_agent.loop.tools import Tool
 from tf_agent.pipeline.analyze import HeavyRunner, VideoAnalyzer
-from tf_agent.pipeline.retention import MediaRetention
 from tf_agent.tools.agent_tools import build_tools
 from tf_agent.tools.cache import ToolCache
 from tf_agent.tools.health import PlatformRegistry
@@ -62,8 +61,7 @@ def build_tool_stack(settings: AppSettings, sessionmaker: async_sessionmaker[Asy
     return ToolStack(searx, ytdlp, registry, store, platforms, cache, limiter, enrich)
 
 
-def build_analyzer(settings: AppSettings, stack: ToolStack, runner: HeavyRunner, max_parallel: int = 2,
-                   protected=lambda: ()) -> VideoAnalyzer:
-    retention = MediaRetention(settings.media_dir, int(settings.media_quota_gb * 1024**3), protected)
+def build_analyzer(settings: AppSettings, stack: ToolStack, runner: HeavyRunner, max_parallel: int = 2
+                   ) -> VideoAnalyzer:
     return VideoAnalyzer(stack.ytdlp, media_dir=settings.media_dir, heavy_runner=runner, store=stack.store,
-                         retention=retention, max_parallel=max_parallel)
+                         max_parallel=max_parallel)

@@ -22,6 +22,7 @@ class VideoAnalysisResult:
     filtered_reason: str | None = None
     fingerprint: dict[str, Any] | None = None
     contact_sheet_path: str | None = None
+    thumbnail_path: str | None = None
     media_path: str | None = None
 
     @classmethod

@@ -1,6 +1,5 @@
 """Regression tests for the Plan 2 final review (pipeline)."""
 import asyncio
-import os
 import shutil
 from concurrent.futures.process import BrokenProcessPool
 
@@ -8,7 +7,6 @@ import pytest
 
 from tf_agent.pipeline.analyze import VideoAnalyzer, thread_runner
 from tf_agent.pipeline.pose import PoseAnalyzer
-from tf_agent.pipeline.retention import MediaRetention
 from tf_agent.pipeline.transcript import Transcriber
 from tf_agent.tools.types import Metrics, VideoItem
 
@@ -46,8 +44,7 @@ def runner():
 
 def make(tmp_path, source, run, **kw):
     media = tmp_path / "media"
-    return VideoAnalyzer(Downloader(source, kw.pop("delay", 0.0)), media_dir=media, heavy_runner=run,
-                         retention=MediaRetention(media, 5 * 1024**3, protected=set), **kw)
+    return VideoAnalyzer(Downloader(source, kw.pop("delay", 0.0)), media_dir=media, heavy_runner=run, **kw)
 
 
 @pytest.fixture(scope="module")
@@ -110,19 +107,3 @@ async def test_url_must_match_canonical_id(person_clips, tmp_path, runner):
     assert r.filtered_reason == "invalid_item"
 
 
-def test_retention_protects_directories_and_survives_vanishing_files(tmp_path):
-    busy = tmp_path / "frames" / "busy"
-    busy.mkdir(parents=True)
-    (busy / "f.jpg").write_bytes(b"x" * 600)
-    gone = tmp_path / "videos" / "old" / "v.mp4"
-    gone.parent.mkdir(parents=True)
-    gone.write_bytes(b"x" * 600)
-    os.utime(gone, (1, 1))
-
-    def protected():
-        gone.unlink()  # another worker deletes it mid-scan
-        return []
-
-    r = MediaRetention(tmp_path, quota_bytes=500, protected=protected)
-    r.enforce(extra_protected=[busy])
-    assert (busy / "f.jpg").exists()

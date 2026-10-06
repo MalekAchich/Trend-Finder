@@ -28,6 +28,7 @@ from tf_agent.models.errors import AllProvidersUnavailable
 from tf_agent.orchestrator.analysis import AnalysisStage, CandidateSink
 from tf_agent.orchestrator.blackboard import Blackboard
 from tf_agent.orchestrator.queue import Requeue, TaskQueue, WorkerPool
+from tf_agent.pipeline.media import cleanup_run_media
 from tf_agent.roles.runners import RoleOutputError, Roles, TaskSpec
 from tf_agent.roles.schemas import WorkPlan
 from tf_agent.scoring.directions import match_direction_key, normalize_key
@@ -262,6 +263,10 @@ class Orchestrator:
     async def _curate(self, run_id: uuid.UUID, ch: LoadedCharacter, weights: dict[str, float] | None) -> None:
         if self.curator is not None:
             await self.curator.curate(run_id, ch, weights=weights)
+        try:  # cross-check is done: the contact sheets aren't needed any more
+            await cleanup_run_media(self._sm, run_id)
+        except Exception as e:  # housekeeping never costs the run
+            log.warning("media cleanup for run %s failed: %s", run_id, e)
 
     async def _save_used(self, run_id: uuid.UUID, clock: ActiveClock) -> None:
         try:

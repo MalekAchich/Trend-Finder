@@ -66,7 +66,8 @@ class VideoStore:
             cuts=list(row.cuts or []), cut_rate=row.cut_rate, transcript=row.transcript, pose=row.pose,
             camera_motion=row.camera_motion, best_clean_segment=row.best_clean_segment, feasibility=row.feasibility,
             filtered_reason=row.filtered_reason, fingerprint=row.fingerprint,
-            contact_sheet_path=row.contact_sheet_path, media_path=row.media_path)
+            contact_sheet_path=row.contact_sheet_path, thumbnail_path=row.thumbnail_path,
+            media_path=row.media_path)
 
     async def save_analysis(self, result: VideoAnalysisResult) -> None:
         values = result.as_dict()

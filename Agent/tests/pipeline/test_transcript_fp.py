@@ -1,4 +1,3 @@
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -6,7 +5,6 @@ import pytest
 
 from tf_agent.pipeline.fingerprint import frame_hashes, hash_distance
 from tf_agent.pipeline.frames import sample_frames
-from tf_agent.pipeline.retention import MediaRetention
 from tf_agent.pipeline.transcript import Transcriber
 
 
@@ -71,35 +69,6 @@ async def test_frame_hash_distance(clips, tmp_path):
     assert hash_distance(a, a) == 0
     assert hash_distance(a, b) > 10
     assert hash_distance(a, []) == 64.0
-
-
-def make_file(path: Path, size: int, mtime: float) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"x" * size)
-    os.utime(path, (mtime, mtime))
-    return path
-
-
-def test_retention_evicts_oldest_unprotected_media(tmp_path):
-    old = make_file(tmp_path / "videos" / "old.mp4", 400, 1000)
-    keep = make_file(tmp_path / "videos" / "keep.mp4", 400, 900)
-    new = make_file(tmp_path / "videos" / "new.mp4", 400, 3000)
-    frames = make_file(tmp_path / "frames" / "x" / "f.jpg", 100, 500)
-    sheet = make_file(tmp_path / "sheets" / "s.jpg", 100, 100)
-    r = MediaRetention(tmp_path, quota_bytes=1000, protected=lambda: {keep.resolve()})
-    assert r.usage() == 1400
-    r.enforce()
-    assert keep.exists() and new.exists() and sheet.exists()
-    assert not frames.exists() and not old.exists()
-    assert r.usage() <= 1000
-
-
-def test_can_download_stops_at_95_percent(tmp_path):
-    make_file(tmp_path / "sheets" / "s.jpg", 940, 1)
-    r = MediaRetention(tmp_path, quota_bytes=1000, protected=set)
-    assert r.can_download()
-    make_file(tmp_path / "sheets" / "t.jpg", 20, 1)
-    assert not r.can_download()
 
 
 def test_audio_is_decoded_with_ffmpeg_not_pyav(clips):

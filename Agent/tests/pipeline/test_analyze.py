@@ -5,7 +5,6 @@ import pytest
 from tf_agent.pipeline import PIPELINE_VERSION
 from tf_agent.pipeline.analyze import VideoAnalyzer, process_pool_runner, thread_runner
 from tf_agent.pipeline.pose import PoseAnalyzer
-from tf_agent.pipeline.retention import MediaRetention
 from tf_agent.pipeline.transcript import Transcriber
 from tf_agent.tools.store import VideoStore
 from tf_agent.tools.types import Metrics, ToolFailure, VideoItem
@@ -45,8 +44,7 @@ def runner():
 
 def analyzer(tmp_path, source, runner, store=None):
     media = tmp_path / "media"
-    return VideoAnalyzer(FakeDownloader(source), media_dir=media, heavy_runner=runner, store=store,
-                         retention=MediaRetention(media, 5 * 1024**3, protected=set))
+    return VideoAnalyzer(FakeDownloader(source), media_dir=media, heavy_runner=runner, store=store)
 
 
 async def test_full_analysis_of_one_person_video(person_clips, tmp_path, runner):
