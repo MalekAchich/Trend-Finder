@@ -146,3 +146,19 @@ async def test_prefer_reorders_but_still_falls_back():
     client, _, _ = make_client({"a": a, "b": b})
     assert (await client.complete(req(), CTX, prefer="b")).provider == "b"
     assert (await client.complete(req(), CTX, prefer="b")).provider == "a"  # b limited → falls back to a
+
+
+async def test_switch_hook_reports_fallback():
+    """Plan 5 Task 4: the live stream says when an agent moves to the other subscription, and why."""
+    a = FakeAdapter("a", [UsageLimited("a", "5-hour limit reached", reset_at=None)])
+    b = FakeAdapter("b", [text_response("b", "from b"), text_response("b", "again")])
+    client, _, _ = make_client({"a": a, "b": b})
+    switches = []
+
+    async def on_switch(ctx, from_provider, to_provider, reason):
+        switches.append((ctx.role, from_provider, to_provider, reason))
+
+    client.on_switch = on_switch
+    assert (await client.complete(req(), CTX)).text == "from b"
+    assert switches == [("scout", "a", "b", "5-hour limit reached")]
+    assert (await client.complete(req(), CTX)).provider == "b" and len(switches) == 1  # a is cooling: no switch

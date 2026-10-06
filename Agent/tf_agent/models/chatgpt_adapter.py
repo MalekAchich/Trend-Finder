@@ -93,7 +93,7 @@ def build_payload(req: CompletionRequest) -> dict[str, Any]:
         payload["tool_choice"] = "none"
         payload["parallel_tool_calls"] = False
     if req.reasoning_effort:
-        payload["reasoning"] = {"effort": req.reasoning_effort}
+        payload["reasoning"] = {"effort": req.reasoning_effort, "summary": "auto"}
     if req.output_schema is not None:
         payload["text"] = {"format": {"type": "json_schema", "name": req.schema_name,
                                       "schema": req.output_schema, "strict": False}}
@@ -141,8 +141,10 @@ def _error_from_status(status: int, body: str, headers: Mapping[str, str]) -> Pr
     return InvalidRequest(PROVIDER, f"request rejected ({status}): {body[:500]}")
 
 
-async def _consume_sse(lines: AsyncIterator[str]) -> tuple[str, list[ToolCall], Usage]:
+async def _consume_sse(lines: AsyncIterator[str]) -> tuple[str, list[ToolCall], Usage, str]:
     texts: list[str] = []
+    summaries: list[str] = []
+    deltas: list[str] = []
     calls: list[ToolCall] = []
     usage = Usage()
     completed = False
@@ -157,9 +159,14 @@ async def _consume_sse(lines: AsyncIterator[str]) -> tuple[str, list[ToolCall], 
         except json.JSONDecodeError:
             continue
         kind = event.get("type")
-        if kind == "response.output_item.done":
+        if kind == "response.reasoning_summary_text.delta":
+            deltas.append(str(event.get("delta") or ""))
+        elif kind == "response.output_item.done":
             item = event.get("item") or {}
-            if item.get("type") == "message":
+            if item.get("type") == "reasoning":
+                summaries.extend(str(p.get("text") or "") for p in item.get("summary") or []
+                                 if p.get("type") == "summary_text")
+            elif item.get("type") == "message":
                 texts.extend(c.get("text", "") for c in item.get("content") or [] if c.get("type") == "output_text")
             elif item.get("type") == "function_call":
                 try:
@@ -186,7 +193,8 @@ async def _consume_sse(lines: AsyncIterator[str]) -> tuple[str, list[ToolCall], 
             raise InvalidRequest(PROVIDER, f"{code}: {message}")
     if not completed:
         raise TransientProviderError(PROVIDER, "stream ended without response.completed")
-    return "".join(texts), calls, usage
+    reasoning = "\n\n".join(t for t in summaries if t) or "".join(deltas)
+    return "".join(texts), calls, usage, reasoning.strip()
 
 
 def _levels(model: dict[str, Any]) -> tuple[str, ...]:
@@ -242,7 +250,7 @@ class ChatGPTOAuthAdapter:
                             body = (await r.aread()).decode(errors="replace")
                             raise _error_from_status(r.status_code, body, r.headers)
                         rate = parse_rate_headers(r.headers)
-                        text, calls, usage = await _consume_sse(r.aiter_lines())
+                        text, calls, usage, reasoning = await _consume_sse(r.aiter_lines())
             except httpx.TransportError as e:
                 raise TransientProviderError(PROVIDER, f"network error: {type(e).__name__}") from e
             structured = None
@@ -252,7 +260,7 @@ class ChatGPTOAuthAdapter:
                 except json.JSONDecodeError as e:
                     raise MalformedResponse(PROVIDER, "structured output was not valid JSON") from e
             return CompletionResponse(provider=PROVIDER, model=req.model, text=text, tool_calls=calls,
-                                      structured=structured, usage=usage, rate=rate)
+                                      structured=structured, usage=usage, rate=rate, reasoning=reasoning)
         raise AuthRequired(PROVIDER, "still unauthorized after token refresh: run `tf login chatgpt`")
 
     async def list_models(self) -> list[ModelInfo]:

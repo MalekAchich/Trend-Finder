@@ -6,6 +6,7 @@ import re
 import time
 import uuid
 from datetime import UTC, datetime
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from sqlalchemy import select, update
@@ -13,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tf_agent.models.errors import AllProvidersUnavailable, InvalidRequest
+from tf_agent.orchestrator.found import found_video
 from tf_agent.orchestrator.queue import Requeue, TaskQueue
 from tf_agent.pipeline.result import VideoAnalysisResult
 from tf_agent.roles.runners import RoleOutputError, Roles
@@ -20,7 +22,9 @@ from tf_agent.roles.schemas import Candidate
 from tf_agent.scoring.subscores import DEFAULT_WEIGHTS, freshness, momentum, overall, peer_stats
 from tf_agent.tools.store import VideoStore
 from tf_agent.tools.types import CANONICAL_ID_PATTERN, VideoItem
-from tf_db.models import Finding, FindingScore, Task, Video
+from tf_db.models import Finding, FindingScore, Task, Video, VideoAnalysis
+
+Emit = Callable[[uuid.UUID, str, dict[str, Any]], Awaitable[Any]]
 
 log = logging.getLogger(__name__)
 _CID_RE = re.compile(CANONICAL_ID_PATTERN)
@@ -85,9 +89,11 @@ def candidate_facts(item: VideoItem, analysis: VideoAnalysisResult) -> dict[str,
 
 class AnalysisStage:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], analyzer: Analyzer, roles: Roles,
-                 store: VideoStore, character: CharacterLike, weights: dict[str, float] | None = None) -> None:
+                 store: VideoStore, character: CharacterLike, weights: dict[str, float] | None = None,
+                 emit: Emit | None = None) -> None:
         self._sm = sessionmaker
         self.analyzer, self.roles, self.store, self.character = analyzer, roles, store, character
+        self._emit_fn = emit
         self.weights = weights or DEFAULT_WEIGHTS
         self._peers: dict[str, tuple[float, list[float], list[float]]] = {}
 
@@ -111,22 +117,44 @@ class AnalysisStage:
             await s.execute(stmt)
             await s.commit()
 
+    async def _emit(self, task: Task, type_: str, payload: dict[str, Any], platform: str | None = None) -> None:
+        if self._emit_fn is None:
+            return
+        agent = {"id": f"analyst-{str(task.id)[-6:]}", "role": "analyst", "platform": platform}
+        try:
+            await self._emit_fn(task.run_id, type_, {"agent": agent, **payload})
+        except Exception as e:  # narration never costs an analysis
+            log.warning("event %s failed: %s", type_, e)
+
+    async def _finished(self, task: Task, cid: str, verdict: str, platform: str | None, reason: str | None = None
+                        ) -> None:
+        await self._emit(task, "analysis.finished", {"canonical_id": cid, "verdict": verdict, "reason": reason},
+                         platform)
+        if verdict != "saved":
+            await self._emit(task, "candidate.rejected", {"canonical_id": cid, "reason": reason or verdict}, platform)
+
     async def handle(self, task: Task) -> dict[str, Any]:
         finding_id = uuid.UUID(task.scope["finding_id"])
-        item = await self.store.get_video(task.scope["canonical_id"])
+        cid = task.scope["canonical_id"]
+        item = await self.store.get_video(cid)
         if item is None:
             await self._status(finding_id, "failed")
+            await self._finished(task, cid, "failed", None, "video record missing")
             return {"error": "video record missing"}
+        await self._emit(task, "analysis.started", {"canonical_id": cid}, item.platform)
         try:
             analysis = await self.analyzer.analyze(item)
         except Exception as e:  # never leave a finding stuck in pending_analysis
             log.exception("analysis of %s crashed", item.canonical_id)
             await self._status(finding_id, "failed")
+            await self._finished(task, cid, "failed", item.platform, f"analysis crashed: {type(e).__name__}")
             return {"error": f"analysis crashed: {type(e).__name__}: {e}"[:300]}
         if analysis.filtered_reason or not analysis.contact_sheet_path:
             await self._save_score(finding_id, {"feasibility": analysis.feasibility})
             await self._status(finding_id, "filtered_feasibility")
-            return {"filtered": analysis.filtered_reason or "no_contact_sheet"}
+            reason = analysis.filtered_reason or "no_contact_sheet"
+            await self._finished(task, cid, "filtered", item.platform, f"filtered: {reason.replace('_', ' ')}")
+            return {"filtered": reason}
         try:
             judged = await self.roles.analyze(self.character.brief, self.character.canonical_image_path,
                                               analysis.contact_sheet_path, candidate_facts(item, analysis),
@@ -136,6 +164,7 @@ class AnalysisStage:
             raise Requeue(datetime.fromtimestamp(reset, UTC), "all providers usage-limited") from e
         except (RoleOutputError, InvalidRequest) as e:
             await self._status(finding_id, "failed")
+            await self._finished(task, cid, "failed", item.platform, f"analyst error: {str(e)[:160]}")
             return {"error": str(e)[:300]}
         now = datetime.now(UTC)
         vph_peers, eng_peers = await self._peer(item.platform)
@@ -149,7 +178,20 @@ class AnalysisStage:
             "adaptation_idea": r.adaptation_idea, "feasibility_notes": r.feasibility_notes,
             "niche_guess": r.niche_guess, "analyst_provider": judged.provider, "analyst_model": judged.model})
         await self._status(finding_id, "analyzed")
+        await self._saved(task, finding_id, item.platform)
         return {"overall": score, "fit": sub["fit"], "provider": judged.provider}
+
+    async def _saved(self, task: Task, finding_id: uuid.UUID, platform: str) -> None:
+        if self._emit_fn is None:
+            return
+        async with self._sm() as s:
+            f = await s.get(Finding, finding_id)
+            sc = await s.get(FindingScore, finding_id)
+            v = await s.get(Video, f.canonical_id)
+            a = (await s.execute(select(VideoAnalysis).where(VideoAnalysis.canonical_id == f.canonical_id)
+                                 .order_by(VideoAnalysis.created_at.desc()).limit(1))).scalar_one_or_none()
+        await self._emit(task, "video.saved", {"video": found_video(f, sc, v, a)}, platform)
+        await self._finished(task, f.canonical_id, "saved", platform)
 
 
 async def finding_rows(sessionmaker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) -> list[tuple[Finding, FindingScore | None]]:

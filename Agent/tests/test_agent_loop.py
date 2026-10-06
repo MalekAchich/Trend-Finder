@@ -111,15 +111,38 @@ async def test_submit_with_other_calls_skips_the_others():
     assert any(m.text().startswith("SKIPPED") for m in res.transcript if m.role == "tool")
 
 
-async def test_events_are_emitted():
+async def test_events_narrate_thoughts_calls_and_results():
+    """Plan 5 Task 4: the live stream shows what the agent thinks, calls and gets back."""
+    from tf_agent.models.types import CompletionResponse, ToolCall
+
     events = []
 
     async def sink(ev):
-        events.append(ev.kind)
+        events.append(ev)
 
-    client, _ = setup(call("add", {"a": 2, "b": 3}), call("submit_result", {"answer": 5}))
+    thinking = CompletionResponse("a", "a-model", text="I'll add the two numbers first.",
+                                  tool_calls=[ToolCall("c1", "add", {"a": 2, "b": 3})])
+    reasoned = CompletionResponse("a", "a-model", reasoning="5 is the sum, submitting.",
+                                  tool_calls=[ToolCall("c2", "submit_result", {"answer": 5})])
+    client, _ = setup(thinking, reasoned)
     await run(client, on_event=sink)
-    assert events == ["step", "tool", "step", "submitted"]
+    assert [e.kind for e in events] == ["thought", "tool_call", "tool_result", "thought", "submitted"]
+    assert events[0].text == "I'll add the two numbers first."
+    assert (events[1].tool, events[1].args) == ("add", {"a": 2, "b": 3})
+    assert (events[2].tool, events[2].text, events[2].ok) == ("add", "5", True)
+    assert events[3].text == "5 is the sum, submitting."
+
+
+async def test_failed_tool_result_is_marked_not_ok():
+    events = []
+
+    async def sink(ev):
+        events.append(ev)
+
+    client, _ = setup(call("nope", {}), call("submit_result", {"answer": 1}))
+    await run(client, on_event=sink)
+    result = next(e for e in events if e.kind == "tool_result")
+    assert result.ok is False and result.text.startswith("ERROR")
 
 
 async def test_parallel_tool_calls_run_concurrently():

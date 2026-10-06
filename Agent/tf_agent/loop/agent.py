@@ -28,11 +28,20 @@ class AgentBudget:
     max_transcript_chars: int = 150_000
 
 
+EventKind = Literal["thought", "tool_call", "tool_result", "submitted", "failed"]
+THOUGHT_CHARS = 1200
+RESULT_CHARS = 300
+
+
 @dataclass(frozen=True)
 class AgentEvent:
-    kind: Literal["step", "tool", "submitted", "failed"]
+    """One narrated moment of an agent's work, streamed live to the owner."""
+    kind: EventKind
     step: int
-    detail: str
+    text: str = ""
+    tool: str | None = None
+    args: dict[str, Any] | None = None
+    ok: bool | None = None
 
 
 @dataclass
@@ -110,9 +119,9 @@ async def run_agent(
     used_provider: str | None = None
     used_model: str | None = None
 
-    async def emit(kind: Literal["step", "tool", "submitted", "failed"], step: int, detail: str) -> None:
+    async def emit(kind: EventKind, step: int, text: str = "", **extra: Any) -> None:
         if on_event is not None:
-            await on_event(AgentEvent(kind, step, detail))
+            await on_event(AgentEvent(kind, step, text, **extra))
 
     for step in range(1, budget.max_steps + 1):
         last = step == budget.max_steps
@@ -124,7 +133,9 @@ async def run_agent(
         resp = await client.complete(req, ctx, only=provider, prefer=prefer_provider)
         used_provider, used_model = resp.provider, resp.model
         messages.append(Message.assistant(resp.text, resp.tool_calls))
-        await emit("step", step, ", ".join(c.name for c in resp.tool_calls) or "no tool call")
+        thought = (resp.reasoning or resp.text or "").strip()
+        if thought:
+            await emit("thought", step, thought[:THOUGHT_CHARS])
 
         if not resp.tool_calls:
             messages.append(Message.user(NUDGE_MSG))
@@ -153,10 +164,12 @@ async def run_agent(
             await emit("submitted", step, "result accepted")
             return AgentResult("succeeded", value, step, None, messages, used_provider, used_model)
 
+        for c in others:
+            await emit("tool_call", step, tool=c.name, args=c.arguments)
         outputs = await asyncio.gather(*(_execute(by_name, c, budget.max_tool_output_chars) for c in others))
         for c, out in zip(others, outputs, strict=True):
             messages.append(Message.tool_result(c, out))
-            await emit("tool", step, f"{c.name}: {out[:120]}")
+            await emit("tool_result", step, out[:RESULT_CHARS], tool=c.name, ok=not out.startswith("ERROR"))
 
     await emit("failed", budget.max_steps, "step budget exhausted")
     return AgentResult("failed", None, budget.max_steps, "step budget exhausted without a valid submit_result",

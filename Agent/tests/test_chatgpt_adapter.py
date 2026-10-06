@@ -82,7 +82,7 @@ def test_build_payload_structured_output_and_effort():
     assert p["text"]["format"] == {"type": "json_schema", "name": "plan", "schema": {"type": "object"},
                                    "strict": False}
     assert p["tool_choice"] == "none" and p["tools"] == []
-    assert p["reasoning"] == {"effort": "high"}
+    assert p["reasoning"] == {"effort": "high", "summary": "auto"}  # summaries feed the live stream
 
 
 def test_parse_rate_headers():
@@ -195,3 +195,18 @@ async def test_health_reports_account():
     adapter, _ = make(lambda r: httpx.Response(500))
     h = await adapter.health()
     assert h.connected is True and h.account == "nico@example.com (plus)"
+
+
+async def test_reasoning_summary_is_returned():
+    """Plan 5 Task 4: the reasoning summary becomes the agent's visible thought."""
+    events = (
+        {"type": "response.created"},
+        {"type": "response.reasoning_summary_text.delta", "delta": "Searching gym "},
+        {"type": "response.reasoning_summary_text.delta", "delta": "trends first."},
+        {"type": "response.output_item.done", "item": {"type": "reasoning", "summary": [
+            {"type": "summary_text", "text": "Searching gym trends first."}]}},
+        *TOOL_EVENTS[1:],
+    )
+    adapter, _ = make(lambda r: httpx.Response(200, headers=RATE_HEADERS, content=sse(*events)))
+    resp = await adapter.complete(req(tools=[ADD], reasoning_effort="medium"))
+    assert resp.reasoning == "Searching gym trends first." and resp.tool_calls[0].name == "add"

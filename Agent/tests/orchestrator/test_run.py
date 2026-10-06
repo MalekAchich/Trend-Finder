@@ -29,8 +29,9 @@ ANALYSIS = {"fit_breakdown": {"look": 8, "vibe": 8, "energy": 8, "niche": 8, "ad
 class World:
     """Fake provider that plays every role; behavior switches let each test shape the run."""
 
-    def __init__(self, duplicate_scopes=False, empty=False, limit_first_analysis=False):
+    def __init__(self, duplicate_scopes=False, empty=False, limit_first_analysis=False, ghost=False):
         self.name = "a"
+        self.ghost = ghost
         self.duplicate_scopes, self.empty = duplicate_scopes, empty
         self.limit_first_analysis = limit_first_analysis
         self.analysis_calls = 0
@@ -65,10 +66,12 @@ class World:
         tool_msgs = [m for m in req.messages if m.role == "tool"]
         if not tool_msgs:
             query = re.search(r"queries: (.+)", req.messages[0].text()).group(1)
-            return CompletionResponse("a", "a-model", tool_calls=[
+            return CompletionResponse("a", "a-model", text=f"Searching TikTok for {query} first.", tool_calls=[
                 ToolCall(f"c{uuid.uuid4().hex[:6]}", "tiktok_search", {"query": query})])
         ids = re.findall(r"tiktok:\d+", tool_msgs[-1].text())[:2]
         cands = [{"canonical_id": i, "why": "deadpan fit", "preliminary_fit": 7} for i in ids]
+        if self.ghost:
+            cands.insert(0, {"canonical_id": "tiktok:999999999999", "why": "made up", "preliminary_fit": 9})
         return CompletionResponse("a", "a-model", tool_calls=[
             ToolCall(f"c{uuid.uuid4().hex[:6]}", "submit_result", {"candidates": cands, "leads": [], "notes": ""})])
 

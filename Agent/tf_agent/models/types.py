@@ -105,6 +105,7 @@ class CompletionResponse:
     structured: dict[str, Any] | None = None
     usage: Usage = field(default_factory=Usage)
     rate: RateInfo | None = None
+    reasoning: str = ""  # the model's reasoning summary, when the provider exposes one
 
 
 @dataclass(frozen=True)

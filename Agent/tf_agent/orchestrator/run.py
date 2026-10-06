@@ -110,6 +110,19 @@ class RunOutcome:
     findings_analyzed: int
 
 
+def _json_safe(value: Any, max_chars: int = 400) -> Any:
+    """Tool arguments for the stream: plain JSON, long strings clipped."""
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v, max_chars) for k, v in list(value.items())[:20]}
+    if isinstance(value, list | tuple):
+        return [_json_safe(v, max_chars) for v in list(value)[:20]]
+    if isinstance(value, str):
+        return value[:max_chars]
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    return str(value)[:max_chars]
+
+
 class ToolProvider(Protocol):
     def tools_for(self, platform: str | None, seen_filter: SeenFilter | None = None) -> list[Tool]: ...
 
@@ -132,6 +145,15 @@ class Orchestrator:
         self.queue = TaskQueue(sessionmaker)
         self.sink = CandidateSink(sessionmaker, self.queue)
         self._providers = itertools.cycle(list(roles.client.adapters) or [None])
+        if getattr(roles.client, "on_switch", "absent") is None:
+            roles.client.on_switch = self._on_switch
+
+    async def _on_switch(self, ctx: Any, from_provider: str, to_provider: str, reason: str) -> None:
+        if ctx.run_id is None:
+            return
+        agent = {"id": str(ctx.task_id) if ctx.task_id else ctx.role, "role": ctx.role, "platform": None}
+        await self.blackboard.record_event(ctx.run_id, "provider.switched", {
+            "agent": agent, "from": from_provider, "to": to_provider, "reason": (reason or "")[:200]})
 
     # ---------- run lifecycle ----------
     async def _last_satisfaction(self, character_id: uuid.UUID) -> int | None:
@@ -235,7 +257,8 @@ class Orchestrator:
         ch = await self._character(run)
         clock = ActiveClock(settings.wall_clock_s - settings.used_s)
         weights = settings.weights or self.weights or await self._saved_weights()
-        analysis = AnalysisStage(self._sm, self.analyzer, self.roles, self.store, ch, weights)
+        analysis = AnalysisStage(self._sm, self.analyzer, self.roles, self.store, ch, weights,
+                                 emit=self.blackboard.record_event)
         try:
             if run.stop_reason and run.state in ("curating", "interrupted"):
                 stop_reason = run.stop_reason  # the stop decision was made before a crash: don't plan again
@@ -339,8 +362,10 @@ class Orchestrator:
             enqueued, rejections = await self._apply_plan(run_id, round_id, plan, settings, ch, n_explore)
             await self._record_round(round_id, plan=plan.model_dump(), rejections=rejections)
             await self.blackboard.record_event(run_id, "plan.created", {
-                "round": round_no, "summary": plan.reasoning_summary, "tasks": len(enqueued),
-                "rejections": rejections, "explore": n_explore, "exploit": n_exploit})
+                "agent": {"id": "lead", "role": "lead", "platform": None}, "round": round_no,
+                "reasoning": plan.reasoning_summary, "tasks": await self._task_cards(enqueued),
+                "refused": [{"goal": r.get("task", "-"), "reason": r["reason"]} for r in rejections],
+                "explore": n_explore, "exploit": n_exploit})
             await self._set_state(run_id, "running", round=round_no)
             if not await self._drain(run_id, ch, settings, analysis, clock):
                 await self._close_round(run_id, round_no)
@@ -599,6 +624,14 @@ class Orchestrator:
                 await s.commit()
         return enqueued, rejections
 
+    async def _task_cards(self, task_ids: list[uuid.UUID]) -> list[dict[str, Any]]:
+        if not task_ids:
+            return []
+        async with self._sm() as s:
+            rows = (await s.execute(select(Task).where(Task.id.in_(task_ids)).order_by(Task.created_at))).scalars()
+            return [{"task_id": str(t.id), "role": t.task_type, "platform": t.platform, "goal": t.goal}
+                    for t in rows]
+
     # ---------- execution ----------
     async def _handle_work(self, ch: LoadedCharacter, settings: RunSettings, task: Task) -> dict[str, Any]:
         label = hypothesis = ""
@@ -613,27 +646,42 @@ class Orchestrator:
                         direction_label=label, direction_hypothesis=hypothesis, lead=task.scope.get("lead_info"))
         tools = self.tools.tools_for(task.platform, self.blackboard.seen_filter_for(task.run_id, ch.character_id))
 
-        async def on_event(ev: AgentEvent) -> None:
-            await self.blackboard.record_event(task.run_id, "task.progress", {
-                "task_id": str(task.id), "kind": ev.kind, "step": ev.step, "detail": ev.detail[:200]})
+        agent = {"id": str(task.id), "role": task.task_type, "platform": task.platform}
 
+        async def emit(type_: str, **payload: Any) -> None:
+            await self.blackboard.record_event(task.run_id, type_, {"agent": agent, **payload})
+
+        async def on_event(ev: AgentEvent) -> None:
+            if ev.kind == "thought":
+                await emit("agent.thought", text=ev.text, step=ev.step)
+            elif ev.kind == "tool_call":
+                await emit("agent.tool_call", tool=ev.tool, args=_json_safe(ev.args or {}), step=ev.step)
+            elif ev.kind == "tool_result":
+                await emit("agent.tool_result", tool=ev.tool, summary=ev.text, ok=ev.ok, step=ev.step)
+
+        await emit("agent.started", goal=task.goal)
         try:
             res = await self.roles.work(spec, ch.brief, tools, run_id=task.run_id, task_id=task.id,
                                         prefer=next(self._providers), on_event=on_event)
         except AllProvidersUnavailable as e:
+            await emit("error", message="both subscriptions are at their usage limit; this search waits for the reset")
             raise Requeue(datetime.fromtimestamp(e.earliest_reset or time.time() + 900, UTC),
                           "all providers usage-limited") from e
         if res.status != "succeeded" or res.result is None:
             out = {"failed": res.error, "steps": res.steps, "provider": res.provider}
+            await emit("error", message=f"search failed: {res.error}"[:300])
         else:
             cands = res.result.candidates[: spec.max_candidates]
             accepted, rejected = await self.sink.submit(task.run_id, task.id, task.direction_id, cands)
+            for cid, reason in rejected:
+                await emit("candidate.rejected", canonical_id=cid, reason=reason)
             leads = await self.blackboard.add_leads(task.run_id, task.id,
                                                     [lead.model_dump() for lead in res.result.leads])
             out = {"accepted": accepted, "rejected": [list(r) for r in rejected], "leads": leads,
                    "notes": res.result.notes, "provider": res.provider, "steps": res.steps}
-        await self.blackboard.record_event(task.run_id, "task.finished", {"task_id": str(task.id),
-                                                                         "type": task.task_type, **out})
+        await emit("agent.finished", accepted=len(out.get("accepted") or []), rejected=len(out.get("rejected") or []),
+                   leads=len(out.get("leads") or []), failed=out.get("failed"), notes=out.get("notes"),
+                   provider=out.get("provider"))
         return out
 
     async def _drain(self, run_id: uuid.UUID, ch: LoadedCharacter, settings: RunSettings, analysis: AnalysisStage,

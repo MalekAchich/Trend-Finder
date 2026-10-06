@@ -63,6 +63,8 @@ class ModelClient:
         self.max_attempts = max_attempts
         self.backoff_s = backoff_s
         self._sleep = sleep
+        # awaited when a call falls back to a later provider: (ctx, from_provider, to_provider, reason)
+        self.on_switch: Callable[[CallContext, str, str, str], Awaitable[None]] | None = None
 
     async def _record(self, ctx: CallContext, cand: RouteCandidate, req: CompletionRequest, started: float,
                       resp: CompletionResponse | None, error: Exception | None) -> None:
@@ -86,9 +88,16 @@ class ModelClient:
     async def complete(self, req: CompletionRequest, ctx: CallContext, only: str | None = None,
                        prefer: str | None = None) -> CompletionResponse:
         last_error: Exception | None = None
+        failed_from: str | None = None
         for cand in self.router.candidates(ctx.role, only=only, prefer=prefer):
             if cand.provider not in self.adapters or not self.governor.available(cand.provider):
                 continue
+            if failed_from is not None and failed_from != cand.provider and self.on_switch is not None:
+                try:
+                    await self.on_switch(ctx, failed_from, cand.provider, getattr(last_error, "message", None)
+                                         or str(last_error))
+                except Exception as e:  # narration must never break a model call
+                    log.warning("switch hook failed: %s", e)
             adapter = self.adapters[cand.provider]
             concrete = replace(req, model=cand.model, reasoning_effort=cand.effort or req.reasoning_effort)
             for attempt in range(1, self.max_attempts + 1):
@@ -120,4 +129,5 @@ class ModelClient:
                 await self.governor.mark_ok(cand.provider)
                 await self.governor.observe_rate(cand.provider, resp.rate)
                 return resp
+            failed_from = cand.provider
         raise AllProvidersUnavailable(ctx.role, self.governor.earliest_recovery()) from last_error
