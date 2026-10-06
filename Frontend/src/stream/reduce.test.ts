@@ -36,6 +36,11 @@ describe("stream reducer", () => {
     expect(s.agents.t2.status).toBe("failed");
   });
 
+  it("shows reasoning summaries as plain text", () => {
+    const s = applyEvents(initialStream(), [ev("agent.thought", { agent: scout, text: "**Checking gym trends**\n\nNext I look" })]);
+    expect(s.agents.t1.action).toBe("Checking gym trends Next I look");
+  });
+
   it("collects saved videos once each", () => {
     const video = { id: "f1", url: "u", score: 70 };
     const s = applyEvents(initialStream(), [

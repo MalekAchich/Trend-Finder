@@ -2,7 +2,7 @@ import { AlertTriangle, ArrowRightLeft, Check, ChevronDown, CircleSlash, Eye, Fi
   Star, Wrench } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FoundVideo, RunDetail, StreamEvent } from "../api/types";
-import { filterEvents, type Group, type StreamState } from "../stream/reduce";
+import { filterEvents, plain, type Group, type StreamState } from "../stream/reduce";
 import { PlatformIcon, ROLE_LABEL, ROLE_TINT, STATE_TEXT, clock } from "./ui";
 
 const GROUP_LABEL: Record<Group, string> = {
@@ -182,7 +182,7 @@ function EventRow({ e, startedAt }: { e: StreamEvent; startedAt: number }) {
         </li>
       );
     case "agent.thought":
-      return row(<Sparkles size={13} />, <p className="text-snow/90">{who} <Collapsible text={p.text} /></p>);
+      return row(<Sparkles size={13} />, <p className="text-snow/90">{who} <Collapsible text={plain(p.text)} /></p>);
     case "character.read":
       return row(<Eye size={13} />, (
         <div className="rounded-xl border border-lime/30 bg-lime/[0.06] p-3.5">
@@ -210,7 +210,7 @@ function EventRow({ e, startedAt }: { e: StreamEvent; startedAt: number }) {
       return row(<Radio size={13} />, (
         <div className="rounded-xl border border-line-2 bg-white/[0.02] p-3.5">
           <p className="text-[12.5px] font-medium" style={{ color: ROLE_TINT.lead }}>Round {p.round} plan</p>
-          <p className="mt-1.5"><Collapsible text={p.reasoning} limit={420} /></p>
+          <p className="mt-1.5"><Collapsible text={plain(p.reasoning)} limit={420} /></p>
           <ul className="mt-2.5 space-y-1">
             {(p.tasks as { task_id: string; role: string; platform: string; goal: string }[]).map((t) => (
               <li key={t.task_id} className="flex gap-2 text-[12.5px]">

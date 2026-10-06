@@ -162,3 +162,13 @@ async def test_switch_hook_reports_fallback():
     assert (await client.complete(req(), CTX)).text == "from b"
     assert switches == [("scout", "a", "b", "5-hour limit reached")]
     assert (await client.complete(req(), CTX)).provider == "b" and len(switches) == 1  # a is cooling: no switch
+
+
+async def test_refusal_falls_back_without_cooling_the_provider():
+    from tf_agent.models.errors import ContentRefused
+
+    a = FakeAdapter("a", [ContentRefused("a", "safeguards flagged this message")])
+    b = FakeAdapter("b", [text_response("b", "from b")])
+    client, gov, _ = make_client({"a": a, "b": b})
+    assert (await client.complete(req(), CTX)).provider == "b"
+    assert gov.available("a") is True  # a refusal is about the message, not the subscription

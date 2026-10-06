@@ -50,10 +50,13 @@ function argText(args: Record<string, unknown> | undefined): string {
   return main == null ? "" : String(main);
 }
 
+/** Reasoning summaries arrive as light markdown ("**Title**\n\nText"); the stream shows plain text. */
+export const plain = (text: unknown) => String(text ?? "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+
 export function describe(e: StreamEvent): string {
   const p = e.payload;
   switch (e.type) {
-    case "agent.thought": return String(p.text ?? "");
+    case "agent.thought": return plain(p.text);
     case "agent.tool_call": return `${p.tool}: ${argText(p.args)}`.replace(/: $/, "");
     case "agent.tool_result": return `${p.tool} returned ${String(p.summary ?? "").slice(0, 160)}`;
     case "agent.started": return String(p.goal ?? "started");

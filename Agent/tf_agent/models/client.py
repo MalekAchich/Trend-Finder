@@ -12,6 +12,7 @@ from typing import Protocol
 
 from tf_agent.models.base import ProviderAdapter
 from tf_agent.models.errors import (
+    ContentRefused,
     AllProvidersUnavailable,
     AuthRequired,
     MalformedResponse,
@@ -115,6 +116,10 @@ class ModelClient:
                 except UsageLimited as e:
                     await self._record(ctx, cand, concrete, started, None, e)
                     await self.governor.mark_cooling(cand.provider, e.reset_at, e.message)
+                    last_error = e
+                    break
+                except ContentRefused as e:  # about this message, not the account: try the next provider
+                    await self._record(ctx, cand, concrete, started, None, e)
                     last_error = e
                     break
                 except AuthRequired as e:

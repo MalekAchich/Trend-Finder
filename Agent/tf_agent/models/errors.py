@@ -34,3 +34,7 @@ class AllProvidersUnavailable(ProviderError):
         super().__init__("router", f"no provider available for role {role!r}")
         self.role = role
         self.earliest_reset = earliest_reset
+
+
+class ContentRefused(ProviderError):
+    """The provider's safety layer declined this message. Another provider may answer; the account is fine."""

@@ -50,3 +50,45 @@ async def test_provider_switch_is_streamed(db_sessionmaker, tmp_path):
     ev = [e for e in await events_of(db_sessionmaker, run_id) if e["type"] == "provider.switched"]
     assert ev[0]["payload"]["from"] == "claude" and ev[0]["payload"]["to"] == "chatgpt"
     assert ev[0]["payload"]["agent"]["role"] == "scout"
+
+
+async def test_workers_with_leads_finish_cleanly(db_sessionmaker, tmp_path):
+    """Found live (Plan 5): add_leads returns a count; agent.finished must not crash on it."""
+    world = World()
+    orig = world.complete
+
+    async def with_leads(req):
+        resp = await orig(req)
+        for c in resp.tool_calls:
+            if c.name == "submit_result":
+                c.arguments["leads"] = [{"type": "hashtag", "value": "deskdance", "platform": "tiktok",
+                                         "why": "office dances are trending"}]
+        return resp
+
+    world.complete = with_leads
+    orch = await build(db_sessionmaker, tmp_path, world)
+    run_id = await orch.create_run("testy", SETTINGS)
+    await orch.execute(run_id)
+    finished = [e["payload"] for e in await events_of(db_sessionmaker, run_id) if e["type"] == "agent.finished"]
+    assert finished and all(f["failed"] is None for f in finished) and any(f["leads"] >= 1 for f in finished)
+
+
+async def test_a_crashing_worker_still_reports_finished(db_sessionmaker, tmp_path):
+    from tf_agent.models.errors import ProviderError
+
+    world = World()
+    orig = world.complete
+
+    async def boom(req):
+        if req.tools:  # every worker step blows up
+            raise ProviderError("a", "something unexpected")
+        return await orig(req)
+
+    world.complete = boom
+    orch = await build(db_sessionmaker, tmp_path, world)
+    run_id = await orch.create_run("testy", SETTINGS)
+    await orch.execute(run_id)
+    events = await events_of(db_sessionmaker, run_id)
+    started = {e["payload"]["agent"]["id"] for e in events if e["type"] == "agent.started"}
+    finished = {e["payload"]["agent"]["id"] for e in events if e["type"] == "agent.finished"}
+    assert started and started == finished

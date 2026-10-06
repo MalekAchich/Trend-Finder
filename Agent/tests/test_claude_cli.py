@@ -186,3 +186,23 @@ async def test_large_image_is_shrunk_under_the_cli_attach_limit(fake_claude):
     with Image.open(ref) as im:
         assert im.format == "JPEG" and max(im.size) <= 1568
         assert abs(im.size[0] / im.size[1] - 2688 / 1520) < 0.02
+
+
+def test_safeguard_refusal_is_classified_as_refused():
+    """Found live (Plan 5): a refusal must let the client try the other provider, not fail the task."""
+    from tf_agent.models.claude_cli import classify_failure
+    from tf_agent.models.errors import ContentRefused
+
+    err = classify_failure("API Error: Opus 5.5's safeguards flagged this message (https://www.anthropic.com/legal/aup)."
+                           " Details: `[reasoning_extraction]`", None)
+    assert isinstance(err, ContentRefused)
+
+
+async def test_tool_steps_carry_a_progress_note(fake_claude):
+    """Plan 5: the step field is a one-line `note` (a 'thought' field + 'think out loud' tripped Claude's safeguards)."""
+    fake_claude.respond(fake_claude.envelope(structured={"note": "Checking #deskdance", "calls": [
+        {"name": "add", "arguments": {"a": 1}}]}))
+    r = await adapter(fake_claude).complete(req(tools=[ADD]))
+    schema = json.loads(flag_value(fake_claude.calls()[0]["argv"], "--json-schema"))
+    assert "note" in schema["properties"] and "thought" not in schema["properties"]
+    assert r.text == "Checking #deskdance"

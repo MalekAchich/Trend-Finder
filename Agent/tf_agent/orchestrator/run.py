@@ -125,6 +125,13 @@ class RunOutcome:
     findings_analyzed: int
 
 
+def _count(value: Any) -> int:
+    """Results carry either lists (accepted, rejected) or counts (leads inserted)."""
+    if isinstance(value, int):
+        return value
+    return len(value) if value else 0
+
+
 def _json_safe(value: Any, max_chars: int = 400) -> Any:
     """Tool arguments for the stream: plain JSON, long strings clipped."""
     if isinstance(value, dict):
@@ -848,9 +855,15 @@ class Orchestrator:
             res = await self.roles.work(spec, ch.brief, tools, run_id=task.run_id, task_id=task.id,
                                         prefer=next(self._providers), on_event=on_event)
         except AllProvidersUnavailable as e:
+            await emit("agent.finished", accepted=0, rejected=0, leads=0, failed="waiting for a usage reset")
             await emit("error", message="both subscriptions are at their usage limit; this search waits for the reset")
             raise Requeue(datetime.fromtimestamp(e.earliest_reset or time.time() + 900, UTC),
                           "all providers usage-limited") from e
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # the stream must always show how a worker ended
+            await emit("agent.finished", accepted=0, rejected=0, leads=0, failed=f"{type(e).__name__}: {e}"[:300])
+            raise
         if res.status != "succeeded" or res.result is None:
             out = {"failed": res.error, "steps": res.steps, "provider": res.provider}
             await emit("error", message=f"search failed: {res.error}"[:300])
@@ -863,8 +876,8 @@ class Orchestrator:
                                                     [lead.model_dump() for lead in res.result.leads])
             out = {"accepted": accepted, "rejected": [list(r) for r in rejected], "leads": leads,
                    "notes": res.result.notes, "provider": res.provider, "steps": res.steps}
-        await emit("agent.finished", accepted=len(out.get("accepted") or []), rejected=len(out.get("rejected") or []),
-                   leads=len(out.get("leads") or []), failed=out.get("failed"), notes=out.get("notes"),
+        await emit("agent.finished", accepted=_count(out.get("accepted")), rejected=_count(out.get("rejected")),
+                   leads=_count(out.get("leads")), failed=out.get("failed"), notes=out.get("notes"),
                    provider=out.get("provider"))
         return out
 

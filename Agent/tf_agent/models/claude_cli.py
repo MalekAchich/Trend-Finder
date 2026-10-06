@@ -21,6 +21,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from tf_agent.models.errors import (
+    ContentRefused,
     AuthRequired,
     InvalidRequest,
     MalformedResponse,
@@ -96,7 +97,7 @@ def step_schema(tools: list[ToolSpec]) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "thought": {"type": "string"},
+            "note": {"type": "string", "description": "one-line progress note for the owner: what you check next"},
             "calls": {
                 "type": "array",
                 "minItems": 1,
@@ -144,12 +145,17 @@ def render_prompt(req: CompletionRequest, image_ref: Callable[[ImagePart], str])
     return "\n".join(out)
 
 
+REFUSAL_RE = re.compile(r"safeguards flagged|usage policy|acceptable use policy|\banthropic\.com/legal/aup", re.I)
+
+
 def classify_failure(text: str, api_status: Any) -> ProviderError:
     t = (text or "").strip()[:800]
     try:
         status = int(api_status) if api_status is not None else None
     except (TypeError, ValueError):
         status = None
+    if REFUSAL_RE.search(t):
+        return ContentRefused(PROVIDER, t)
     if status == 429 or LIMIT_RE.search(t):
         m = RESET_EPOCH_RE.search(t)
         return UsageLimited(PROVIDER, t or "usage limited", float(m.group(1)) if m else None)
@@ -338,7 +344,7 @@ class ClaudeCLIAdapter:
                      for c in (calls_raw or []) if isinstance(c, dict) and c.get("name")]
             if not calls:
                 raise MalformedResponse(PROVIDER, "tool step returned no calls")
-            return CompletionResponse(provider=PROVIDER, model=model, text=str(structured.get("thought") or ""),
+            return CompletionResponse(provider=PROVIDER, model=model, text=str(structured.get("note") or structured.get("thought") or ""),
                                       tool_calls=calls, usage=usage)
         if req.output_schema is not None:
             if not isinstance(structured, dict):
