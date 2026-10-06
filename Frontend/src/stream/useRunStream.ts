@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FoundVideo, RunAgent, StreamEvent } from "../api/types";
+import { parseEvent } from "./parse";
 import { applyEvents, initialStream, type StreamState } from "./reduce";
 
 export const EVENT_TYPES = [
@@ -38,7 +39,8 @@ export function useRunStream(runId: string | null, seed: RunAgent[], onLiveSave?
       setState((s) => applyEvents(s, batch));
     };
     const onEvent = (raw: MessageEvent) => {
-      const e = JSON.parse(raw.data) as StreamEvent;
+      const e = parseEvent(raw);
+      if (!e) return;
       pending.push(e);
       if (!frame) frame = requestAnimationFrame(flush);
       if (e.type === "video.saved" && Date.parse(e.created_at) > openedAt - 4000) saveRef.current?.(e.payload.video);

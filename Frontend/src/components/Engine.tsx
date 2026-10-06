@@ -58,8 +58,8 @@ export function Engine({ run, stream, connected, onStop, stopping, savedStripRef
             <p className="text-[14px] font-medium">{run.character.name}</p>
             <p className="flex items-center gap-2 text-[12.5px] text-mist">
               <span className={`h-1.5 w-1.5 rounded-full ${live ? "bg-lime pulse-dot" : "bg-mist"}`} />
-              <span role="status">{STATE_TEXT[state] ?? state}{state === "running" && run.round ? `, round ${run.round}` : ""}</span>
-              {run.stop_reason && !live && <span className="text-mist/80">({run.stop_reason})</span>}
+              <span role="status">{STATE_TEXT[state] ?? state}{run.stop_reason && !live ? ":" : ""}{state === "running" && run.round ? `, round ${run.round}` : ""}</span>
+              {run.stop_reason && !live && <span className="text-mist/80">{run.stop_reason}</span>}
             </p>
           </div>
           <span className="num text-[13px] text-mist">{clock(elapsed)} of {run.minutes} min</span>
@@ -250,8 +250,7 @@ function EventRow({ e, startedAt }: { e: StreamEvent; startedAt: number }) {
     case "analysis.started":
       return row(<Eye size={13} />, <p className="text-mist">{who} is watching {p.canonical_id}</p>);
     case "analysis.finished":
-      return p.verdict === "saved" ? null : row(<CircleSlash size={13} />,
-        <p className="text-mist">{who} {p.verdict} {p.canonical_id}{p.reason ? `: ${p.reason}` : ""}</p>);
+      return null; // the verdict shows as "saved" or as a rejection with its reason
     case "candidate.rejected":
       return row(<CircleSlash size={13} />, role === "owner"
         ? <p className="text-mist">Your target {p.canonical_id} couldn't be used: {String(p.reason).replace(/^your target: /, "")}</p>
