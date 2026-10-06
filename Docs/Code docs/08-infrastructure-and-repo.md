@@ -1,6 +1,6 @@
 # Code/08: Infrastructure & Repository
 
-**Status:** Draft v1, awaiting review. Library versions are pinned during implementation.
+**Status:** Built (Plans 1–4). Versions are pinned in `uv.lock` and `Frontend/package-lock.json`.
 
 ## Dev machine (checked 2026-10-05)
 
@@ -58,7 +58,7 @@ Characters stay outside: `CHARACTERS_DIR="../AI Influencers Characters"`.
 
 | Service | Image | Port | Notes |
 |---|---|---|---|
-| `db` | `pgvector/pgvector:pg17` | 5432 | Named volume; healthcheck |
+| `db` | `pgvector/pgvector:pg17` | 127.0.0.1:5433 | Named volume; healthcheck (5432 is taken by another project on this machine) |
 | `searxng` | `searxng/searxng` | 8888 | JSON format enabled in `config/searxng/settings.yml`; local only |
 
 The backend and frontend run natively (D-25).
@@ -89,22 +89,27 @@ PIPELINE_WORKERS=2
 
 | Command | Purpose |
 |---|---|
-| `tf doctor` | Check DB, SearXNG, ffmpeg, fpcalc, Playwright, provider auth, platform logins, disk quota |
-| `tf login tiktok\|instagram` | One-time visible-browser login for the throwaway profile |
-| `tf sync-characters` | Import/refresh characters from the folder |
-| `tf run <slug> [--platforms …]` | Start a run headless (same engine as the UI) |
+| `tf serve [--port 8000] [--no-open]` | API + web app; resumes unfinished runs (loopback only unless `--allow-remote`) |
+| `tf doctor` | Check providers, database, SearXNG, ffmpeg, disk space |
 | `tf migrate` | Alembic upgrade |
-| `tf media gc` | Force retention cleanup |
+| `tf login chatgpt [--device]` · `tf login claude` | Subscription logins |
+| `tf models` | Models each provider offers right now |
+| `tf sync-characters` · `tf seed add <slug> <url>` | Import characters; add a seed video |
+| `tf run <slug> [--platforms …] [--rounds N] [--tasks N] [--target N]` | Run headless (same engine as the UI) |
+| `tf runs` · `tf trends <run>` · `tf resume <run>` | List runs, show ranked cards, resume |
+| `tf search <platform> <query>` · `tf analyze <url>` · `tf demo-agent` | Debug the tools, the video pipeline and the agent loop |
 
 ## Dev workflow
 
 ```
-docker compose -f Database/docker-compose.yml up -d     # Postgres (pgvector) on 127.0.0.1:5433; SearXNG arrives in Plan 2
+docker compose -f Database/docker-compose.yml up -d     # Postgres on 127.0.0.1:5433, SearXNG on 127.0.0.1:8888
 uv sync
 cp .env.example .env           # once
 uv run tf migrate
 uv run tf login chatgpt        # once; `--device` if port 1455 is busy
 uv run tf doctor
-uv run uvicorn tf_backend.main:app --reload
+uv run uvicorn tf_backend.main:app --reload            # API only, with reload
+(cd Frontend && npm run dev)                            # UI with hot reload on :5173, proxies /api to :8000
 uv run pytest                  # unit + DB tests; live tests: uv run pytest -m live Agent/tests/live
+(cd Frontend && npx vitest run && npm run build && npm run smoke)
 ```

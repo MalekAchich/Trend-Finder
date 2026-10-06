@@ -30,3 +30,26 @@ def test_disk_check_levels():
     assert disk_check(3).level == "FAIL"
     assert disk_check(8).level == "WARN"
     assert disk_check(50).level == "OK"
+
+
+def test_serve_runs_the_api_with_the_built_ui_on_loopback(monkeypatch, tmp_path):
+    import uvicorn
+
+    import tf_backend.cli as cli
+
+    calls = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: calls.update(app=app, **kw))
+    (tmp_path / "index.html").write_text("x")
+    monkeypatch.setattr(cli, "FRONTEND_DIST", tmp_path)
+    out = CliRunner().invoke(app, ["serve", "--no-open"])
+    assert out.exit_code == 0, out.output
+    assert calls["app"] == "tf_backend.main:app" and calls["host"] == "127.0.0.1" and calls["port"] == 8000
+    assert "http://127.0.0.1:8000" in out.output
+
+
+def test_serve_refuses_a_public_host_without_opt_in(monkeypatch):
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+    out = CliRunner().invoke(app, ["serve", "--host", "0.0.0.0", "--no-open"])
+    assert out.exit_code != 0 and "no login" in out.output

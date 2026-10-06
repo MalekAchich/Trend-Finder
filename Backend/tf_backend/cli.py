@@ -459,3 +459,33 @@ def trends(run_id: str, top: int = typer.Option(20, min=1, max=100)) -> None:
             await engine.dispose()
 
     asyncio.run(go())
+
+
+FRONTEND_DIST = Path(__file__).resolve().parents[2] / "Frontend" / "dist"
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Interface to bind"),
+    port: int = typer.Option(8000, help="Port"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the web app in the browser"),
+    allow_remote: bool = typer.Option(False, "--allow-remote", help="Allow binding a non-loopback interface"),
+) -> None:
+    """Run the API and the web app (unfinished runs resume automatically)."""
+    import uvicorn
+
+    if host not in LOOPBACK and not allow_remote:
+        typer.echo(f"Refusing to bind {host}: the app has no login, so anyone on the network could use your "
+                   "subscriptions. Pass --allow-remote if you really mean it.", err=True)
+        raise typer.Exit(2)
+    if not (FRONTEND_DIST / "index.html").exists():
+        typer.echo("The web app isn't built yet; the API still works. Build it with: cd Frontend && npm run build",
+                   err=True)
+    url = f"http://{'127.0.0.1' if host in LOOPBACK else host}:{port}"
+    typer.echo(f"Trend Finder at {url}  (Ctrl+C to stop)")
+    if open_browser:
+        import threading
+
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+    uvicorn.run("tf_backend.main:app", host=host, port=port, log_level="info")

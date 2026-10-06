@@ -1,8 +1,36 @@
 # Trend Finder: Documentation
 
-**Status:** Spec stage, draft v1 (2026-10-05). No code yet; awaiting review.
+**Status:** Built (Plans 1–4 done, 2026-10-06). The docs describe the shipped system; each doc's Status line says how closely.
 
 Trend Finder is a local, personal, multi-agent app that finds viral trends and specific target videos (TikTok, Instagram Reels, YouTube Shorts) matching a given AI influencer character. It ranks them with explainable scores, learns from per-finding feedback, and turns approved findings into production briefs for manual Higgsfield / Kling 3.0 Motion Control production.
+
+## Quick start
+
+Needs Docker, [uv](https://docs.astral.sh/uv/), Node 22, ffmpeg, the Claude CLI signed in, and a ChatGPT subscription.
+
+```bash
+cd "Trend Finder App"
+docker compose -f Database/docker-compose.yml up -d   # Postgres on 127.0.0.1:5433 + SearXNG on :8888
+uv sync && cp .env.example .env                       # once
+uv run tf migrate
+uv run tf login chatgpt                               # once (Claude uses the CLI's own login)
+uv run tf doctor                                      # everything green?
+(cd Frontend && npm install && npm run build)          # once, and after frontend changes
+uv run tf sync-characters
+uv run tf serve                                       # opens http://127.0.0.1:8000
+```
+
+In the app:
+
+1. **Runs** → start a run.
+2. Watch it live.
+3. **Review**: mark each card (`U` select, `D` pass, `S` later), give the run a 1–10 score, then send it.
+4. On selected cards, choose **Write brief**.
+5. Open **Briefs** for the Kling prompt and the shot plan.
+
+Each round of feedback updates the character's taste profile, so the next run searches smarter.
+
+Everything also works from the terminal: `tf run nicolaiz`, `tf runs`, `tf trends <run>`, `tf resume <run>`.
 
 ## Reading order
 
