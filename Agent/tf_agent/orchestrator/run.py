@@ -351,8 +351,9 @@ class Orchestrator:
         """Phases before the first round; each is recorded so a resumed run skips what's done."""
         run = await self._reload(run_id)
         inputs = run.inputs or {}
-        if self.learner is not None and not inputs.get("taste_refreshed"):
+        if run.character_read is None or (self.learner is not None and not inputs.get("taste_refreshed")):
             await self._set_state(run_id, "reading_character")
+        if self.learner is not None and not inputs.get("taste_refreshed"):
             update_ = await self.learner.refresh_taste(run.character_id, run_id)
             if update_ is not None and update_.version is not None:
                 text_ = "Updated what I know about your taste from your latest ratings: " + " ".join(
@@ -372,7 +373,6 @@ class Orchestrator:
         return ch
 
     async def _read_character(self, run: Run, clock: ActiveClock) -> None:
-        await self._set_state(run.id, "reading_character")
         ch = await self._character(run)
         async with self._sm() as s:
             taste = (await s.execute(select(TasteProfile.body_md).where(TasteProfile.character_id == run.character_id)
@@ -401,6 +401,7 @@ class Orchestrator:
         await self._set_state(run_id, "studying_trends")
         for i, url in enumerate(todo, 1):
             agent = {"id": f"trend-{len(studies) + 1}", "role": "seed_study", "platform": None}
+            await self.blackboard.record_event(run_id, "agent.started", {"agent": agent, "goal": f"study {url}"})
             try:
                 item = await self.tools.get_video(url)
                 agent["platform"] = item.platform
@@ -409,16 +410,22 @@ class Orchestrator:
                     raise ToolFailure("media_unavailable", (result.filtered_reason or "no frames").replace("_", " "))
                 from tf_agent.orchestrator.analysis import candidate_facts
 
-                judged = await self._with_usage_wait(run_id, clock, "studying_trends", lambda: self.roles.study_seed(
-                    ch.brief, result.contact_sheet_path, candidate_facts(item, result), run_id=run_id))
+                judged = await self._with_usage_wait(
+                    run_id, clock, "studying_trends", lambda item=item, result=result: self.roles.study_seed(
+                        ch.brief, result.contact_sheet_path, candidate_facts(item, result), run_id=run_id))
                 study = judged.result.model_dump()
                 await self.blackboard.record_event(run_id, "trend.studied", {"agent": agent, "url": url,
                                                                              "study": study})
+                await self.blackboard.record_event(run_id, "agent.finished", {
+                    "agent": agent, "accepted": 0, "rejected": 0, "leads": len(study.get("search_angles") or []),
+                    "failed": None})
             except (ToolFailure, RoleOutputError, InvalidRequest) as e:
                 reason = e.error.message if isinstance(e, ToolFailure) else str(e)[:200]
                 study = {"error": reason}
                 await self.blackboard.record_event(run_id, "error", {
                     "agent": agent, "message": f"couldn't study {url}: {reason}"[:300]})
+                await self.blackboard.record_event(run_id, "agent.finished", {
+                    "agent": agent, "accepted": 0, "rejected": 0, "leads": 0, "failed": reason[:200]})
             studies[url] = study
             await self._save_inputs(run_id, trend_studies=studies)
 

@@ -116,3 +116,17 @@ async def test_ratings_refresh_the_taste_profile_before_the_read(db_sessionmaker
         assert (await s.execute(select(TasteProfile.version))).scalars().all() == [1]
     types = await types_of(db_sessionmaker, second)
     assert types.index("agent.thought") < types.index("character.read")
+
+
+async def test_phases_announce_once_and_trend_study_shows_up_as_an_agent(db_sessionmaker, tmp_path):
+    from tf_agent.learning.learner import Learner
+
+    orch = await build(db_sessionmaker, tmp_path, World())
+    orch.learner = Learner(db_sessionmaker, orch.roles)
+    run_id = await orch.create_run("testy", settings(trend_urls=[TREND]))
+    await orch.execute(run_id)
+    events = await Blackboard(db_sessionmaker).events_after(run_id, 0, limit=5000)
+    states = [e["payload"]["state"] for e in events if e["type"] == "run.state"]
+    assert states.count("reading_character") == 1
+    kinds = [(e["type"], (e["payload"].get("agent") or {}).get("role")) for e in events]
+    assert kinds.index(("agent.started", "seed_study")) < kinds.index(("trend.studied", "seed_study"))

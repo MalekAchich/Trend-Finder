@@ -43,7 +43,7 @@ Trend Finder App/
 │   ├── pyproject.toml
 │   └── tf_backend/
 │       ├── main.py               # FastAPI app; lifespan starts the orchestrator
-│       ├── api/                  # characters, runs, trends, feedback, briefs, providers, platforms, settings, media, events (SSE)
+│       ├── api/                  # characters, runs (+ SSE events), videos (+ feedback), providers, media
 │       └── cli.py                # `tf` command (Typer)
 │   └── tests/
 ├── Frontend/                     # Vite + React + TS + Tailwind + shadcn/ui
@@ -94,8 +94,7 @@ PIPELINE_WORKERS=2
 | `tf migrate` | Alembic upgrade |
 | `tf login chatgpt [--device]` · `tf login claude` | Subscription logins |
 | `tf models` | Models each provider offers right now |
-| `tf sync-characters` · `tf seed add <slug> <url>` | Import characters; add a seed video |
-| `tf run <slug> [--platforms …] [--rounds N] [--tasks N] [--target N]` | Run headless (same engine as the UI) |
+| `tf run <slug> [--platforms …] [--freshness week] [--trend-url URL]… [--target URL[=slug]]…` | Run headless (same engine as the page; characters sync automatically) |
 | `tf runs` · `tf trends <run>` · `tf resume <run>` | List runs, show ranked cards, resume |
 | `tf search <platform> <query>` · `tf analyze <url>` · `tf demo-agent` | Debug the tools, the video pipeline and the agent loop |
 
