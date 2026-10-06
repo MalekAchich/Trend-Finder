@@ -44,7 +44,6 @@ from tf_db.models import (
     Run,
     RunFeedback,
     ScopeClaim,
-    Setting,
     TasteProfile,
     Task,
 )
@@ -163,19 +162,13 @@ class Orchestrator:
                 Run.character_id == character_id).order_by(RunFeedback.updated_at.desc()).limit(1))
                     ).scalar_one_or_none()
 
-    async def _saved_weights(self) -> dict[str, float] | None:
-        """Scoring weights the owner saved in Settings (None → defaults)."""
-        async with self._sm() as s:
-            return (await s.execute(select(Setting.value).where(Setting.key == "weights"))).scalar_one_or_none()
-
     async def create_run(self, slug: str, settings: RunSettings) -> uuid.UUID:
         ch = await load_character(self._sm, slug)
         async with self._sm() as s:
             rated = (await s.execute(select(func.count()).select_from(Direction).where(
                 Direction.character_id == ch.character_id, (Direction.alpha + Direction.beta) > 0))).scalar_one()
         ratio = explore_ratio(await self._last_satisfaction(ch.character_id), rated)
-        settings = replace(settings, weights=settings.weights or self.weights or await self._saved_weights()
-                           or dict(DEFAULT_WEIGHTS))  # copy: never mutate the caller's settings
+        settings = replace(settings, weights=settings.weights or self.weights or dict(DEFAULT_WEIGHTS))  # copy: never mutate the caller's settings
         async with self._sm() as s:
             run = Run(character_id=ch.character_id, character_version_id=ch.version_id, state="created",
                       settings=asdict(settings), explore_ratio_used=ratio)
@@ -256,7 +249,7 @@ class Orchestrator:
         settings = RunSettings(**run.settings)
         ch = await self._character(run)
         clock = ActiveClock(settings.wall_clock_s - settings.used_s)
-        weights = settings.weights or self.weights or await self._saved_weights()
+        weights = settings.weights or self.weights or dict(DEFAULT_WEIGHTS)
         analysis = AnalysisStage(self._sm, self.analyzer, self.roles, self.store, ch, weights,
                                  emit=self.blackboard.record_event)
         try:

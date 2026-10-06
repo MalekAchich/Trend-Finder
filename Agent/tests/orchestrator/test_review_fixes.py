@@ -198,17 +198,14 @@ async def test_event_cursor_catches_late_commits(db_sessionmaker):
     assert first == ["a"] and second == ["late"] and third == []
 
 
-# ---- I7: weights are fixed per run ----
-async def test_run_settings_capture_saved_weights(db_sessionmaker, tmp_path):
-    from tf_db.models import Setting
+# ---- I7: weights are fixed per run (Plan 5: always the defaults in code) ----
+async def test_run_settings_capture_default_weights(db_sessionmaker, tmp_path):
+    from tf_agent.scoring.subscores import DEFAULT_WEIGHTS
 
     orch = await build(db_sessionmaker, tmp_path, World())
-    async with db_sessionmaker() as s:
-        s.add(Setting(key="weights", value={"fit": 0.7, "feasibility": 0.1, "momentum": 0.1, "freshness": 0.1}))
-        await s.commit()
     run_id = await orch.create_run("testy", SETTINGS)
     async with db_sessionmaker() as s:
-        assert (await s.get(Run, run_id)).settings["weights"]["fit"] == 0.7
+        assert (await s.get(Run, run_id)).settings["weights"] == dict(DEFAULT_WEIGHTS)
 
 
 # ---- M4: analyzer crash fails the finding instead of leaving it pending ----
