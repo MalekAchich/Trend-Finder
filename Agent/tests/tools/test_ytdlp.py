@@ -115,3 +115,10 @@ async def test_download_returns_file_path(tmp_path):
 async def test_live_shorts_metadata():
     v = await YtDlp().metadata("https://www.youtube.com/shorts/TestShort01")
     assert v.canonical_id == "youtube:TestShort01" and (v.metrics.views or 0) > 0
+
+
+
+def test_instagram_creator_is_the_username_not_the_display_name():
+    info = {"id": "TESTREEL002", "extractor_key": "Instagram", "webpage_url": "https://www.instagram.com/p/TESTREEL002/",
+            "uploader": "Creator G Display", "channel": "creator_g", "duration": 10}
+    assert info_to_video_item(info).creator.handle == "creator_g"

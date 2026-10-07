@@ -85,7 +85,8 @@ function ManualCard({ video, characters }: { video: ManualVideo; characters: Cha
             <span className="line-clamp-2 text-[12px] font-medium leading-snug">{st?.format ?? video.caption ?? ""}</span>
             <span className="mt-1.5 flex justify-between text-[10.5px] opacity-70">
               <span>{video.creator ? `@${video.creator}` : ""}</span>
-              <span className="num">{[formatViews(video.views) && `${formatViews(video.views)} views`, length].filter(Boolean).join(", ")}</span>
+              <span className="num">{[video.views != null ? `${formatViews(video.views)} views`
+                : video.likes != null ? `${formatViews(video.likes)} likes` : null, length].filter(Boolean).join(", ")}</span>
             </span>
           </span>
         )}

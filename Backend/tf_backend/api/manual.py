@@ -28,7 +28,7 @@ def _id(raw: str) -> uuid.UUID:
         raise HTTPException(404, "unknown video") from None
 
 
-def _check_later(c: AppContext, ids: list[uuid.UUID]) -> None:
+def _check_later(c: AppContext, ids: list[uuid.UUID], fresh: bool = False) -> None:
     """Each new link is looked up in the background; its card fills in (or shows the problem) when done."""
     service = _service(c)
     slots: asyncio.Semaphore = c.extras.setdefault("manual_check_slots", asyncio.Semaphore(CHECKS_AT_ONCE))
@@ -36,7 +36,7 @@ def _check_later(c: AppContext, ids: list[uuid.UUID]) -> None:
 
     async def one(video_id: uuid.UUID) -> None:
         async with slots:
-            await service.check(video_id)
+            await service.check(video_id, fresh=fresh)
 
     for video_id in ids:
         task = asyncio.create_task(one(video_id))
@@ -94,7 +94,7 @@ async def recheck(video_id: str, c: AppContext = Depends(ctx)) -> dict[str, str]
     if not any(v["id"] == str(vid) for v in await _service(c).list()):
         raise HTTPException(404, "unknown video")
     await _service(c)._update(vid, status="checking", problem=None)
-    _check_later(c, [vid])
+    _check_later(c, [vid], fresh=True)
     return {"state": "checking"}
 
 

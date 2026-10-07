@@ -194,9 +194,9 @@ class PlatformTools:
             return items, 0
         return await self.seen_filter(items)
 
-    async def _metadata(self, platform: str, url: str, cid: str | None) -> VideoItem:
+    async def _metadata(self, platform: str, url: str, cid: str | None, fresh: bool = False) -> VideoItem:
         key = {"cid": cid or url}
-        if self.cache is not None and (cached := await self.cache.get("video_meta", key)) is not None:
+        if not fresh and self.cache is not None and (cached := await self.cache.get("video_meta", key)) is not None:
             return VideoItem.model_validate(cached)
         async with self._enrich_slots:
             item: VideoItem = await self._guarded(platform, lambda: self.ytdlp.metadata(url))
@@ -350,7 +350,7 @@ class PlatformTools:
         return await self._guarded("web", lambda: self.searx.search(query, max_results=max_results,
                                                                      time_range=time_range), self.search_limiter)
 
-    async def get_video(self, url: str) -> VideoItem:
+    async def get_video(self, url: str, fresh: bool = False) -> VideoItem:
         platform = platform_of(url)
         if platform is None:
             raise ToolFailure("invalid_input", "not a TikTok, Instagram, YouTube or X URL")
@@ -359,7 +359,7 @@ class PlatformTools:
             if cid is None:
                 raise ToolFailure("invalid_input", "not an Instagram reel URL")
             return _skeleton(cid, None, url, "login_required")
-        item = await self._metadata(platform, url, cid)
+        item = await self._metadata(platform, url, cid, fresh=fresh)
         if self.on_items is not None:
             await self.on_items([item])
         return item

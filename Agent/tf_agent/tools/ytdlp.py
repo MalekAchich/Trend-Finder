@@ -69,7 +69,12 @@ def info_to_video_item(info: dict[str, Any]) -> VideoItem:
         n = norm_hashtag(str(t))
         if n and n not in tags:
             tags.append(n)
-    handle = info.get("uploader_id") if platform == "youtube" else info.get("uploader") or info.get("uploader_id")
+    if platform == "youtube":
+        handle = info.get("uploader_id")
+    elif platform == "instagram":  # `uploader` is sometimes the display name; `channel` is the username
+        handle = info.get("channel") or info.get("uploader")
+    else:
+        handle = info.get("uploader") or info.get("uploader_id")
     ts = info.get("timestamp")
     track = (info.get("track") or "").strip() or None
     artists = info.get("artists") or ([info["artist"]] if info.get("artist") else [])

@@ -23,7 +23,7 @@ from tf_db.models import Character, Finding, FindingScore, ManualVideo, Referenc
 
 MAX_ADD = 100
 UNSET: Any = object()
-GetVideo = Callable[[str], Awaitable[VideoItem]]
+GetVideo = Callable[..., Awaitable[VideoItem]]  # (url, fresh=False)
 FetchImage = Callable[[str], Awaitable[bytes]]
 
 
@@ -114,8 +114,9 @@ class ManualVideos:
             await s.commit()
         return new
 
-    async def check(self, video_id: uuid.UUID) -> None:
-        """Looks the video up (metadata with the connected accounts) and keeps a small thumbnail."""
+    async def check(self, video_id: uuid.UUID, fresh: bool = False) -> None:
+        """Looks the video up (metadata with the connected accounts) and keeps a small thumbnail. `fresh`: skip
+        cached metadata (a "check again" means look now)."""
         assert self._get_video is not None and self._thumbs is not None
         async with self._sm() as s:
             row = await s.get(ManualVideo, video_id)
@@ -123,7 +124,7 @@ class ManualVideos:
         if url is None:
             return
         try:
-            item = await self._get_video(url)
+            item = await (self._get_video(url, fresh=True) if fresh else self._get_video(url))
         except ToolFailure as e:
             await self._update(video_id, status="problem", problem=e.error.message)
             return
@@ -145,12 +146,12 @@ class ManualVideos:
             except Exception:  # no thumbnail is fine: the card shows the platform instead
                 thumb = None
         async with self._sm() as s:
-            await s.execute(pg_insert(Video).values(
-                canonical_id=item.canonical_id, platform=item.platform, url=item.url,
-                creator_handle=item.creator.handle, creator_followers=item.creator.followers, caption=item.caption,
-                hashtags=item.hashtags, sound_id=item.sound.id, sound_title=item.sound.title, posted_at=item.posted_at,
-                duration_s=item.duration_s, metrics=item.metrics.model_dump(), media_access=item.media_access)
-                .on_conflict_do_nothing(index_elements=[Video.canonical_id]))
+            meta = dict(platform=item.platform, url=item.url, creator_handle=item.creator.handle,
+                        creator_followers=item.creator.followers, caption=item.caption, hashtags=item.hashtags,
+                        sound_id=item.sound.id, sound_title=item.sound.title, posted_at=item.posted_at,
+                        duration_s=item.duration_s, metrics=item.metrics.model_dump(), media_access=item.media_access)
+            await s.execute(pg_insert(Video).values(canonical_id=item.canonical_id, **meta)  # a re-check refreshes it
+                            .on_conflict_do_update(index_elements=[Video.canonical_id], set_=meta))
             row = await s.get(ManualVideo, video_id)
             dup = (await s.execute(select(ManualVideo).where(ManualVideo.canonical_id == item.canonical_id,
                                                              ManualVideo.id != video_id))).scalar_one_or_none()
@@ -257,7 +258,8 @@ class ManualVideos:
                 "platform_id": m.canonical_id.split(":", 1)[1] if m.canonical_id else None,
                 "thumbnail_url": thumb_url(m.thumbnail_path), "status": m.status, "problem": m.problem,
                 "creator": v.creator_handle if v else None, "caption": v.caption if v else None,
-                "views": (v.metrics or {}).get("views") if v else None, "duration_s": v.duration_s if v else None,
+                "views": (v.metrics or {}).get("views") if v else None,
+                "likes": (v.metrics or {}).get("likes") if v else None, "duration_s": v.duration_s if v else None,
                 "posted_at": v.posted_at.isoformat() if v and v.posted_at else None,
                 "is_reference": m.is_reference, "target": target, "study": studies.get(m.id),
                 "added_at": m.created_at.isoformat() if m.created_at else None,

@@ -27,18 +27,22 @@ for (const [w, h, name] of [[1440, 900, "desktop"], [1280, 800, "laptop"], [390,
   const overflow = await p.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
   check(!overflow, `${name}: no horizontal scroll`);
   if (name === "desktop") {
-    await p.getByRole("button", { name: /Trending AI-influencer videos/ }).click();
-    await p.getByRole("button", { name: /Target videos I found/ }).click();
+    await p.getByRole("button", { name: /Trend references/ }).click();
+    await p.getByRole("button", { name: /Targets to recreate/ }).click();
     await p.waitForTimeout(400);
-    check(await p.getByLabel("Trending video link").isVisible() && await p.getByLabel("Target video 1").isVisible(),
-      "desktop: both optional inputs open at once");
-    if (shots) await p.screenshot({ path: `${shots}/inputs_open.png`, clip: { x: 0, y: 0, width: 1440, height: 760 } });
-    await p.getByLabel("Trending video link").fill("https://www.tiktok.com/@a/video/7400000000000000001");
-    await p.keyboard.press("Enter");
-    check(await p.getByText("tiktok.com/@a/video/7400000000000000001").isVisible(), "desktop: trend URL becomes a chip");
-    await p.getByLabel("Trending video link").fill("https://example.com/nope");
-    await p.keyboard.press("Enter");
-    check(await p.getByRole("alert").isVisible(), "desktop: a non-video link is refused with a message");
+    check(await p.getByLabel("Reference video links").isVisible() && await p.getByLabel("Target video links").isVisible(),
+      "desktop: both reference sections open at once");
+    if (shots) await p.screenshot({ path: `${shots}/inputs_open.png`, clip: { x: 0, y: 0, width: 1440, height: 900 } });
+    await p.getByLabel("Reference video links").fill("https://example.com/nope");
+    await p.getByRole("button", { name: /Save as references/ }).click();
+    check(await p.getByRole("alert").first().isVisible(), "desktop: a non-video link is refused with a message");
+    await p.getByRole("tab", { name: /Manually chosen/ }).click();
+    await p.waitForTimeout(800);
+    const manual = await p.locator("article[data-manual-id]").count();
+    check(manual > 0 || await p.getByText("No manually chosen videos yet").isVisible(), `desktop: manually chosen tab (${manual} cards)`);
+    if (shots) await p.getByRole("tab", { name: /Manually chosen/ }).scrollIntoViewIfNeeded()
+      .then(() => p.screenshot({ path: `${shots}/manual.png`, fullPage: false }));
+    await p.getByRole("tab", { name: /Found videos/ }).click();
     const card = p.locator("article[data-video-id] button[aria-label^='Open']").first();
     if (await card.count()) {
       await card.hover();

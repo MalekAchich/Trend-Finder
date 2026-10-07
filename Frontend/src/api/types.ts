@@ -116,6 +116,7 @@ export interface ManualVideo {
   creator: string | null;
   caption: string | null;
   views: number | null;
+  likes: number | null;
   duration_s: number | null;
   posted_at: string | null;
   is_reference: boolean;

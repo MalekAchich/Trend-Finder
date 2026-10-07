@@ -57,9 +57,9 @@ class ToolStack:
         """Re-read which accounts are connected (Settings can connect one between runs)."""
         self.platforms.sync_modes()
 
-    async def get_video(self, url: str) -> VideoItem:
-        """Metadata for one URL the owner pasted (stored like any tool result)."""
-        return await self.platform_tools().get_video(url)
+    async def get_video(self, url: str, fresh: bool = False) -> VideoItem:
+        """Metadata for one URL the owner pasted (stored like any tool result); `fresh` skips the cache."""
+        return await self.platform_tools().get_video(url, fresh=fresh)
 
 
 def build_tool_stack(settings: AppSettings, sessionmaker: async_sessionmaker[AsyncSession] | None = None, *,

@@ -24,7 +24,7 @@ def png() -> bytes:
     return buf.getvalue()
 
 
-async def fake_get_video(url):
+async def fake_get_video(url, fresh=False):
     from tf_agent.tools.normalize import canonical_id, platform_of
 
     if url == PRIVATE:

@@ -21,7 +21,7 @@ TT = "https://www.tiktok.com/@creator_a/video/1000000000000000001"
 BAD = "https://www.instagram.com/reel/TESTREEL001/"
 
 
-async def get_video(url):
+async def get_video(url, fresh=False):
     from tf_agent.tools.normalize import canonical_id, platform_of
 
     if url == BAD:
