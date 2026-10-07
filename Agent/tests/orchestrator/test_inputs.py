@@ -12,7 +12,7 @@ from tf_db.models import Finding, Run, Target
 from .test_run import SETTINGS, World, build
 
 TREND = "https://www.tiktok.com/@ai.star/video/7400000000000000001"
-TARGET = "https://www.youtube.com/shorts/OUZbZ8cz4j8"
+TARGET = "https://www.youtube.com/shorts/TestShort01"
 
 
 def settings(**kw):
@@ -35,7 +35,7 @@ async def test_read_study_and_targets_flow_into_the_run(db_sessionmaker, tmp_pat
                  ).scalars().all()
     assert run.character_read["look"] == "Robot butler in a black tailcoat"
     assert run.inputs["trend_studies"][TREND]["format"] == "slow-motion walk-in to a beat drop"
-    assert [f.canonical_id for f in owner] == ["youtube:OUZbZ8cz4j8"] and owner[0].status == "analyzed"
+    assert [f.canonical_id for f in owner] == ["youtube:TestShort01"] and owner[0].status == "analyzed"
     prompt = world.master_prompts[0]
     assert "Robot butler in a black tailcoat" in prompt and "slow-motion walk-in to a beat drop" in prompt
     types = await types_of(db_sessionmaker, run_id)
@@ -76,7 +76,7 @@ async def test_unreachable_targets_are_rejected_and_the_run_continues(db_session
     orch = await build(db_sessionmaker, tmp_path, World())
     run_id = await orch.create_run("testy", settings(targets=[
         {"url": "https://www.tiktok.com/@gone/video/7400000000000000009?private=1", "character": "testy"},
-        {"url": "https://www.instagram.com/reel/DTfu8CIDezV/", "character": "testy"}]))
+        {"url": "https://www.instagram.com/reel/TESTREEL002/", "character": "testy"}]))
     assert (await orch.execute(run_id)).state == "review_ready"
     events = await Blackboard(db_sessionmaker).events_after(run_id, 0, limit=5000)
     reasons = [e["payload"]["reason"] for e in events if e["type"] == "candidate.rejected"]

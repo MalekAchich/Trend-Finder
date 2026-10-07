@@ -9,7 +9,7 @@ import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from tf_agent.tools.normalize import norm_handle, norm_hashtag
 from tf_agent.tools.types import Creator, Metrics, Sound, VideoItem
@@ -153,3 +153,82 @@ def _x(d: dict[str, Any]) -> VideoItem | None:
 
 def x_items(captured: list[Any]) -> list[VideoItem]:
     return _dedupe([it for d in _walk(captured) if (it := _x(d)) is not None])
+
+
+# ---- TikTok trends: Creative Center, now inside TikTok One (anonymous visitors get the top few per filter) ----
+# the API calls, plus the page's own server-rendered loader data (filtered pages deliver their lists there)
+TRENDS_PATTERN = re.compile(r"GetHashtagList|GetTopContentsList|creativeCenter.*__ssrDirect=true")
+FOLLOW_HEADERS = {"agw-js-conv": "str"}  # the API then sends 64-bit ids as strings (JS numbers would round them)
+SPONSORED_TAGS = {"ad", "ads", "sponsored", "partner", "paidpartnership", "nativepartner", "brandpartner",
+                  "collab", "gifted"}
+TREND_PERIODS = (7, 30, 120)
+MAX_PAID_SHARE = 0.8  # a "top video" whose views are mostly paid reach isn't an organic trend
+
+
+def trends_page_url(kind: str, region: str, period: int) -> str:
+    tab = "hashtag" if kind == "hashtags" else "video"
+    return f"https://ads.tiktok.com/creative/creativeCenter/trends/{tab}?region={region.upper()}&period={period}"
+
+
+def organic_variants(urls: list[str]) -> list[str]:
+    """The page asks for top videos including paid reach; ask the same API for organic-only, by views and by
+    engagement (fetched from inside the page, so it carries the page's own cookies and headers)."""
+    out: list[str] = []
+    for u in urls:
+        if "GetTopContentsList" not in u:
+            continue
+        parts = urlsplit(u)
+        q = dict(parse_qsl(parts.query, keep_blank_values=True))
+        for metric in ("1", "2"):
+            out.append(urlunsplit(parts._replace(query=urlencode({**q, "organicOnly": "true", "orderByMetric": metric}))))
+    return out
+
+
+def _direction(curve: list[dict[str, Any]]) -> str:
+    values = [float(p.get("value") or 0) for p in curve]
+    if len(values) < 3:
+        return "unknown"
+    peak, last = max(values), values[-1]
+    if peak and last >= 0.9 * peak and last > values[0]:
+        return "rising"
+    if peak and last < 0.7 * peak:
+        return "peaked"
+    return "steady"
+
+
+def trend_hashtags(captured: list[Any]) -> list[dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    for d in _walk(captured):
+        name = d.get("hashtagName")
+        if isinstance(name, str) and "publishCnt" in d and norm_hashtag(name) not in rows:
+            rows[norm_hashtag(name)] = {"hashtag": norm_hashtag(name), "rank": _num(d.get("rankIndex")),
+                                        "posts": _num(d.get("publishCnt")), "views": _num(d.get("vv")),
+                                        "direction": _direction(d.get("popularityCurve") or [])}
+    return sorted(rows.values(), key=lambda r: r["rank"] or 999)
+
+
+def _trend_video(d: dict[str, Any]) -> VideoItem | None:
+    info, metrics = d.get("itemInfo"), d.get("itemMetrics")
+    if not isinstance(info, dict) or not isinstance(metrics, dict) or not str(info.get("itemID") or "").isdigit():
+        return None
+    total, organic = _num(metrics.get("videoViews")), _num(metrics.get("organicVideoViews"))
+    if total and organic is not None and organic < (1 - MAX_PAID_SHARE) * total:
+        return None
+    tags = _tags(info.get("title"))
+    if any(t in SPONSORED_TAGS or t.endswith("partner") or t.endswith("creatorcollective") for t in tags):
+        return None  # branded content: organic reach, but not a trend to recreate
+    vid, author = info["itemID"], d.get("itemAuthorInfo") or {}
+    handle = norm_handle(str(author.get("handlerName") or "")) or None
+    created = _num(info.get("createTime"))
+    return VideoItem(
+        canonical_id=f"tiktok:{vid}", platform="tiktok",
+        url=f"https://www.tiktok.com/@{handle}/video/{vid}" if handle else f"https://www.tiktok.com/video/{vid}",
+        creator=Creator(handle=handle, followers=_num((d.get("itemAuthorMetrics") or {}).get("followers"))),
+        caption=info.get("title") or None, hashtags=tags,
+        posted_at=datetime.fromtimestamp(created, UTC) if created else None,
+        metrics=Metrics(views=organic if organic is not None else total), thumbnail_url=info.get("coverURL"),
+        media_access="ok", source="api")
+
+
+def trend_videos(captured: list[Any]) -> list[VideoItem]:
+    return _dedupe([it for d in _walk(captured) if (it := _trend_video(d)) is not None])

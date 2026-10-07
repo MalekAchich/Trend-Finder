@@ -140,8 +140,8 @@ class YouTubeApi:
             return  # out of quota today: can't check, accept it
         try:
             async with self._client() as c:
-                r = await c.get(f"{API}/videos", params={"part": "id", "id": "dQw4w9WgXcQ"},
-                                headers={"x-goog-api-key": key})
+                # a 1-unit call that reads no particular content: the list of YouTube's regions
+                r = await c.get(f"{API}/i18nRegions", params={"part": "snippet"}, headers={"x-goog-api-key": key})
         except httpx.HTTPError as e:
             raise ToolFailure("platform_unavailable", f"couldn't reach Google to check the key ({type(e).__name__})") \
                 from None

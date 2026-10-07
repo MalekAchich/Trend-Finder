@@ -79,7 +79,7 @@
 
 ### Task 4: yt-dlp adapter
 
-**Files:** `Agent/tf_agent/tools/ytdlp.py`, fixture `Agent/tests/fixtures/ytdlp_metadata.json` (real captures from the probe), tests `Agent/tests/tools/test_ytdlp.py`.
+**Files:** `Agent/tf_agent/tools/ytdlp.py`, sample data (now made-up values in `Agent/tests/tools/samples.py`), tests `Agent/tests/tools/test_ytdlp.py`.
 
 **Interfaces:** `info_to_video_item(info: dict) -> VideoItem` (pure); `YtDlp(timeout_s=45, max_parallel=2, cookies_file=None)`: `async metadata(url) -> VideoItem`, `async download(url, dest_dir, max_height=720) -> Path`, `async search_youtube(query, n) -> list[VideoItem]` (flat `ytsearchN`, keeps duration ≤ 180 s). Calls run in a thread with `asyncio.wait_for`; yt-dlp errors are classified (`login required|cookies` → login_required; `unavailable|private|removed|404` → not_found; `429|rate` → rate_limited; else platform_unavailable).
 
@@ -108,7 +108,7 @@
 
 ### Task 7: Pipeline B: pose, camera motion, clean segments, feasibility
 
-**Files:** `Agent/tf_agent/pipeline/{pose,motion,feasibility}.py`, fixture `Agent/tests/fixtures/media/person_full_body.jpg` (a small crop of a Nicolaiz reference sheet), tests `Agent/tests/pipeline/test_pose_feasibility.py`.
+**Files:** `Agent/tf_agent/pipeline/{pose,motion,feasibility}.py`, test clips built at run time from the first character's main image (no stored copy), tests `Agent/tests/pipeline/test_pose_feasibility.py`.
 
 **Interfaces:** `PoseAnalyzer(model_path)` (downloads MediaPipe `pose_landmarker_lite.task` to `~/.cache/trendfinder/models/` on first use) `.analyze(frames) -> PoseStats(per_frame_people, single_person_ratio, body_visibility, hands_visibility, face_size_ok, per_frame_single[bool])`; `camera_motion(frames) -> float` (0–1, OpenCV Farneback global flow); `clean_segments(t_per_frame, single_flags, cuts, motion_per_frame, min_len=3.0) -> list[(start,end)]`; `feasibility(stats, camera_motion, cut_rate, best_segment) -> (score 0-100, filtered_reason | None)`, implementing the formula and hard filter from 04-video-pipeline.md.
 

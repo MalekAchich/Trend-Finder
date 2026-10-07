@@ -32,6 +32,12 @@ class HashtagParams(BaseModel):
     max_results: int = Field(15, ge=1, le=30)
 
 
+class TrendsParams(BaseModel):
+    kind: Literal["hashtags", "videos"] = Field("videos", description="trending hashtags, or top organic videos")
+    region: str = Field("US", pattern=r"^[A-Za-z]{2}$", description="2-letter country code, e.g. US, GB, FR")
+    period: Literal[7, 30, 120] = Field(7, description="days")
+
+
 class VideoParams(BaseModel):
     url: str = Field(min_length=10, max_length=500)
 
@@ -93,6 +99,18 @@ def compact_discovery(out: dict[str, Any], now: datetime | None = None) -> str:
     return "\n".join(lines)
 
 
+def compact_trends(out: dict[str, Any], now: datetime | None = None) -> str:
+    if "error" in out:
+        return _error_text(out)
+    if "hashtags" not in out:
+        return compact_discovery(out, now)
+    head = f"trending hashtags, {out['region']}, last {out['period_days']} days" + (
+        f"; notes: {'; '.join(out['notes'])}" if out.get("notes") else "")
+    rows = [f"#{r['hashtag']} | rank {r['rank']} | {_num(r['posts'])} posts | {_num(r['views'])} views | {r['direction']}"
+            for r in out["hashtags"][:20]]
+    return "\n".join([head, *rows]) if rows else head + "\nno hashtags returned"
+
+
 def _compact_video(out: dict[str, Any]) -> str:
     return _error_text(out) if "error" in out else _item_line(out, datetime.now(UTC))
 
@@ -136,6 +154,9 @@ def build_tools(pt: PlatformTools, searx: SearxClient, *, fetch: Callable[..., A
     return [
         Tool("tiktok_search", "Search TikTok videos by keywords. Returns ids, views, age, duration, creator, caption.",
              SearchParams, _safe(lambda p: pt.tiktok_search(p.query, p.max_results, recent(p))), compact_discovery),
+        Tool("tiktok_trends", "TikTok's own trend rankings: trending hashtags (with rising/peaked direction) or top "
+             "organic videos, per country and period.", TrendsParams,
+             _safe(lambda p: pt.tiktok_trends(p.kind, p.region, p.period)), compact_trends),
         Tool("tiktok_creator", "Recent videos from one TikTok creator.", CreatorParams,
              _safe(lambda p: pt.tiktok_creator(p.handle, p.max_results)), compact_discovery),
         Tool("tiktok_hashtag", "TikTok videos using a hashtag.", HashtagParams,

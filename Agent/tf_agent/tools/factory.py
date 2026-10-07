@@ -22,7 +22,7 @@ from tf_agent.tools.youtube_api import DbQuota, MemoryQuota, YouTubeApi
 from tf_agent.tools.ytdlp import YtDlp
 
 
-PLATFORM_TOOLS = {"tiktok": {"tiktok_search", "tiktok_creator", "tiktok_hashtag"},
+PLATFORM_TOOLS = {"tiktok": {"tiktok_search", "tiktok_creator", "tiktok_hashtag", "tiktok_trends"},
                   "instagram": {"instagram_search"}, "youtube": {"shorts_search"}, "x": {"x_search"}}
 COMMON_TOOLS = {"get_video", "web_search", "web_fetch"}
 
@@ -66,7 +66,7 @@ def build_tool_stack(settings: AppSettings, sessionmaker: async_sessionmaker[Asy
                      seen_filter: SeenFilter | None = None, on_items: ItemsSink | None = None) -> ToolStack:
     searx = SearxClient(settings.searxng_url)
     creds = Credentials(settings.secrets_dir)
-    ytdlp = YtDlp(cookies_file=settings.instagram_cookies, cookies_for=creds.cookies_file)
+    ytdlp = YtDlp(cookies_for=creds.cookies_file)
     browser = BrowserSessions(creds, max_pages=settings.browser_pages)
     quota = DbQuota(sessionmaker) if sessionmaker is not None else MemoryQuota()
     youtube_api = YouTubeApi(lambda: creds.get("youtube_api_key"), quota)
@@ -76,11 +76,11 @@ def build_tool_stack(settings: AppSettings, sessionmaker: async_sessionmaker[Asy
         on_items = store.upsert_videos
     cache = ToolCache(sessionmaker) if sessionmaker is not None else None
     limiter = RateLimiter(1.0)
-    enrich = settings.instagram_cookies is not None
     platforms = PlatformTools(searx, ytdlp, cache, registry, seen_filter=seen_filter, on_items=on_items,
-                              instagram_enrich=enrich, search_limiter=limiter, browser=browser,
+                              search_limiter=limiter, browser=browser,
                               youtube_api=youtube_api)
-    return ToolStack(searx, ytdlp, registry, store, platforms, cache, limiter, enrich, browser, youtube_api)
+    return ToolStack(searx, ytdlp, registry, store, platforms, cache, limiter, browser=browser,
+                     youtube_api=youtube_api)
 
 
 def build_analyzer(settings: AppSettings, stack: ToolStack, runner: HeavyRunner, max_parallel: int = 2

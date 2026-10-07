@@ -63,7 +63,7 @@ async def setup(db_sessionmaker, tmp_path):
 async def test_list_shows_every_item_unset(setup):
     http, *_ = setup
     items = (await http.get("/api/settings/accounts")).json()["items"]
-    assert [i["id"] for i in items] == ["youtube_api_key", "tiktok", "instagram", "x"]
+    assert [i["id"] for i in items] == ["youtube_api_key", "tiktok", "instagram", "x", "tiktok_one"]
     assert not any(i["set"] for i in items)
 
 

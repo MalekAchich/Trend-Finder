@@ -9,25 +9,27 @@ import pytest
 from tf_agent.tools.types import ToolFailure
 from tf_agent.tools.ytdlp import YtDlp, classify_ytdlp_error, info_to_video_item
 
-FIX = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "ytdlp_metadata.json").read_text())
+from . import samples
+
+FIX = samples.ytdlp_info()
 
 
 def test_tiktok_info_maps_to_video_item():
     v = info_to_video_item(FIX["tiktok"])
-    assert v.canonical_id == "tiktok:7567775043346779423" and v.platform == "tiktok"
-    assert v.creator.handle == "kianalede"
+    assert v.canonical_id == "tiktok:1000000000000000021" and v.platform == "tiktok"
+    assert v.creator.handle == "creator_e"
     assert v.metrics.model_dump() == {"views": 3731, "likes": 222, "comments": 5, "shares": 4, "saves": 9}
     assert v.posted_at == datetime.fromtimestamp(1762009942, UTC)
     assert v.duration_s == 8 and v.media_access == "ok" and v.source == "yt-dlp"
-    assert v.caption.startswith("The amount of deadpan")
+    assert v.caption.startswith("Test clip with a deadpan")
 
 
 def test_youtube_info_maps_to_video_item():
     v = info_to_video_item(FIX["youtube"])
-    assert v.canonical_id == "youtube:OUZbZ8cz4j8" and v.platform == "youtube"
-    assert v.creator.handle == "miyutvshow" and v.creator.followers == 18800
+    assert v.canonical_id == "youtube:TestShort01" and v.platform == "youtube"
+    assert v.creator.handle == "creator_f" and v.creator.followers == 18800
     assert v.metrics.views == 3933 and v.metrics.shares is None
-    assert v.url == "https://www.youtube.com/shorts/OUZbZ8cz4j8"
+    assert v.url == "https://www.youtube.com/shorts/TestShort01"
 
 
 def test_hashtags_come_from_caption_and_tags():
@@ -81,7 +83,7 @@ async def test_parallelism_is_bounded():
         return FIX["youtube"]
 
     y = YtDlp(max_parallel=2, extractor=extract)
-    await asyncio.gather(*(y.metadata("https://youtu.be/OUZbZ8cz4j8") for _ in range(6)))
+    await asyncio.gather(*(y.metadata("https://youtu.be/TestShort01") for _ in range(6)))
     assert peak == 2
 
 
@@ -105,11 +107,11 @@ async def test_download_returns_file_path(tmp_path):
         target.write_bytes(b"video")
         return {"id": "abc", "requested_downloads": [{"filepath": str(target)}]}
 
-    path = await YtDlp(extractor=extract).download("https://youtu.be/OUZbZ8cz4j8", tmp_path)
+    path = await YtDlp(extractor=extract).download("https://youtu.be/TestShort01", tmp_path)
     assert path == tmp_path / "abc.mp4" and path.read_bytes() == b"video"
 
 
 @pytest.mark.live
 async def test_live_shorts_metadata():
-    v = await YtDlp().metadata("https://www.youtube.com/shorts/OUZbZ8cz4j8")
-    assert v.canonical_id == "youtube:OUZbZ8cz4j8" and (v.metrics.views or 0) > 0
+    v = await YtDlp().metadata("https://www.youtube.com/shorts/TestShort01")
+    assert v.canonical_id == "youtube:TestShort01" and (v.metrics.views or 0) > 0

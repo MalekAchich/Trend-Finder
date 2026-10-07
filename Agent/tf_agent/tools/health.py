@@ -37,6 +37,8 @@ DEFAULT_PLATFORMS: dict[str, PlatformConfig] = {
     "instagram": PlatformConfig(5.0, 5.0),
     "youtube": PlatformConfig(0.3, 0.3),
     "x": PlatformConfig(3.0, 2.0),
+    "tiktok_trends": PlatformConfig(8.0, 4.0),  # the ads site rate-limits hard: slow, and its own breaker
+    "tiktok_trends": PlatformConfig(8.0, 4.0),  # its own breaker: the ads site rate-limits hard, search mustn't pay
     "web": PlatformConfig(1.0),
 }
 

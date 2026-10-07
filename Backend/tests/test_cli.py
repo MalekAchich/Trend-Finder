@@ -8,7 +8,7 @@ from tf_backend.doctor import Check, disk_check, run_checks
 
 def test_help_lists_commands():
     out = CliRunner().invoke(app, ["--help"]).output
-    for name in ("doctor", "migrate", "login", "models", "demo-agent", "version"):
+    for name in ("doctor", "migrate", "login", "models", "version"):
         assert name in out
 
 
@@ -75,12 +75,12 @@ def test_run_takes_trend_urls_and_targets_and_old_commands_are_gone(monkeypatch)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     out = CliRunner().invoke(app, ["run", "nicolaiz", "--trend-url", "https://www.tiktok.com/@a/video/1",
-                                   "--target", "https://youtu.be/OUZbZ8cz4j8",
+                                   "--target", "https://youtu.be/TestShort01",
                                    "--target", "https://www.tiktok.com/@b/video/2=tekashi67", "--freshness", "day"])
     assert out.exit_code == 0, out.output
     *_, freshness, _minutes, _workers, trends, targets = seen["args"]
     assert freshness == "day" and trends == ["https://www.tiktok.com/@a/video/1"]
-    assert targets == [{"url": "https://youtu.be/OUZbZ8cz4j8", "character": "nicolaiz"},
+    assert targets == [{"url": "https://youtu.be/TestShort01", "character": "nicolaiz"},
                        {"url": "https://www.tiktok.com/@b/video/2", "character": "tekashi67"}]
     help_text = CliRunner().invoke(app, ["--help"]).output
     assert "sync-characters" not in help_text and " seed " not in help_text

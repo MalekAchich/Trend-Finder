@@ -148,7 +148,7 @@ async def test_start_a_run_with_inputs(http, ctx):
     await http.get("/api/characters")
     body = {"character": "testy", "platforms": ["tiktok"], "freshness": "day", "minutes": 30,
             "trend_urls": ["https://www.tiktok.com/@a/video/1"],
-            "targets": [{"url": "https://youtu.be/OUZbZ8cz4j8", "character": "testy"}]}
+            "targets": [{"url": "https://youtu.be/TestShort01", "character": "testy"}]}
     r = await http.post("/api/runs", json=body)
     assert r.status_code == 200
     s = ctx.orchestrator.created[-1]

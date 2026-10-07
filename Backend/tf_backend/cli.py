@@ -8,12 +8,9 @@ from pathlib import Path
 import typer
 from alembic import command
 from alembic.config import Config
-from pydantic import BaseModel
 
 import tf_db
 from tf_agent.config import AppSettings
-from tf_agent.loop.agent import AgentBudget, AgentEvent, run_agent
-from tf_agent.loop.tools import Tool
 from tf_agent.models.chatgpt_auth import ChatGptAuth
 from tf_agent.models.claude_cli import ClaudeCliAuth, clean_env
 from tf_backend.doctor import default_probes, run_checks
@@ -116,48 +113,6 @@ async def _models() -> None:
                 typer.echo(f"  {alias} -> {sv.registry.resolve(provider, alias)}")
     finally:
         await close_services(sv)
-
-
-class _AddParams(BaseModel):
-    a: int
-    b: int
-
-
-class _DemoResult(BaseModel):
-    answer: int
-    explanation: str
-
-
-@app.command("demo-agent")
-def demo_agent(
-    provider: str = typer.Option("claude", help="claude or chatgpt"),
-    question: str = typer.Option("What is (17 + 25) + 8? Use the add tool for every addition."),
-) -> None:
-    """Run a tiny tool-using agent end-to-end on one provider."""
-    asyncio.run(_demo(provider, question))
-
-
-async def _demo(provider: str, question: str) -> None:
-    sv = await build_services(with_db=False)
-
-    async def add(p: _AddParams) -> int:
-        return p.a + p.b
-
-    async def show(ev: AgentEvent) -> None:
-        typer.echo(f"  step {ev.step} [{ev.kind}] {ev.detail}")
-
-    try:
-        await sv.registry.refresh_provider(provider)
-        res = await run_agent(
-            client=sv.client, role="demo", provider=provider, result_model=_DemoResult,
-            system="You are a careful assistant. Use the add tool for every addition, then call submit_result.",
-            task=question, tools=[Tool("add", "Add two integers and return the sum.", _AddParams, add)],
-            budget=AgentBudget(max_steps=8), on_event=show)
-    finally:
-        await close_services(sv)
-    typer.echo(f"{res.status} via {res.provider}/{res.model} in {res.steps} steps: {res.result or res.error}")
-    if res.status != "succeeded":
-        raise typer.Exit(1)
 
 
 from tf_agent.tools.types import ToolFailure  # noqa: E402

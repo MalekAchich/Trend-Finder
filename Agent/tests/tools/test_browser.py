@@ -7,7 +7,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from tf_agent.credentials import SESSIONS, Credentials
-from tf_agent.tools.browser import BrowserSessions, LoginCancelled, wait_for_login
+from tf_agent.tools.browser import BrowserSessions, LoginCancelled, wait_for_close, wait_for_login
 from tf_agent.tools.types import ToolFailure
 
 PAGE = """<html><body><h1>feed</h1><script>
@@ -85,3 +85,21 @@ async def test_session_only_tools_need_a_connected_account(tmp_path):
     with pytest.raises(ToolFailure) as ei:
         await b.capture_json("x", "http://127.0.0.1:1/", re.compile("x"), need_session=True)
     assert ei.value.error.code == "login_required" and "Settings" in ei.value.error.message
+
+
+class States:
+    def __init__(self, n_open):
+        self.n_open, self.reads = n_open, 0
+
+    async def storage_state(self):
+        self.reads += 1
+        return {"cookies": [{"name": f"c{self.reads}", "value": "v", "domain": ".tiktok.com"}], "origins": []}
+
+    def closed(self):
+        return self.reads >= self.n_open
+
+
+async def test_closing_the_window_keeps_the_last_session_it_had():
+    s = States(3)
+    state = await wait_for_close(s, 60, closed=s.closed, poll_s=0)
+    assert state["cookies"][0]["name"] == "c3"

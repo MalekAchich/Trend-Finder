@@ -32,6 +32,3 @@ reader:
 learner:
   - {provider: claude, model: best}
   - {provider: chatgpt, model: best, effort: high}
-demo:
-  - {provider: claude, model: fast}
-  - {provider: chatgpt, model: fast, effort: low}

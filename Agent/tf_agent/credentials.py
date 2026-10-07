@@ -23,7 +23,7 @@ class SessionSpec:
     platform: str
     label: str
     login_url: str
-    cookie: str  # present (non-empty) once the account is logged in
+    cookie: str | None  # present (non-empty) once logged in; None: the owner closes the window when done
     domain: str
 
 
@@ -33,6 +33,9 @@ SESSIONS = {
     "instagram": SessionSpec("instagram", "Instagram scraping account", "https://www.instagram.com/accounts/login/",
                              "sessionid", "instagram.com"),
     "x": SessionSpec("x", "X scraping account", "https://x.com/i/flow/login", "auth_token", "x.com"),
+    # TikTok's trend rankings (Creative Center, now inside TikTok One) have their own login on ads.tiktok.com
+    "tiktok_one": SessionSpec("tiktok_one", "TikTok One (trend rankings)",
+                              "https://ads.tiktok.com/creative/creativeCenter/trends", None, "tiktok.com"),
 }
 
 

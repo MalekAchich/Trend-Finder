@@ -251,6 +251,31 @@ class PlatformTools:
         res.notes[:0] = notes
         return res
 
+    async def tiktok_trends(self, kind: Literal["hashtags", "videos"] = "videos", region: str = "US",
+                            period: int = 7) -> DiscoveryResult | dict[str, Any]:
+        """TikTok's own trend rankings (Creative Center in TikTok One). Anonymous visitors get the top few per filter;
+        organic-only videos are asked for separately, since the default ranking is mostly paid reach."""
+        if self.browser is None:
+            raise ToolFailure("platform_unavailable", "tiktok trends need the browser (not available here)")
+        browser = self.browser
+        url = ss.trends_page_url(kind, region, period)
+
+        async def run() -> list[Any]:
+            return await browser.capture_json("tiktok_one", url, ss.TRENDS_PATTERN, scrolls=1, settle_ms=6000,
+                                              follow=ss.organic_variants if kind == "videos" else None,
+                                              follow_headers=ss.FOLLOW_HEADERS)
+
+        captured = await self._guarded("tiktok_trends", run)
+        if kind == "hashtags":
+            rows = ss.trend_hashtags(captured)
+            return {"hashtags": rows, "region": region.upper(), "period_days": period,
+                    "notes": [] if self._has_session("tiktok_one") else
+                    ["only the top few: connect TikTok One in Settings for the full rankings"]}
+        notes = ["organic top videos from TikTok's trend rankings (branded #ad posts left out)"]
+        kept, hidden = await self._filter_seen(ss.trend_videos(captured))
+        kept = await self._enrich("tiktok", kept, notes)  # the rankings carry no duration or likes
+        return await self._finish("tiktok", kept, hidden, notes)
+
     async def tiktok_creator(self, handle: str, max_results: int = 15) -> DiscoveryResult:
         return await self._site_search("tiktok", f"site:tiktok.com/@{norm_handle(handle)}", max_results, True)
 

@@ -5,17 +5,17 @@ import pytest
 from tf_agent.tools.normalize import canonical_id, norm_handle, norm_hashtag, norm_query, platform_of
 from tf_agent.tools.types import Metrics, ToolFailure, VideoItem
 
-TT = "7567775043346779423"
-IG = "DTfu8CIDezV"
-YT = "OUZbZ8cz4j8"
+TT = "1000000000000000021"
+IG = "TESTREEL002"
+YT = "TestShort01"
 
 
 @pytest.mark.parametrize("url,expected", [
-    (f"https://www.tiktok.com/@kianalede/video/{TT}", f"tiktok:{TT}"),
-    (f"https://www.tiktok.com/@kianalede/video/{TT}?is_from_webapp=1&sender_device=pc", f"tiktok:{TT}"),
+    (f"https://www.tiktok.com/@creator_e/video/{TT}", f"tiktok:{TT}"),
+    (f"https://www.tiktok.com/@creator_e/video/{TT}?is_from_webapp=1&sender_device=pc", f"tiktok:{TT}"),
     (f"https://m.tiktok.com/v/{TT}.html", f"tiktok:{TT}"),
     ("https://vm.tiktok.com/ZMabc123/", None),
-    ("https://www.tiktok.com/@kianalede", None),
+    ("https://www.tiktok.com/@creator_e", None),
     (f"https://www.instagram.com/reel/{IG}/", f"instagram:{IG}"),
     (f"https://www.instagram.com/reels/{IG}/?igsh=x", f"instagram:{IG}"),
     (f"https://www.instagram.com/p/{IG}/", f"instagram:{IG}"),
@@ -63,7 +63,7 @@ def test_tool_failure_carries_error():
 
 
 # ---- Plan 7: X is a fourth platform ----
-XID = "1843213434565656789"
+XID = "1000000000000000003"
 
 
 @pytest.mark.parametrize("url,expected", [

@@ -71,7 +71,6 @@ SEARXNG_URL=http://localhost:8888
 CHARACTERS_DIR=../AI Influencers Characters
 MEDIA_DIR=./media
 MEDIA_QUOTA_GB=5
-YOUTUBE_API_KEY=
 CLAUDE_BIN=claude
 CHATGPT_AUTH_FILE=./secrets/chatgpt-auth.json
 MAX_AGENT_WORKERS=8

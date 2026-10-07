@@ -20,6 +20,5 @@ class AppSettings(BaseSettings):
     characters_dir: Path = Path("../AI Influencers Characters")
     media_dir: Path = Path("media")
     whisper_model: str = "small"
-    instagram_cookies: Path | None = None  # optional extra cookies.txt; Settings' connected account is preferred
     secrets_dir: Path = Path("secrets")  # API keys and scraping-account sessions (tf_agent/credentials.py)
     browser_pages: int = 2  # headless pages open at once for logged-in searches

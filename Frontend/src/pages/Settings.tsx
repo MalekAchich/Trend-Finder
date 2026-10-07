@@ -147,8 +147,9 @@ const UNLOCKS: Record<string, string> = {
   tiktok: "TikTok's own search: fresh, sorted results instead of what search engines indexed.",
   instagram: "Reel stats, video analysis and Instagram's own search.",
   x: "Search for video posts on X.",
+  tiktok_one: "TikTok's full trend rankings (top hashtags and videos) instead of only the top 3 or 4. Log in with your TikTok scraping account, then close the window.",
 };
-const ACCOUNT_PLATFORM: Record<string, string> = { youtube_api_key: "youtube", tiktok: "tiktok", instagram: "instagram", x: "x" };
+const ACCOUNT_PLATFORM: Record<string, string> = { youtube_api_key: "youtube", tiktok: "tiktok", instagram: "instagram", x: "x", tiktok_one: "tiktok" };
 const since = (iso: string | null) => iso ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : null;
 
 function Accounts() {
@@ -217,7 +218,7 @@ function SessionCard({ a }: { a: AccountItem }) {
     <div className="rounded-2xl border border-line bg-panel/40 p-5">
       <CardHead a={a} state={state} tone={tone} />
       <p className="mt-2 text-[12.5px] text-mist">{UNLOCKS[a.id]}</p>
-      {waiting && <p className="mt-3 text-[13px]">A browser window opened on this computer. Log in there; this card updates by itself.</p>}
+      {waiting && <p className="mt-3 text-[13px]">{a.connecting?.message} This card updates by itself.</p>}
       {failed && <p role="alert" className="mt-3 text-[12.5px] text-bad">{a.connecting?.message}</p>}
       <div className="mt-4 flex flex-wrap gap-2">
         <button className="btn-lime !h-9" disabled={waiting || connect.isPending} onClick={() => connect.mutate(a.id)}>

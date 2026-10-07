@@ -214,15 +214,15 @@ def test_instagram_non_media_paths_are_rejected(url):
 
 
 def test_canonical_url_rebuilds_platform_urls():
-    assert canonical_url("youtube:OUZbZ8cz4j8") == "https://www.youtube.com/shorts/OUZbZ8cz4j8"
-    assert canonical_url("instagram:DTfu8CIDezV") == "https://www.instagram.com/reel/DTfu8CIDezV/"
+    assert canonical_url("youtube:TestShort01") == "https://www.youtube.com/shorts/TestShort01"
+    assert canonical_url("instagram:TESTREEL002") == "https://www.instagram.com/reel/TESTREEL002/"
 
 
 async def test_skeleton_keeps_youtube_watch_ids():
-    hit = SearchHit("t", "https://www.youtube.com/watch?v=OUZbZ8cz4j8&t=3", "s")
+    hit = SearchHit("t", "https://www.youtube.com/watch?v=TestShort01&t=3", "s")
     pt = PlatformTools(Searx(hits=[hit]), Meta(), None, reg(Clock()))
     res = await pt._site_search("youtube", "q", 5, enrich=False)
-    assert res.items[0].url == "https://www.youtube.com/shorts/OUZbZ8cz4j8"
+    assert res.items[0].url == "https://www.youtube.com/shorts/TestShort01"
 
 
 # ---- I12: canonical IDs are validated ----

@@ -114,9 +114,9 @@ async def test_enrichment_failure_falls_back_to_snippet():
 async def test_instagram_is_discovery_only_without_login():
     q = "site:instagram.com/reel deadpan"
     yt = FakeYtDlp()
-    pt = tools(FakeSearx({q: hits("https://www.instagram.com/reel/DTfu8CIDezV/?igsh=1")}), yt)
+    pt = tools(FakeSearx({q: hits("https://www.instagram.com/reel/TESTREEL002/?igsh=1")}), yt)
     res = await pt.instagram_search("deadpan")
-    assert res.items[0].canonical_id == "instagram:DTfu8CIDezV"
+    assert res.items[0].canonical_id == "instagram:TESTREEL002"
     assert res.items[0].media_access == "login_required" and res.items[0].metrics.views is None
     assert yt.calls == [] and res.platform_health == "degraded"
     assert any("discovery only" in n for n in res.notes)
@@ -161,7 +161,7 @@ async def test_on_items_receives_enriched_items():
 
 async def test_get_video_for_instagram_and_tiktok():
     pt = tools(FakeSearx())
-    ig = await pt.get_video("https://www.instagram.com/reel/DTfu8CIDezV/")
+    ig = await pt.get_video("https://www.instagram.com/reel/TESTREEL002/")
     assert ig.media_access == "login_required"
     t = await pt.get_video(tt(4))
     assert t.canonical_id == "tiktok:7000000000000000004" and t.metrics.views == 1000

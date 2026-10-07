@@ -66,7 +66,7 @@ async def test_two_people_are_filtered(person_clips, tmp_path, runner):
 
 async def test_login_required_is_filtered_without_download(tmp_path, runner):
     a = analyzer(tmp_path, "unused", runner)
-    r = await a.analyze(item("instagram:DTfu8CIDezV", access="login_required"))
+    r = await a.analyze(item("instagram:TESTREEL002", access="login_required"))
     assert r.filtered_reason == "media_unavailable" and a.downloader.calls == 0
 
 

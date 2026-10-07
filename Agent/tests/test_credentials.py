@@ -58,7 +58,8 @@ def test_session_saved_as_state_and_cookies_txt(tmp_path):
 
 
 def test_every_session_platform_has_a_login_cookie():
-    assert set(SESSIONS) == {"tiktok", "instagram", "x"}
+    assert set(SESSIONS) == {"tiktok", "instagram", "x", "tiktok_one"}
+    assert SESSIONS["tiktok_one"].cookie is None  # saved when the owner closes the window
     assert SESSIONS["x"].cookie == "auth_token" and SESSIONS["tiktok"].cookie == "sessionid"
 
 

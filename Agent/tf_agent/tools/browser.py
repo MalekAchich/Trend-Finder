@@ -20,7 +20,6 @@ from tf_agent.tools.types import ToolFailure
 log = logging.getLogger(__name__)
 LOGIN_TIMEOUT_S = 600
 LOGIN_URL_RE = re.compile(r"/login|/accounts/login|/i/flow/login|/signup", re.IGNORECASE)
-UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36")
 
 
 class LoginCancelled(Exception):
@@ -48,6 +47,26 @@ async def wait_for_login(jar: CookieJar, spec: SessionSpec, timeout_s: float, cl
         if clock() >= deadline:
             raise TimeoutError(f"no login after {int(timeout_s // 60)} minutes")
         await asyncio.sleep(poll_s)
+
+
+class StateSource(Protocol):
+    async def storage_state(self) -> dict[str, Any]: ...
+
+
+async def wait_for_close(ctx: StateSource, timeout_s: float, closed: Callable[[], bool], poll_s: float = 1.5,
+                         clock: Callable[[], float] = time.monotonic) -> dict[str, Any]:
+    """For logins without a known session cookie: keep the latest session while the owner works, and return it when
+    they close the window (once closed it can no longer be read)."""
+    deadline, last = clock() + timeout_s, {"cookies": [], "origins": []}
+    while not closed():
+        try:
+            last = await ctx.storage_state()
+        except Exception:  # closing between the check and the read
+            break
+        if clock() >= deadline:
+            raise TimeoutError(f"the window stayed open for {int(timeout_s // 60)} minutes")
+        await asyncio.sleep(poll_s)
+    return last
 
 
 class BrowserSessions:
@@ -85,7 +104,9 @@ class BrowserSessions:
     # ---- logins ----
     async def connect(self, platform: str, timeout_s: float = LOGIN_TIMEOUT_S) -> None:
         spec = SESSIONS[platform]
-        self.connecting[platform] = {"state": "waiting", "message": "Log in in the browser window that just opened."}
+        self.connecting[platform] = {"state": "waiting", "message": (
+            "Log in in the browser window that just opened." if spec.cookie else
+            "Log in in the browser window that just opened, then close the window.")}
         try:
             pw = await self._playwright()
             browser = await pw.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"])
@@ -93,9 +114,16 @@ class BrowserSessions:
                 ctx = await browser.new_context(viewport=None, locale="en-US")
                 page = await ctx.new_page()
                 await page.goto(spec.login_url)
-                await wait_for_login(ctx, spec, timeout_s, closed=lambda: not browser.is_connected() or page.is_closed())
-                await asyncio.sleep(3)  # let the site finish setting its cookies
-                self.creds.save_session(platform, await ctx.storage_state())
+                if spec.cookie is None:
+                    state = await wait_for_close(ctx, timeout_s, closed=lambda: not browser.is_connected() or page.is_closed())
+                    if not any(spec.domain in str(c.get("domain")) for c in state.get("cookies") or []):
+                        raise LoginCancelled("the window was closed before anything was saved")
+                    self.creds.save_session(platform, state)
+                else:
+                    await wait_for_login(ctx, spec, timeout_s,
+                                         closed=lambda: not browser.is_connected() or page.is_closed())
+                    await asyncio.sleep(3)  # let the site finish setting its cookies
+                    self.creds.save_session(platform, await ctx.storage_state())
             finally:
                 if browser.is_connected():
                     await browser.close()
@@ -111,8 +139,11 @@ class BrowserSessions:
     # ---- capture ----
     async def capture_json(self, platform: str, url: str, pattern: re.Pattern[str], *, scrolls: int = 2,
                            settle_ms: int = 2500, need_session: bool = False,
-                           blocked: Callable[[str, str], bool] | None = None) -> list[Any]:
-        """JSON bodies of the page's own requests whose URL matches `pattern`."""
+                           blocked: Callable[[str, str], bool] | None = None,
+                           follow: Callable[[list[str]], list[str]] | None = None,
+                           follow_headers: dict[str, str] | None = None) -> list[Any]:
+        """JSON bodies of the page's own requests whose URL matches `pattern`. `follow` maps the matched request URLs
+        to more URLs fetched from inside the page (same cookies and origin), e.g. the same API with other filters."""
         has = platform in SESSIONS and self.creds.has_session(platform)
         if need_session and not has:
             raise ToolFailure("login_required", f"{platform}: no scraping account connected "
@@ -120,11 +151,12 @@ class BrowserSessions:
         state = str(self.creds.state_file(platform)) if has else None
         async with self._pages:
             browser = await self._headless()
-            ctx = await browser.new_context(storage_state=state, locale="en-US", user_agent=UA,
+            ctx = await browser.new_context(storage_state=state, locale="en-US",
                                             viewport={"width": 1280, "height": 900})
             try:
                 page = await ctx.new_page()
                 found: list[Any] = []
+                matched: list[str] = []
                 pending: list[asyncio.Task[None]] = []
 
                 async def keep(resp: Any) -> None:
@@ -133,8 +165,12 @@ class BrowserSessions:
                     except Exception:  # not JSON after all, or the body is gone
                         return
 
-                page.on("response", lambda r: pending.append(asyncio.ensure_future(keep(r)))
-                        if pattern.search(r.url) else None)
+                def on_response(r: Any) -> None:
+                    if pattern.search(r.url):
+                        matched.append(r.url)
+                        pending.append(asyncio.ensure_future(keep(r)))
+
+                page.on("response", on_response)
                 try:
                     await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
                 except Exception as e:
@@ -153,6 +189,13 @@ class BrowserSessions:
                         self.creds.mark_expired(platform)
                     raise ToolFailure("login_required", f"{platform}: the site asked to log in"
                                       + (" (the scraping account's session has expired; reconnect it)" if has else ""))
+                for extra in (follow(matched) if follow is not None else [])[:6]:
+                    try:
+                        found.append(await page.evaluate(
+                            "async ([u, h]) => (await fetch(u, {credentials: 'include', headers: h})).json()",
+                            [extra, follow_headers or {}]))
+                    except Exception as e:  # one failed extra fetch only costs its results
+                        log.info("follow-up fetch failed on %s: %s", platform, type(e).__name__)
                 return found
             finally:
                 await ctx.close()

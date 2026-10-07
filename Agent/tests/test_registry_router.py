@@ -87,5 +87,5 @@ def test_router_unknown_role_uses_default():
 def test_repo_config_files_load():
     roles = load_roles(CONFIG / "roles.yaml")
     aliases = load_aliases(CONFIG / "model_aliases.yaml")
-    assert {"default", "master", "scout", "analyst", "demo"} <= set(roles)
+    assert {"default", "master", "scout", "analyst"} <= set(roles)
     assert aliases["claude"]["best"] == "opus" and "best" in aliases["chatgpt"]
