@@ -1,6 +1,7 @@
 import { ChevronDown, Link2, Plus, Settings2, Sparkles, Square, Play, X } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Character, Platform, StartRun } from "../api/types";
+import { BrandLogo } from "./brand";
 import { PLATFORM_LABEL, PlatformIcon, platformOf, shortUrl } from "./ui";
 
 const FRESHNESS = [
@@ -34,7 +35,7 @@ export function Composer({ characters, selected, onSelect, running, starting, er
   const addTrend = () => {
     const urls = trendDraft.split(/\s+/).map((u) => u.trim()).filter(Boolean);
     const bad = urls.find((u) => !platformOf(u));
-    if (bad) { setLocalError(`That isn't a TikTok, Instagram or YouTube link: ${bad}`); return; }
+    if (bad) { setLocalError(`That isn't a TikTok, Instagram, YouTube or X link: ${bad}`); return; }
     setTrends((t) => [...new Set([...t, ...urls])]);
     setTrendDraft("");
     setLocalError(null);
@@ -46,7 +47,7 @@ export function Composer({ characters, selected, onSelect, running, starting, er
   const start = () => {
     const cleanTargets = targets.filter((t) => t.url.trim());
     const bad = cleanTargets.find((t) => !platformOf(t.url));
-    if (bad) { setLocalError(`That isn't a TikTok, Instagram or YouTube link: ${bad.url}`); setOpen((o) => ({ ...o, targets: true })); return; }
+    if (bad) { setLocalError(`That isn't a TikTok, Instagram, YouTube or X link: ${bad.url}`); setOpen((o) => ({ ...o, targets: true })); return; }
     if (!selected) return;
     setLocalError(null);
     onStart({ character: selected, platforms, freshness, minutes, trend_urls: trends,
@@ -136,11 +137,16 @@ export function Composer({ characters, selected, onSelect, running, starting, er
           </div>
 
           <div className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-3">
-            <div className="flex gap-1.5" role="group" aria-label="Platforms">
-              {(Object.keys(PLATFORM_LABEL) as Platform[]).map((p) => (
-                <button key={p} className="chip" aria-pressed={platforms.includes(p)} disabled={running}
-                  onClick={() => togglePlatform(p)}><PlatformIcon platform={p} />{PLATFORM_LABEL[p]}</button>
-              ))}
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Platforms">
+              {(Object.keys(PLATFORM_LABEL) as Platform[]).map((p) => {
+                const on = platforms.includes(p);
+                return (
+                  <button key={p} className="platform-toggle" data-platform={p} aria-pressed={on} disabled={running}
+                    onClick={() => togglePlatform(p)}>
+                    <BrandLogo platform={p} size={15} tone={on && p !== "tiktok" ? "mono" : "brand"} />{PLATFORM_LABEL[p]}
+                  </button>
+                );
+              })}
             </div>
             <label className="flex items-center gap-2 text-[13px] text-mist">
               Freshness

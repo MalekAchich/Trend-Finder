@@ -1,12 +1,10 @@
-import { Camera, Music2, Play } from "lucide-react";
 import type { Platform } from "../api/types";
+import { BrandLogo } from "./brand";
 
-export const PLATFORM_LABEL: Record<Platform, string> = { tiktok: "TikTok", instagram: "Reels", youtube: "Shorts" };
+export const PLATFORM_LABEL: Record<Platform, string> = { tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube", x: "X" };
 
 export function PlatformIcon({ platform, size = 12 }: { platform: Platform | string | null; size?: number }) {
-  if (platform === "tiktok") return <Music2 size={size} aria-hidden />;
-  if (platform === "instagram") return <Camera size={size} aria-hidden />;
-  return <Play size={size} aria-hidden />;
+  return <BrandLogo platform={platform} size={size} />;
 }
 
 export const ROLE_LABEL: Record<string, string> = {
@@ -56,5 +54,6 @@ export function platformOf(url: string): Platform | null {
   if (/tiktok\.com/i.test(url)) return "tiktok";
   if (/instagram\.com/i.test(url)) return "instagram";
   if (/youtube\.com|youtu\.be/i.test(url)) return "youtube";
+  if (/^https?:\/\/(www\.|mobile\.)?(x|twitter)\.com\//i.test(url)) return "x";
   return null;
 }

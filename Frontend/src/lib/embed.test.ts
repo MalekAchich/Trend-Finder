@@ -10,6 +10,9 @@ describe("embedUrl", () => {
       "https://www.tiktok.com/player/v1/7400000000000000001?autoplay=1&muted=1&controls=0&loop=1&progress_bar=0&description=0&music_info=0");
     expect(embedUrl("instagram", "DTfu8CIDezV")).toBeNull();
     expect(embedUrl("youtube", "x\"><script>")).toBeNull();
+    expect(embedUrl("x", "1843213434565656789")).toBe(
+      "https://platform.twitter.com/embed/Tweet.html?id=1843213434565656789&theme=dark&dnt=true&hideThread=true");
+    expect(embedUrl("x", "abc")).toBeNull();
   });
 });
 

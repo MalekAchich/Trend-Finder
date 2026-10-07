@@ -1,4 +1,4 @@
-export type Platform = "tiktok" | "instagram" | "youtube";
+export type Platform = "tiktok" | "instagram" | "youtube" | "x";
 
 export type RunState =
   | "created" | "reading_character" | "studying_trends" | "planning" | "running" | "paused_usage" | "curating"
@@ -146,6 +146,18 @@ export interface ProviderUsage {
   calls_today: number;
   avg_tokens_per_run: number | null;
   windows: { name: string; used_percent: number; window_minutes: number | null; resets_at: number | null }[];
+}
+
+/** One item of Settings, Accounts & keys: never a secret, only whether it's set and a masked hint. */
+export interface AccountItem {
+  id: string;
+  label: string;
+  kind: "key" | "session";
+  set: boolean;
+  hint: string | null;
+  updated_at: string | null;
+  status: "set" | "not set" | "connected" | "expired" | "not connected";
+  connecting: { state: "waiting" | "connected" | "failed"; message: string } | null;
 }
 
 /** Which subscription every agent tries first; null = each agent's own order, searches alternate. */

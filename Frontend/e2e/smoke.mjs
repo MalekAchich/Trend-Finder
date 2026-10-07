@@ -66,6 +66,14 @@ for (const [w, h, name] of [[1440, 900, "desktop"], [1280, 800, "laptop"], [390,
     await p.goto(base + "/settings");
     await p.getByRole("radiogroup", { name: "Provider priority" }).waitFor({ timeout: 10_000 }).catch(() => {});
     check(await p.getByRole("radio", { name: "Balanced" }).isVisible(), `${name}: provider priority control`);
+    await p.getByRole("heading", { name: "Accounts & keys" }).waitFor({ timeout: 10_000 }).catch(() => {});
+    check(await p.getByText("YouTube Data API key").isVisible() && await p.getByText("X scraping account").isVisible(),
+      `${name}: accounts & keys section`);
+    await p.goto(base + "/");
+    const brands = p.getByRole("group", { name: "Platforms" }).locator(".platform-toggle");
+    await brands.first().waitFor({ timeout: 10_000 }).catch(() => {});
+    check(await brands.count() === 4 && await p.locator('.platform-toggle[data-platform="x"]').getAttribute("aria-pressed") === "false",
+      `${name}: four platform buttons, X off by default`);
     await p.goto(base + "/runs");
     const firstRun = p.locator("tbody a").first();
     if (await firstRun.waitFor({ timeout: 5_000 }).then(() => true, () => false)) {

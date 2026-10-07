@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { Character, CharacterDetail, FoundVideo, ModelChoice, ProviderPriority, ProviderStatus, ProviderUsage, Rating, RunDetail,
+import type { AccountItem, Character, CharacterDetail, FoundVideo, ModelChoice, ProviderPriority, ProviderStatus, ProviderUsage, Rating, RunDetail,
   RunHistoryRow, RunSummary, StartRun } from "./types";
 
 export const useCharacters = () =>
@@ -50,6 +50,26 @@ export function useSavePriority() {
     mutationFn: (first: string | null) => api.put<ProviderPriority>("/api/settings/priority", { first }),
     onSuccess: (data) => qc.setQueryData(["priority"], data),
   });
+}
+
+export const useAccounts = () =>
+  useQuery({
+    queryKey: ["accounts"], queryFn: () => api.get<{ items: AccountItem[] }>("/api/settings/accounts"),
+    // poll while a login window is open, so the card flips to "connected" by itself
+    refetchInterval: (q) => q.state.data?.items.some((i) => i.connecting?.state === "waiting") ? 1500 : false,
+  });
+
+export function useAccountAction() {
+  const qc = useQueryClient();
+  const done = () => qc.invalidateQueries({ queryKey: ["accounts"] });
+  return {
+    setKey: useMutation({ mutationFn: (v: { id: string; value: string }) =>
+      api.put<AccountItem>(`/api/settings/accounts/${v.id}`, { value: v.value }), onSuccess: done }),
+    remove: useMutation({ mutationFn: (id: string) => api.del<AccountItem>(`/api/settings/accounts/${id}`),
+      onSuccess: done }),
+    connect: useMutation({ mutationFn: (id: string) => api.post(`/api/settings/accounts/${id}/connect`, {}),
+      onSuccess: done }),
+  };
 }
 
 /** One rating mutation for every list a video can appear in (a run's grid, a character's videos). */

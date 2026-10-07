@@ -65,6 +65,27 @@
     font-size: 12.5px; border: 1px solid var(--color-line-2); color: var(--color-mist); background: transparent; }
   .chip[aria-pressed="true"] { color: var(--color-night); background: var(--color-snow); border-color: var(--color-snow); }
 
+  /* platform toggles: each in its own brand colours when on, a quiet pill with the coloured mark when off */
+  .platform-toggle { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 15px 0 12px;
+    border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--color-mist); background: oklch(1 0 0 / .035);
+    border: 1px solid var(--color-line-2);
+    transition: background .2s, color .2s, border-color .2s, box-shadow .25s, transform .15s; }
+  .platform-toggle:hover:not(:disabled) { color: var(--color-snow); border-color: oklch(1 0 0 / .24);
+    background: oklch(1 0 0 / .06); }
+  .platform-toggle:active:not(:disabled) { transform: scale(.97); }
+  .platform-toggle:disabled { opacity: .5; }
+  .platform-toggle[aria-pressed="true"] { color: #fff; border-color: transparent; }
+  .platform-toggle[data-platform="tiktok"][aria-pressed="true"] {
+    background: linear-gradient(#08080a, #08080a) padding-box, linear-gradient(120deg, #25F4EE, #FE2C55) border-box;
+    box-shadow: 0 8px 22px -10px rgb(254 44 85 / .65), 0 6px 18px -12px rgb(37 244 238 / .5); }
+  .platform-toggle[data-platform="instagram"][aria-pressed="true"] {
+    background: radial-gradient(circle at 28% 110%, #fdf497 0%, #fdf497 6%, #fd5949 42%, #d6249f 62%, #285AEB 95%);
+    box-shadow: 0 8px 22px -10px rgb(214 36 159 / .7); }
+  .platform-toggle[data-platform="youtube"][aria-pressed="true"] { background: #FF0033;
+    box-shadow: 0 8px 22px -10px rgb(255 0 51 / .7); }
+  .platform-toggle[data-platform="x"][aria-pressed="true"] { background: #f7f9f9; color: #0f1419;
+    box-shadow: 0 8px 22px -12px rgb(255 255 255 / .45); }
+
   .glass { background: color-mix(in oklch, var(--color-panel) 72%, transparent); backdrop-filter: blur(18px) saturate(1.2);
     border: 1px solid var(--color-line); }
 }

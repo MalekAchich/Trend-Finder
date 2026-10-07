@@ -1,6 +1,8 @@
+import { ExternalLink, KeyRound } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useModelSettings, usePriority, useSaveModels, useSavePriority, useUsage } from "../api/hooks";
-import type { ModelChoice, ProviderUsage } from "../api/types";
+import { useAccountAction, useAccounts, useModelSettings, usePriority, useSaveModels, useSavePriority, useUsage } from "../api/hooks";
+import type { AccountItem, ModelChoice, ProviderUsage } from "../api/types";
+import { BrandLogo } from "../components/brand";
 
 const NAME: Record<string, string> = { claude: "Claude", chatgpt: "ChatGPT" };
 function resetText(epoch: number): string {
@@ -23,6 +25,7 @@ export default function Settings() {
         {(usage.data?.providers ?? []).map((u) => <UsageCard key={u.provider} u={u} />)}
       </div>
       <Priority />
+      <Accounts />
       <h2 className="mt-12 text-[15px] font-semibold">Models</h2>
       <p className="mt-1 text-[13px] text-mist">The main model does the thinking (lead agent, reader, analyst, scouts); the fast one does quick steps (trend radar). New calls use your choice right away.</p>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -136,5 +139,92 @@ function ModelCard({ provider, choice }: { provider: string; choice: ModelChoice
         {save.isError && <span role="alert" className="text-[12.5px] text-bad">{(save.error as Error).message}</span>}
       </div>
     </form>
+  );
+}
+
+const UNLOCKS: Record<string, string> = {
+  youtube_api_key: "Shorts search sorted by views or date, with exact stats. Free, about 95 searches a day.",
+  tiktok: "TikTok's own search: fresh, sorted results instead of what search engines indexed.",
+  instagram: "Reel stats, video analysis and Instagram's own search.",
+  x: "Search for video posts on X.",
+};
+const ACCOUNT_PLATFORM: Record<string, string> = { youtube_api_key: "youtube", tiktok: "tiktok", instagram: "instagram", x: "x" };
+const since = (iso: string | null) => iso ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : null;
+
+function Accounts() {
+  const accounts = useAccounts();
+  return (
+    <>
+      <h2 className="mt-12 text-[15px] font-semibold">Accounts &amp; keys</h2>
+      <p className="mt-1 max-w-3xl text-[13px] text-mist">What the search agents can use. Everything stays on this computer, in the app's
+        secrets folder: this page only ever shows the last 4 characters. Use separate scraping accounts, never your main
+        accounts or the ones you'll post with.</p>
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
+        {(accounts.data?.items ?? []).map((a) => a.kind === "key" ? <KeyCard key={a.id} a={a} /> : <SessionCard key={a.id} a={a} />)}
+      </div>
+    </>
+  );
+}
+
+function CardHead({ a, state, tone }: { a: AccountItem; state: string; tone: "ok" | "warn" | "off" }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <p className="flex items-center gap-2.5 text-[15px] font-medium">
+        <BrandLogo platform={ACCOUNT_PLATFORM[a.id]} size={16} tone="brand" />{a.label}</p>
+      <span className={`flex shrink-0 items-center gap-1.5 text-[12.5px] ${tone === "ok" ? "text-lime" : tone === "warn" ? "text-warn" : "text-mist"}`}>
+        <span className={`h-1.5 w-1.5 rounded-full ${tone === "ok" ? "bg-lime" : tone === "warn" ? "bg-warn" : "bg-white/25"}`} />{state}</span>
+    </div>
+  );
+}
+
+function KeyCard({ a }: { a: AccountItem }) {
+  const { setKey, remove } = useAccountAction();
+  const [value, setValue] = useState("");
+  const busy = setKey.isPending || remove.isPending;
+  return (
+    <form className="rounded-2xl border border-line bg-panel/40 p-5" onSubmit={(e) => {
+      e.preventDefault();
+      if (value.trim()) setKey.mutate({ id: a.id, value }, { onSuccess: () => setValue("") });
+    }}>
+      <CardHead a={a} state={a.set ? `Set${since(a.updated_at) ? `, ${since(a.updated_at)}` : ""}` : "Not set"} tone={a.set ? "ok" : "off"} />
+      <p className="mt-2 text-[12.5px] text-mist">{UNLOCKS[a.id]}</p>
+      {a.set && <p className="num mt-3 flex items-center gap-2 text-[13px]"><KeyRound size={13} className="text-mist" />{a.hint}</p>}
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <input className="field min-w-0 flex-1" type="password" autoComplete="off" spellCheck={false} value={value}
+          onChange={(e) => setValue(e.target.value)} placeholder={a.set ? "Paste a new key to replace it" : "Paste the key"}
+          aria-label={a.label} />
+        <button className="btn-lime !h-[38px]" disabled={!value.trim() || busy}>{setKey.isPending ? "Checking…" : a.set ? "Replace" : "Save"}</button>
+        {a.set && <button type="button" className="btn-ghost !h-[38px]" disabled={busy} onClick={() => remove.mutate(a.id)}>Remove</button>}
+      </div>
+      {setKey.isError && <p role="alert" className="mt-2 text-[12.5px] text-bad">{(setKey.error as Error).message}</p>}
+      {a.id === "youtube_api_key" && (
+        <a className="mt-3 inline-flex items-center gap-1.5 text-[12.5px] text-mist hover:text-snow" target="_blank" rel="noreferrer"
+          href="https://console.cloud.google.com/apis/library/youtube.googleapis.com">
+          Get a key: enable YouTube Data API v3, then create an API key <ExternalLink size={12} /></a>
+      )}
+    </form>
+  );
+}
+
+function SessionCard({ a }: { a: AccountItem }) {
+  const { connect, remove } = useAccountAction();
+  const waiting = a.connecting?.state === "waiting";
+  const failed = a.connecting?.state === "failed";
+  const [state, tone] = waiting ? ["Waiting for you to log in", "warn"] as const
+    : a.status === "connected" ? [`Connected${since(a.updated_at) ? ` since ${since(a.updated_at)}` : ""}`, "ok"] as const
+    : a.status === "expired" ? ["Session expired", "warn"] as const : ["Not connected", "off"] as const;
+  return (
+    <div className="rounded-2xl border border-line bg-panel/40 p-5">
+      <CardHead a={a} state={state} tone={tone} />
+      <p className="mt-2 text-[12.5px] text-mist">{UNLOCKS[a.id]}</p>
+      {waiting && <p className="mt-3 text-[13px]">A browser window opened on this computer. Log in there; this card updates by itself.</p>}
+      {failed && <p role="alert" className="mt-3 text-[12.5px] text-bad">{a.connecting?.message}</p>}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button className="btn-lime !h-9" disabled={waiting || connect.isPending} onClick={() => connect.mutate(a.id)}>
+          {a.status === "not connected" ? "Connect" : "Reconnect"}</button>
+        {a.set && <button className="btn-ghost !h-9" disabled={waiting || remove.isPending} onClick={() => remove.mutate(a.id)}>Disconnect</button>}
+      </div>
+      {connect.isError && <p role="alert" className="mt-2 text-[12.5px] text-bad">{(connect.error as Error).message}</p>}
+    </div>
   );
 }
