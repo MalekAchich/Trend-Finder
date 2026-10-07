@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from tf_backend.api.deps import ctx, require_client_header
 from tf_backend.app_context import AppContext
-from tf_backend.model_settings import ChoiceError, current, save_choice, validate
+from tf_backend.model_settings import ChoiceError, current, save_choice, save_priority, validate
 from tf_backend.services import Services
 from tf_db.models import ModelCallRow, Run
 
@@ -43,6 +43,29 @@ async def put_models(body: ModelChoiceIn, request: Request, c: AppContext = Depe
     await save_choice(c.sessionmaker, sv, body.provider,
                       {"main": body.main, "fast": body.fast, "effort": body.effort})
     return current(sv, body.provider)
+
+
+class PriorityIn(BaseModel):
+    first: str | None = Field(None, max_length=32)
+
+
+def _priority(sv: Services) -> dict[str, Any]:
+    return {"first": sv.router.first, "providers": list(sv.adapters)}
+
+
+@router.get("/settings/priority")
+async def get_priority(request: Request) -> dict[str, Any]:
+    return _priority(_sv(request))
+
+
+@router.put("/settings/priority", dependencies=[Depends(require_client_header)])
+async def put_priority(body: PriorityIn, request: Request, c: AppContext = Depends(ctx)) -> dict[str, Any]:
+    sv = _sv(request)
+    try:
+        await save_priority(c.sessionmaker, sv, body.first)
+    except ChoiceError as e:
+        raise HTTPException(422, str(e)) from e
+    return _priority(sv)
 
 
 @router.get("/usage")

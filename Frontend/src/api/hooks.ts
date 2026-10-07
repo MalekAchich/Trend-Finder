@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { Character, CharacterDetail, FoundVideo, ModelChoice, ProviderStatus, ProviderUsage, Rating, RunDetail,
+import type { Character, CharacterDetail, FoundVideo, ModelChoice, ProviderPriority, ProviderStatus, ProviderUsage, Rating, RunDetail,
   RunHistoryRow, RunSummary, StartRun } from "./types";
 
 export const useCharacters = () =>
@@ -38,6 +38,17 @@ export function useSaveModels() {
     mutationFn: (v: { provider: string; main: string; fast: string; effort: string | null }) =>
       api.put<ModelChoice>("/api/settings/models", v),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["model-settings"] }),
+  });
+}
+
+export const usePriority = () =>
+  useQuery({ queryKey: ["priority"], queryFn: () => api.get<ProviderPriority>("/api/settings/priority") });
+
+export function useSavePriority() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (first: string | null) => api.put<ProviderPriority>("/api/settings/priority", { first }),
+    onSuccess: (data) => qc.setQueryData(["priority"], data),
   });
 }
 

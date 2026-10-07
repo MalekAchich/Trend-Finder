@@ -65,6 +65,19 @@ async def test_router_order_effort_and_only_filter():
     assert router.candidates("scout", only="claude") == [RouteCandidate("claude", "opus", None)]
 
 
+
+async def test_owner_priority_puts_one_provider_first_everywhere():
+    reg = ModelRegistry({"chatgpt": chat_adapter()}, {"chatgpt": {"best": "gpt-6-astra"}, "claude": {"best": "opus"}})
+    await reg.refresh()
+    router = RoleRouter({"scout": [{"provider": "chatgpt", "model": "best", "effort": "medium"},
+                                   {"provider": "claude", "model": "best"}]}, reg)
+    router.first = "claude"
+    assert [c.provider for c in router.candidates("scout")] == ["claude", "chatgpt"]
+    assert [c.provider for c in router.candidates("scout", prefer="chatgpt")] == ["claude", "chatgpt"]  # beats rotation
+    router.first = None
+    assert [c.provider for c in router.candidates("scout", prefer="claude")] == ["claude", "chatgpt"]
+    assert [c.provider for c in router.candidates("scout")] == ["chatgpt", "claude"]
+
 def test_router_unknown_role_uses_default():
     reg = ModelRegistry({}, {"claude": {"best": "opus"}})
     router = RoleRouter({"default": [{"provider": "claude", "model": "best"}]}, reg)

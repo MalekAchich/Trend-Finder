@@ -1,4 +1,4 @@
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { useActiveRun } from "./api/hooks";
 import { Navbar } from "./components/Navbar";
 import Characters from "./pages/Characters";
@@ -10,10 +10,13 @@ import Socials from "./pages/Socials";
 
 export default function App() {
   const active = useActiveRun();
+  const location = useLocation();
   return (
     <div className="min-h-screen bg-night">
       <Navbar active={active.data ?? null} />
-      <Routes>
+      {/* keyed by path: each page fades in from the night background when you move between pages */}
+      <main key={location.pathname} className="page-in">
+      <Routes location={location}>
         <Route path="/" element={<Home />} />
         <Route path="/characters" element={<Characters />} />
         <Route path="/runs" element={<Runs />} />
@@ -22,6 +25,7 @@ export default function App() {
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<p className="wrap pt-10 text-mist">That page doesn't exist.</p>} />
       </Routes>
+      </main>
     </div>
   );
 }

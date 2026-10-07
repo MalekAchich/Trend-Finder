@@ -63,13 +63,19 @@ for (const [w, h, name] of [[1440, 900, "desktop"], [1280, 800, "laptop"], [390,
       check(await p.getByText(text).first().isVisible(), `${name}: ${path} page`);
       if (shots && name === "desktop") await p.screenshot({ path: `${shots}/page${path.replace("/", "_")}.png`, fullPage: true });
     }
+    await p.goto(base + "/settings");
+    await p.getByRole("radiogroup", { name: "Provider priority" }).waitFor({ timeout: 10_000 }).catch(() => {});
+    check(await p.getByRole("radio", { name: "Balanced" }).isVisible(), `${name}: provider priority control`);
     await p.goto(base + "/runs");
-    await p.locator("tbody a").first().click();
-    await p.getByRole("region", { name: "Live agent run" }).waitFor({ timeout: 10_000 });
-    await p.waitForTimeout(2500);
-    const stuck = await p.locator('[aria-label="working"]').count();
-    check(stuck === 0, `${name}: a finished run's agents aren't stuck on working (${stuck})`);
-    if (shots && name === "desktop") await p.screenshot({ path: `${shots}/page_run.png`, fullPage: true });
+    const firstRun = p.locator("tbody a").first();
+    if (await firstRun.waitFor({ timeout: 5_000 }).then(() => true, () => false)) {
+      await firstRun.click();
+      await p.getByRole("region", { name: "Live agent run" }).waitFor({ timeout: 10_000 });
+      await p.waitForTimeout(2500);
+      const stuck = await p.locator('[aria-label="working"]').count();
+      check(stuck === 0, `${name}: a finished run's agents aren't stuck on working (${stuck})`);
+      if (shots && name === "desktop") await p.screenshot({ path: `${shots}/page_run.png`, fullPage: true });
+    } else console.log(`skip ${name}: run replay (no runs yet)`);
   }
   await p.close();
 }

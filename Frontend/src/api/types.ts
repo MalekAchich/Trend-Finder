@@ -148,6 +148,12 @@ export interface ProviderUsage {
   windows: { name: string; used_percent: number; window_minutes: number | null; resets_at: number | null }[];
 }
 
+/** Which subscription every agent tries first; null = each agent's own order, searches alternate. */
+export interface ProviderPriority {
+  first: string | null;
+  providers: string[];
+}
+
 export interface ModelChoice {
   models: { id: string; name: string; efforts: string[]; unavailable: string | null }[];
   main: string | null;

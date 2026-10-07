@@ -69,32 +69,46 @@
     border: 1px solid var(--color-line); }
 }
 
-/* the seam between the dark engine and the grey-ish library: interpolated in oklch with many stops, then a fine
-   grain on top, so the gradient never shows bands */
-.seam { position: relative; height: 220px; overflow: hidden; isolation: isolate;
+/* the seam between the dark engine and the grey-ish library. It's tall so the change has room, and its stops follow a
+   smootherstep curve computed in oklch (lightness eased, chroma barely there), so there are no kinks where layers show.
+   The grain dithers what's left of 8-bit banding. */
+.seam { position: relative; height: clamp(320px, 46vh, 540px); overflow: hidden; isolation: isolate;
   background: linear-gradient(in oklch 180deg,
-    var(--color-night) 0%, oklch(0.19 0.004 245) 12%, oklch(0.23 0.007 225) 24%, oklch(0.3 0.012 190) 36%,
-    oklch(0.4 0.02 160) 48%, oklch(0.52 0.026 140) 60%, oklch(0.65 0.026 128) 72%, oklch(0.77 0.02 122) 84%,
-    oklch(0.86 0.012 119) 93%, var(--color-paper) 100%); }
-.seam-light { position: absolute; width: 46vw; height: 260px; border-radius: 50%; filter: blur(80px); opacity: .35;
-  transition: opacity 1.2s ease; mix-blend-mode: soft-light;
-  /* fade the glow in so the seam's top edge stays pure night (no visible line where it starts) */
-  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 45%); mask-image: linear-gradient(180deg, transparent 0%, #000 45%); }
-.seam-light.a { left: -6vw; top: 50px; background: oklch(0.938 0.203 119 / 0.7); }
-.seam-light.b { left: 34vw; top: 60px; background: oklch(0.92 0.17 105 / 0.6); }
-.seam-light.c { right: -8vw; top: 60px; background: oklch(0.9 0.16 135 / 0.6); }
-.seam[data-running="true"] .seam-light { opacity: 1; mix-blend-mode: screen; }
-.seam[data-running="true"] .seam-light.a { animation: drift-a 14s ease-in-out infinite alternate; }
-.seam[data-running="true"] .seam-light.b { animation: drift-b 18s ease-in-out infinite alternate; }
-.seam[data-running="true"] .seam-light.c { animation: drift-c 16s ease-in-out infinite alternate; }
-@keyframes drift-a { to { transform: translate(22vw, 30px) scale(1.2); } }
-@keyframes drift-b { to { transform: translate(-18vw, -30px) scale(.85); } }
-@keyframes drift-c { to { transform: translate(-26vw, 20px) scale(1.15); } }
+    oklch(0.177 0.0030 248) 0%, oklch(0.177 0.0034 247) 4.2%, oklch(0.179 0.0040 240) 8.3%,
+    oklch(0.183 0.0049 225) 12.5%, oklch(0.191 0.0061 203) 16.7%, oklch(0.205 0.0074 178) 20.8%,
+    oklch(0.226 0.0087 154) 25%, oklch(0.254 0.0101 134) 29.2%, oklch(0.288 0.0114 123) 33.3%,
+    oklch(0.330 0.0126 118) 37.5%, oklch(0.377 0.0135 118) 41.7%, oklch(0.430 0.0141 118) 45.8%,
+    oklch(0.487 0.0145 118) 50%, oklch(0.545 0.0146 118) 54.2%, oklch(0.605 0.0143 118) 58.3%,
+    oklch(0.662 0.0138 118) 62.5%, oklch(0.717 0.0131 118) 66.7%, oklch(0.766 0.0122 118) 70.8%,
+    oklch(0.809 0.0112 118) 75%, oklch(0.844 0.0103 118) 79.2%, oklch(0.871 0.0094 118) 83.3%,
+    oklch(0.889 0.0087 118) 87.5%, oklch(0.900 0.0082 118) 91.7%, oklch(0.904 0.0079 118) 95.8%,
+    var(--color-paper) 100%); }
+/* soft lime/yellow lights: radial gradients with eased falloff (no blur filter, so no rims), kept off the seam's top
+   and bottom edges so it still starts at pure night and ends exactly on the library's tone */
+.seam-lights { position: absolute; inset: 0; pointer-events: none; opacity: .55; transition: opacity 1.6s ease;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 42%, #000 68%, transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 42%, #000 68%, transparent 100%); }
+.seam-light { position: absolute; width: 70vw; height: 90%; top: 18%; border-radius: 50%;
+  background: radial-gradient(closest-side, var(--glow) 0%, color-mix(in oklch, var(--glow) 82%, transparent) 18%,
+    color-mix(in oklch, var(--glow) 55%, transparent) 38%, color-mix(in oklch, var(--glow) 28%, transparent) 58%,
+    color-mix(in oklch, var(--glow) 9%, transparent) 78%, transparent 100%); }
+.seam-light.a { left: -18vw; --glow: oklch(0.93 0.14 119 / 0.17); }
+.seam-light.b { left: 16vw; top: 26%; --glow: oklch(0.94 0.12 102 / 0.14); }
+.seam-light.c { right: -20vw; --glow: oklch(0.92 0.12 132 / 0.15); }
+.seam[data-running="true"] .seam-lights { opacity: 1; }
+.seam[data-running="true"] .seam-light.a { animation: drift-a 22s ease-in-out infinite alternate; }
+.seam[data-running="true"] .seam-light.b { animation: drift-b 26s ease-in-out infinite alternate; }
+.seam[data-running="true"] .seam-light.c { animation: drift-c 24s ease-in-out infinite alternate; }
+@keyframes drift-a { to { transform: translate(18vw, 4%) scale(1.12); } }
+@keyframes drift-b { to { transform: translate(-14vw, -6%) scale(.9); } }
+@keyframes drift-c { to { transform: translate(-20vw, 3%) scale(1.08); } }
+/* a video was saved: a soft yellow band travels down the seam */
 .seam-wave { position: absolute; inset: 0; opacity: 0; pointer-events: none; transform: translateY(-110%);
-  background: linear-gradient(in oklch 180deg, transparent 0%, oklch(0.95 0.2 112 / 0) 15%,
-    oklch(0.95 0.19 108 / 0.55) 45%, oklch(0.97 0.15 100 / 0.8) 52%, oklch(0.95 0.19 108 / 0.5) 60%, transparent 90%);
+  background: linear-gradient(in oklch 180deg, transparent 0%, oklch(0.95 0.15 108 / 0.04) 22%,
+    oklch(0.95 0.15 106 / 0.16) 36%, oklch(0.96 0.13 104 / 0.3) 46%, oklch(0.97 0.12 102 / 0.36) 50%,
+    oklch(0.96 0.13 104 / 0.3) 54%, oklch(0.95 0.15 106 / 0.16) 64%, oklch(0.95 0.15 108 / 0.04) 78%, transparent 100%);
   mix-blend-mode: screen; }
-.seam-grain { position: absolute; inset: 0; pointer-events: none; opacity: .09; mix-blend-mode: overlay;
+.seam-grain { position: absolute; inset: 0; pointer-events: none; opacity: .06; mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"); }
 
 /* the logo: intro once on load, idle loops only while a run is active */
@@ -107,6 +121,9 @@
 .reveal { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .32s cubic-bezier(.2,.8,.2,1); }
 .reveal[data-open="true"] { grid-template-rows: 1fr; }
 .reveal > div { overflow: hidden; }
+
+.page-in { animation: page-in .38s cubic-bezier(.2,.7,.2,1) both; }
+@keyframes page-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 .card-enter { animation: card-enter .7s cubic-bezier(.2, .9, .25, 1.2) both; }
 @keyframes card-enter { from { opacity: 0; transform: translateY(18px) scale(.92); filter: blur(6px); }

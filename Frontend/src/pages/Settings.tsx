@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useModelSettings, useSaveModels, useUsage } from "../api/hooks";
+import { useModelSettings, usePriority, useSaveModels, useSavePriority, useUsage } from "../api/hooks";
 import type { ModelChoice, ProviderUsage } from "../api/types";
 
 const NAME: Record<string, string> = { claude: "Claude", chatgpt: "ChatGPT" };
@@ -22,12 +22,39 @@ export default function Settings() {
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         {(usage.data?.providers ?? []).map((u) => <UsageCard key={u.provider} u={u} />)}
       </div>
+      <Priority />
       <h2 className="mt-12 text-[15px] font-semibold">Models</h2>
       <p className="mt-1 text-[13px] text-mist">The main model does the thinking (lead agent, reader, analyst, scouts); the fast one does quick steps (trend radar). New calls use your choice right away.</p>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         {models.data && Object.entries(models.data).map(([p, m]) => <ModelCard key={p} provider={p} choice={m} />)}
       </div>
     </section>
+  );
+}
+
+function Priority() {
+  const priority = usePriority();
+  const save = useSavePriority();
+  const first = save.isPending ? save.variables : priority.data?.first ?? null;
+  const options = [{ value: null as string | null, label: "Balanced", hint: "Each agent uses the subscription it's tuned for, and searches alternate between both to spread the usage." },
+    ...(priority.data?.providers ?? []).map((p) => ({ value: p as string | null, label: `${NAME[p] ?? p} first`,
+      hint: `Every agent uses ${NAME[p] ?? p}. The other subscription takes over only while ${NAME[p] ?? p} is at its usage limit.` }))];
+  const picked = options.find((o) => o.value === first) ?? options[0];
+  return (
+    <>
+      <h2 className="mt-12 text-[15px] font-semibold">Provider priority</h2>
+      <p className="mt-1 text-[13px] text-mist">Which subscription the agents use first. A refused answer is never handed to the other one.</p>
+      <div role="radiogroup" aria-label="Provider priority" className="mt-4 inline-flex rounded-xl border border-line bg-panel/40 p-1">
+        {options.map((o) => (
+          <button key={o.label} type="button" role="radio" aria-checked={o.value === first} disabled={!priority.data || save.isPending}
+            onClick={() => o.value !== first && save.mutate(o.value)}
+            className={`h-9 rounded-lg px-4 text-[13px] transition-colors ${o.value === first ? "bg-snow font-medium text-night" : "text-mist hover:text-snow"}`}>
+            {o.label}</button>
+        ))}
+      </div>
+      <p className="mt-2.5 text-[12.5px] text-mist">{picked.hint}</p>
+      {save.isError && <p role="alert" className="mt-1 text-[12.5px] text-bad">{(save.error as Error).message}</p>}
+    </>
   );
 }
 

@@ -12,6 +12,7 @@ from tf_backend.services import Services
 from tf_db.models import Setting
 
 KEY = "models"
+PRIORITY_KEY = "provider_priority"
 
 
 class ChoiceError(ValueError):
@@ -76,9 +77,23 @@ async def save_choice(sm: async_sessionmaker[AsyncSession], sv: Services, provid
     apply(sv, provider, choice)
 
 
+async def save_priority(sm: async_sessionmaker[AsyncSession], sv: Services, first: str | None) -> None:
+    """Which subscription every agent tries first (the other one takes over only at a usage limit); None = per role."""
+    if first is not None and first not in sv.adapters:
+        raise ChoiceError(f"unknown provider {first}")
+    async with sm() as s:
+        stmt = pg_insert(Setting).values(key=PRIORITY_KEY, value={"first": first})
+        await s.execute(stmt.on_conflict_do_update(index_elements=[Setting.key], set_={"value": {"first": first}}))
+        await s.commit()
+    sv.router.first = first
+
+
 async def load_model_choices(sm: async_sessionmaker[AsyncSession], sv: Services) -> None:
     async with sm() as s:
         value = (await s.execute(select(Setting.value).where(Setting.key == KEY))).scalar_one_or_none() or {}
+        priority = (await s.execute(select(Setting.value).where(Setting.key == PRIORITY_KEY))).scalar_one_or_none()
     for provider, choice in value.items():
         if provider in sv.adapters:
             apply(sv, provider, choice)
+    first = (priority or {}).get("first")
+    sv.router.first = first if first in sv.adapters else None

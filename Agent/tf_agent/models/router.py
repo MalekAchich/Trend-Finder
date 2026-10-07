@@ -25,9 +25,11 @@ class RoleRouter:
     def __init__(self, roles: dict[str, list[dict[str, Any]]], registry: ModelRegistry) -> None:
         self.roles = roles
         self.registry = registry
+        self.first: str | None = None  # the owner's provider priority (Settings); None keeps each role's own order
 
     def candidates(self, role: str, only: str | None = None, prefer: str | None = None) -> list[RouteCandidate]:
         entries = self.roles.get(role) or self.roles.get("default") or []
+        prefer = self.first or prefer  # the owner's priority beats the workers' rotation
         out: list[RouteCandidate] = []
         for entry in entries:
             provider = entry["provider"]

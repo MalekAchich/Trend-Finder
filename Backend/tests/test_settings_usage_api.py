@@ -99,6 +99,22 @@ async def test_model_choices_survive_a_restart(app_parts, http):
     assert sv.registry.resolve("claude", "best") == "sonnet" and sv.client.effort_override["claude"] == "low"
 
 
+
+async def test_provider_priority_set_read_and_restored(http, app_parts):
+    from tf_backend.model_settings import load_model_choices
+
+    sv, ctx = app_parts
+    assert (await http.get("/api/settings/priority")).json() == {"first": None, "providers": ["claude", "chatgpt"]}
+    r = await http.put("/api/settings/priority", json={"first": "chatgpt"})
+    assert r.status_code == 200 and r.json()["first"] == "chatgpt" and sv.router.first == "chatgpt"
+    sv.router.first = None
+    await load_model_choices(ctx.sessionmaker, sv)
+    assert sv.router.first == "chatgpt"
+    assert (await http.put("/api/settings/priority", json={"first": None})).json()["first"] is None
+    assert sv.router.first is None
+    bad = await http.put("/api/settings/priority", json={"first": "gemini"})
+    assert bad.status_code == 422 and "gemini" in bad.json()["detail"]
+
 async def run_with_tokens(ctx, tokens: list[tuple[str, int, int]], state="review_ready"):
     async with ctx.sessionmaker() as s:
         from tf_agent.characters.folders import sync_characters
