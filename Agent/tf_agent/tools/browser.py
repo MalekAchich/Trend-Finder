@@ -9,8 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+import shutil
+import sqlite3
+import tempfile
 import time
+from pathlib import Path
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -54,6 +59,36 @@ def logged_in(state: dict[str, Any], spec: SessionSpec) -> bool:
                for c in state.get("cookies") or [])
 
 
+# a throwaway login profile shouldn't greet the owner with first-run pages
+FIREFOX_PREFS = {"browser.shell.checkDefaultBrowser": "false", "browser.aboutwelcome.enabled": "false",
+                 "datareporting.policy.dataSubmissionEnabled": "false",
+                 "browser.startup.homepage_override.mstone": '"ignore"', "toolkit.telemetry.reportingpolicy.firstRun": "false"}
+SAME_SITE = {0: "None", 1: "Lax", 2: "Strict"}
+
+
+def firefox_cookies(db: Path) -> list[dict[str, Any]]:
+    """A closed Firefox profile's cookies, in Playwright's storage-state shape."""
+    if not db.is_file():
+        return []
+    with tempfile.TemporaryDirectory() as tmp:  # read a copy: never the live files
+        for f in db.parent.glob(db.name + "*"):  # the database and its -wal journal
+            shutil.copy(f, Path(tmp) / f.name)
+        con = sqlite3.connect(Path(tmp) / db.name)
+        try:
+            rows = con.execute("select name, value, host, path, expiry, isSecure, isHttpOnly, sameSite "
+                               "from moz_cookies").fetchall()
+        finally:
+            con.close()
+    out = []
+    for name, value, host, path, expiry, secure, http_only, same_site in rows:
+        exp = int(expiry or 0)
+        out.append({"name": name, "value": value, "domain": host, "path": path or "/",
+                    "expires": exp // 1000 if exp > 10**11 else exp,  # newer Firefox stores milliseconds
+                    "httpOnly": bool(http_only), "secure": bool(secure),
+                    "sameSite": SAME_SITE.get(int(same_site or 0), "None")})
+    return out
+
+
 class StateSource(Protocol):
     async def storage_state(self) -> dict[str, Any]: ...
 
@@ -75,8 +110,9 @@ async def wait_for_close(ctx: StateSource, timeout_s: float, closed: Callable[[]
 
 
 class BrowserSessions:
-    def __init__(self, creds: Credentials, max_pages: int = 2) -> None:
+    def __init__(self, creds: Credentials, max_pages: int = 2, firefox_bin: str = "firefox") -> None:
         self.creds = creds
+        self.firefox_bin = firefox_bin
         self._pw: Any = None
         self._browser: Any = None
         self._ua: str | None = None
@@ -112,12 +148,48 @@ class BrowserSessions:
         self._browser = self._pw = None
 
     # ---- logins ----
+    async def _connect_firefox(self, platform: str, spec: SessionSpec, timeout_s: float) -> None:
+        """Opens the owner's real Firefox on a fresh throwaway profile; once Firefox is closed, its cookies are the
+        session. The profile is deleted afterwards, so only the session file remains."""
+        profile = self.creds.session_dir(platform) / "firefox-profile"
+        shutil.rmtree(profile, ignore_errors=True)
+        profile.mkdir(parents=True, mode=0o700)
+        (profile / "user.js").write_text("".join(f'user_pref("{k}", {v});\n' for k, v in FIREFOX_PREFS.items()))
+        try:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    self.firefox_bin, "--new-instance", "--profile", str(profile), spec.login_url,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            except FileNotFoundError:
+                raise LoginCancelled("Firefox isn't installed (or not on the PATH)") from None
+            deadline = time.monotonic() + timeout_s
+            try:
+                await asyncio.wait_for(proc.wait(), timeout_s)
+            except TimeoutError:
+                proc.terminate()
+                raise TimeoutError(f"Firefox stayed open for {int(timeout_s // 60)} minutes") from None
+            # some launchers hand off to the real Firefox and return at once: wait while the profile is in use
+            while os.path.lexists(profile / "lock") and time.monotonic() < deadline:
+                await asyncio.sleep(1)
+            state = {"cookies": firefox_cookies(profile / "cookies.sqlite"), "origins": []}
+        finally:
+            shutil.rmtree(profile, ignore_errors=True)
+        if not logged_in(state, spec):
+            raise LoginCancelled("Firefox was closed before the login finished (nothing was saved). Log in, wait "
+                                 "until you see the logged-in page, then close Firefox.")
+        self.creds.save_session(platform, state)
+
     async def connect(self, platform: str, timeout_s: float = LOGIN_TIMEOUT_S) -> None:
         spec = SESSIONS[platform]
         self.connecting[platform] = {"state": "waiting", "message": (
+            "A Firefox window just opened: log in there, then close Firefox." if spec.browser == "firefox" else
             "Log in in the browser window that just opened." if spec.cookie else
             "Log in in the browser window that just opened, then close the window.")}
         try:
+            if spec.browser == "firefox":
+                await self._connect_firefox(platform, spec, timeout_s)
+                self.connecting[platform] = {"state": "connected", "message": "Connected."}
+                return
             pw = await self._playwright()
             browser = await pw.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"])
             try:

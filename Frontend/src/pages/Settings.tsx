@@ -147,7 +147,7 @@ const UNLOCKS: Record<string, string> = {
   tiktok: "TikTok's own search: fresh, sorted results instead of what search engines indexed.",
   instagram: "Reel stats, video analysis and Instagram's own search.",
   x: "Search for video posts on X.",
-  tiktok_one: "TikTok's full trend rankings (top hashtags and videos) instead of only the top 3 or 4. Log in with your TikTok scraping account, then close the window.",
+  tiktok_one: "TikTok's full trend rankings (top hashtags and videos) instead of only the top 3 or 4. Opens Firefox: log in with your TikTok scraping account (email or phone and password), then close Firefox.",
 };
 const ACCOUNT_PLATFORM: Record<string, string> = { youtube_api_key: "youtube", tiktok: "tiktok", instagram: "instagram", x: "x", tiktok_one: "tiktok" };
 const since = (iso: string | null) => iso ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : null;

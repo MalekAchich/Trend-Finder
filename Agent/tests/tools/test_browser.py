@@ -111,3 +111,52 @@ def test_a_close_the_window_login_needs_a_real_login_cookie():
                                  {"name": "msToken", "value": "x", "domain": "ads.tiktok.com"}]}
     assert not logged_in(tracking_only, spec)
     assert logged_in({"cookies": [{"name": "sid_tt", "value": "x", "domain": ".tiktok.com"}]}, spec)
+
+
+# ---- logins in the owner's real Firefox (a fresh throwaway profile; cookies read after Firefox closes) ----
+FAKE_FIREFOX = """#!/usr/bin/env python3
+import os, sqlite3, sys, time
+args = sys.argv[1:]
+profile = args[args.index("--profile") + 1]
+assert "--new-instance" in args and args[-1].startswith("https://")
+lock = os.path.join(profile, "lock")
+os.symlink("127.0.0.1:+1", lock)
+db = sqlite3.connect(os.path.join(profile, "cookies.sqlite"))
+db.execute("create table moz_cookies (name, value, host, path, expiry, isSecure, isHttpOnly, sameSite)")
+rows = [("ttwid", "t", ".tiktok.com", "/", 1893456000, 1, 1, 0)]
+if os.environ.get("FAKE_FIREFOX_LOGIN") == "1":
+    rows.append(("sid_tt", "SID", ".tiktok.com", "/", 1893456000000, 1, 1, 1))  # milliseconds, as newer Firefox stores
+db.executemany("insert into moz_cookies values (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+db.commit()
+db.close()
+time.sleep(0.2)
+os.unlink(lock)
+"""
+
+
+def fake_firefox(tmp_path):
+    f = tmp_path / "firefox"
+    f.write_text(FAKE_FIREFOX)
+    f.chmod(0o755)
+    return str(f)
+
+
+async def test_firefox_login_keeps_the_session_and_deletes_the_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_FIREFOX_LOGIN", "1")
+    creds = Credentials(tmp_path / "secrets")
+    b = BrowserSessions(creds, firefox_bin=fake_firefox(tmp_path))
+    await b.connect("tiktok_one", timeout_s=20)
+    assert b.connecting["tiktok_one"]["state"] == "connected" and creds.has_session("tiktok_one")
+    cookies = {c["name"]: c for c in __import__("json").loads(creds.state_file("tiktok_one").read_text())["cookies"]}
+    assert cookies["sid_tt"]["expires"] == 1893456000 and cookies["sid_tt"]["sameSite"] == "Lax"
+    assert cookies["sid_tt"]["domain"] == ".tiktok.com" and cookies["sid_tt"]["httpOnly"] is True
+    assert not (creds.session_dir("tiktok_one") / "firefox-profile").exists()
+
+
+async def test_firefox_closed_without_logging_in_saves_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_FIREFOX_LOGIN", "0")
+    creds = Credentials(tmp_path / "secrets")
+    b = BrowserSessions(creds, firefox_bin=fake_firefox(tmp_path))
+    await b.connect("tiktok_one", timeout_s=20)
+    assert b.connecting["tiktok_one"]["state"] == "failed" and not creds.has_session("tiktok_one")
+    assert "login" in b.connecting["tiktok_one"]["message"]

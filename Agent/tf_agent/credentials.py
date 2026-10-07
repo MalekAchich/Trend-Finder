@@ -26,6 +26,7 @@ class SessionSpec:
     cookie: str | None  # present (non-empty) once logged in; None: the owner closes the window when done
     domain: str
     proof: tuple[str, ...] = ()  # for close-the-window logins: one of these cookies shows the login really happened
+    browser: str = "chromium"  # "firefox": the login opens the owner's real Firefox (some logins break elsewhere)
 
 
 SESSIONS = {
@@ -37,7 +38,8 @@ SESSIONS = {
     # TikTok's trend rankings (Creative Center, now inside TikTok One) have their own login on ads.tiktok.com
     "tiktok_one": SessionSpec("tiktok_one", "TikTok One (trend rankings)",
                               "https://ads.tiktok.com/creative/creativeCenter/trends", None, "tiktok.com",
-                              proof=("sessionid", "sessionid_ss", "sid_tt", "sid_guard", "sid_ucp_v1")),
+                              proof=("sessionid", "sessionid_ss", "sid_tt", "sid_guard", "sid_ucp_v1"),
+                              browser="firefox"),
 }
 
 

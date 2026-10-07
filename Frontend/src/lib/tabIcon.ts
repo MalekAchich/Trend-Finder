@@ -12,6 +12,49 @@ export const svgDataUrl = (svg: string) => `data:image/svg+xml;charset=utf-8,${e
 export const playsSvgIcons = (ua: string) => /firefox/i.test(ua);
 
 const FRAMES = 40;
+const MEASURE_PX = 448;
+const MARGIN = 0.01; // of the logo's size: just enough that anti-aliased stroke edges aren't cut
+
+/** The square viewBox that fits the logo's visible pixels (`bounds` in px of a MEASURE_PX render). */
+export function fitViewBox(viewBox: number[], bounds: { x0: number; y0: number; x1: number; y1: number }, px: number): string {
+  const [vx, vy, vw, vh] = viewBox;
+  const sx = vw / px, sy = vh / px;
+  const x0 = vx + bounds.x0 * sx, x1 = vx + (bounds.x1 + 1) * sx;
+  const y0 = vy + bounds.y0 * sy, y1 = vy + (bounds.y1 + 1) * sy;
+  const side = Math.max(x1 - x0, y1 - y0) * (1 + 2 * MARGIN);
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const r = (n: number) => Number(n.toFixed(2));
+  return `${r(cx - side / 2)} ${r(cy - side / 2)} ${r(side)} ${r(side)}`;
+}
+
+/** The icon zoomed to its visible logo: its empty margin is measured, not assumed. Null when it can't be measured. */
+async function tightViewBox(doc: Document, still: string): Promise<string | null> {
+  const vb = still.match(/viewBox="([^"]+)"/)?.[1].trim().split(/[\s,]+/).map(Number);
+  if (!vb || vb.length !== 4 || vb.some((n) => !Number.isFinite(n))) return null;
+  const canvas = doc.createElement("canvas");
+  canvas.width = canvas.height = MEASURE_PX;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  const img = new Image(MEASURE_PX, MEASURE_PX);
+  img.src = svgDataUrl(still);
+  await img.decode();
+  ctx.drawImage(img, 0, 0, MEASURE_PX, MEASURE_PX);
+  const { data } = ctx.getImageData(0, 0, MEASURE_PX, MEASURE_PX);
+  let x0 = MEASURE_PX, y0 = MEASURE_PX, x1 = -1, y1 = -1;
+  for (let y = 0; y < MEASURE_PX; y++) {
+    for (let x = 0; x < MEASURE_PX; x++) {
+      if (data[(y * MEASURE_PX + x) * 4 + 3] > 8) {
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+  }
+  return x1 < 0 ? null : fitViewBox(vb, { x0, y0, x1, y1 }, MEASURE_PX);
+}
+
+const withViewBox = (svg: string, vb: string | null) => vb ? svg.replace(/viewBox="[^"]+"/, `viewBox="${vb}"`) : svg;
 
 /** The icon's animation cycle in seconds: its longest `animation: name <n>s` (the file's own timing). */
 export function cycleSeconds(svg: string): number {
@@ -89,7 +132,9 @@ export function createTabIcon(doc: Document = document, ua: string = navigator.u
     }
   }
 
-  const ready = fetch(ICON_URL).then((r) => r.text()).then((svg) => {
+  const ready = fetch(ICON_URL).then((r) => r.text()).then(async (raw) => {
+    const vb = await tightViewBox(doc, stillVariant(raw)).catch(() => null);
+    const svg = withViewBox(raw, vb);
     source = svg;
     urls = { animated: svgDataUrl(svg), still: svgDataUrl(stillVariant(svg)) };
     apply();

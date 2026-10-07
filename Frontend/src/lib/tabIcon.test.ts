@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTabIcon, cycleSeconds, frameAt, playsSvgIcons, stillVariant, svgDataUrl } from "./tabIcon";
+import { createTabIcon, cycleSeconds, fitViewBox, frameAt, playsSvgIcons, stillVariant, svgDataUrl } from "./tabIcon";
 
 const SVG = `<svg><style>.a{animation:x 4s infinite} @media (prefers-reduced-motion:reduce) { .a{animation:none!important} }</style></svg>`;
 
@@ -14,6 +14,11 @@ describe("tab icon", () => {
   it("reads the cycle from the icon and freezes it at any second", () => {
     expect(cycleSeconds(SVG)).toBe(4);
     expect(frameAt(SVG, 1.5)).toMatch(/animation-delay:-1\.500s!important\}<\/style><\/svg>$/);
+  });
+
+  it("zooms to the logo's visible pixels, as a square with a small margin", () => {
+    // a 448 px render of a 112-unit icon whose logo covers px 40..407 across and 60..387 down
+    expect(fitViewBox([0, 0, 112, 112], { x0: 40, y0: 60, x1: 407, y1: 387 }, 448)).toBe("9.08 9.08 93.84 93.84");
   });
 
   it("knows which browsers play SVG tab icons", () => {

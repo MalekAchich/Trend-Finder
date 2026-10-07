@@ -22,3 +22,4 @@ class AppSettings(BaseSettings):
     whisper_model: str = "small"
     secrets_dir: Path = Path("secrets")  # API keys and scraping-account sessions (tf_agent/credentials.py)
     browser_pages: int = 2  # headless pages open at once for logged-in searches
+    firefox_bin: str = "firefox"  # the owner's Firefox, for logins that need a real browser (TikTok One)
