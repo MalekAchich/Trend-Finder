@@ -38,7 +38,8 @@ SESSIONS = {
     # TikTok's trend rankings (Creative Center, now inside TikTok One) have their own login on ads.tiktok.com
     "tiktok_one": SessionSpec("tiktok_one", "TikTok One (trend rankings)",
                               "https://ads.tiktok.com/creative/creativeCenter/trends", None, "tiktok.com",
-                              proof=("sessionid", "sessionid_ss", "sid_tt", "sid_guard", "sid_ucp_v1"),
+                              # TikTok One's own login cookies end in "_ads" (seen on a real login, 2026-10-07)
+                              proof=("sessionid_ads", "sid_tt_ads", "sid_guard_ads", "sid_ucp_v1_ads"),
                               browser="firefox"),
 }
 
