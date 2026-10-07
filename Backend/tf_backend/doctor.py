@@ -67,7 +67,7 @@ def default_probes(settings: AppSettings) -> dict[str, Probe]:
     def database() -> Check:
         if asyncio.run(ping(settings.database_url)):
             return Check("database", "OK", "reachable")
-        return Check("database", "FAIL", "unreachable: docker compose -f Database/docker-compose.yml up -d")
+        return Check("database", "FAIL", "unreachable: docker compose --env-file .env -f Database/docker-compose.yml up -d")
 
     def ffmpeg() -> Check:
         missing = [b for b in ("ffmpeg", "ffprobe") if shutil.which(b) is None]

@@ -9,7 +9,7 @@ class AppSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://tf:tf@localhost:5433/trendfinder"
+    database_url: str  # from .env only (never committed): no default credentials
     config_dir: Path = Path("config")
     claude_bin: str = "claude"
     claude_runtime_dir: Path = Path(tempfile.gettempdir()) / "tf-claude"

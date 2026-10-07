@@ -50,7 +50,7 @@
 **Files:** `Database/docker-compose.yml` (add `searxng`), `config/searxng/settings.yml`, `Database/tf_db/models/media.py`, `Database/tf_db/models/__init__.py`, `Database/migrations/versions/0002_media_tools.py`, test `Database/tests/test_media_tables.py`.
 
 **Behavior:**
-- `searxng` service: `searxng/searxng:latest`, port `127.0.0.1:8888:8080`, volume `../config/searxng:/etc/searxng`, env `SEARXNG_SECRET=${SEARXNG_SECRET:-trendfinder-local-only}`; settings enable `formats: [html, json]`, `limiter: false`, `image_proxy: false`.
+- `searxng` service: `searxng/searxng:latest`, port `127.0.0.1:8888:8080`, volume `../config/searxng:/etc/searxng`, env `SEARXNG_SECRET=${SEARXNG_SECRET:?set it in .env}`; settings enable `formats: [html, json]`, `limiter: false`, `image_proxy: false`.
 - Tables (06-data-model.md): `videos` (canonical_id PK, platform, url, creator_handle, creator_followers, caption, hashtags text[], sound_id, sound_title, posted_at, duration_s, metrics jsonb, metrics_at, media_access, first_seen_at); `video_analyses` (id uuid7, canonical_id FK→videos, pipeline_version, probe/cuts/transcript/pose/best_clean_segment/fingerprint jsonb, cut_rate, camera_motion, feasibility, filtered_reason, contact_sheet_path, media_path, created_at; index on canonical_id); `tool_cache` (key PK, tool, response jsonb, expires_at; index expires_at); `platform_state` (platform PK, health, breaker_state, opened_at, failures, quota_used_today, updated_at).
 
 **Tests:** the migration-vs-ORM test from Plan 1 now covers 0002 automatically; plus `test_media_tables.py`: video round-trip with a hashtags array; a video_analysis FK to a video; tool_cache expiry column.

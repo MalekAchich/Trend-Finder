@@ -10,8 +10,9 @@ Needs Docker, [uv](https://docs.astral.sh/uv/), Node 22, ffmpeg, the Claude CLI 
 
 ```bash
 cd "Trend Finder App"
-docker compose -f Database/docker-compose.yml up -d   # Postgres on 127.0.0.1:5433 + SearXNG on :8888
-uv sync && cp .env.example .env                       # once
+cp .env.example .env                                  # once, then put your own passwords/secrets in it
+docker compose --env-file .env -f Database/docker-compose.yml up -d   # Postgres on 127.0.0.1:5433 + SearXNG on :8888
+uv sync
 uv run tf migrate
 uv run tf login chatgpt                               # once (Claude uses the CLI's own login)
 uv run tf doctor                                      # everything green?

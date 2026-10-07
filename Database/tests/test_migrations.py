@@ -51,7 +51,7 @@ def test_schema_reset_refuses_anything_but_a_test_database():
     import pytest
 
     # unroutable hosts only: even if the guard regressed, nothing real could be reached
-    for url in ("postgresql+asyncpg://nobody:nothing@guard-check.invalid:1/trendfinder",
-                "postgresql+asyncpg://nobody:nothing@guard-check.invalid:1/prod_db"):
+    for url in ("postgresql+asyncpg://guard-check.invalid:1/trendfinder",
+                "postgresql+asyncpg://guard-check.invalid:1/prod_db"):
         with pytest.raises(RuntimeError, match="_test"):
             reset_schema_sync(url)

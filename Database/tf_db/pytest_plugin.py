@@ -11,7 +11,7 @@ from tf_db.testing import db_reachable, reset_schema_sync, test_database_url, tr
 def _db_schema() -> str:
     url = test_database_url()
     if not db_reachable(url):
-        pytest.skip("Postgres test DB not reachable: run `docker compose -f Database/docker-compose.yml up -d`")
+        pytest.skip("Postgres test DB not reachable: run `docker compose --env-file .env -f Database/docker-compose.yml up -d`")
     reset_schema_sync(url)
     return url
 

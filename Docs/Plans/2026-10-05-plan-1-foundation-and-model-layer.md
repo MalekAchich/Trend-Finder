@@ -115,8 +115,8 @@ Frontend/dist/
 
 `.env.example`:
 ```dotenv
-DATABASE_URL=postgresql+asyncpg://tf:tf@localhost:5433/trendfinder
-DATABASE_URL_TEST=postgresql+asyncpg://tf:tf@localhost:5433/trendfinder_test
+DATABASE_URL=postgresql+asyncpg://tf:<password>@localhost:5433/trendfinder
+DATABASE_URL_TEST=postgresql+asyncpg://tf:<password>@localhost:5433/trendfinder_test
 CLAUDE_BIN=claude
 CHATGPT_AUTH_FILE=secrets/chatgpt-auth.json
 PER_PROVIDER_CONCURRENCY=4
@@ -315,7 +315,7 @@ services:
     image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: tf
-      POSTGRES_PASSWORD: tf
+      POSTGRES_PASSWORD: ${TF_DB_PASSWORD:?set it in .env}
       POSTGRES_DB: trendfinder
     ports:
       - "127.0.0.1:5433:5432"
@@ -323,7 +323,7 @@ services:
       - tf_pgdata:/var/lib/postgresql/data
       - ./init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tf -d trendfinder"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d trendfinder"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -338,7 +338,7 @@ CREATE DATABASE trendfinder_test;
 
 Start it (Docker Desktop must be running):
 ```bash
-docker compose -f Database/docker-compose.yml up -d
+docker compose --env-file .env -f Database/docker-compose.yml up -d
 docker compose -f Database/docker-compose.yml ps
 ```
 Expected: `db` is `healthy` after ~10 s.
@@ -472,8 +472,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class DbSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://tf:tf@localhost:5433/trendfinder"
-    database_url_test: str = "postgresql+asyncpg://tf:tf@localhost:5433/trendfinder_test"
+    database_url: str = "postgresql+asyncpg://tf:<password>@localhost:5433/trendfinder"
+    database_url_test: str = "postgresql+asyncpg://tf:<password>@localhost:5433/trendfinder_test"
 ```
 
 `Database/tf_db/ids.py`:
@@ -674,7 +674,7 @@ from tf_db.testing import db_reachable, reset_schema_sync, test_database_url, tr
 def _db_schema() -> str:
     url = test_database_url()
     if not db_reachable(url):
-        pytest.skip("Postgres test DB not reachable: run `docker compose -f Database/docker-compose.yml up -d`")
+        pytest.skip("Postgres test DB not reachable: run `docker compose --env-file .env -f Database/docker-compose.yml up -d`")
     reset_schema_sync(url)
     return url
 
@@ -4383,7 +4383,7 @@ class AppSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://tf:tf@localhost:5433/trendfinder"
+    database_url: str = "postgresql+asyncpg://tf:<password>@localhost:5433/trendfinder"
     config_dir: Path = Path("config")
     claude_bin: str = "claude"
     claude_runtime_dir: Path = Path(tempfile.gettempdir()) / "tf-claude"
@@ -4665,7 +4665,7 @@ def default_probes(settings: AppSettings) -> dict[str, Probe]:
     def database() -> Check:
         if asyncio.run(ping(settings.database_url)):
             return Check("database", "OK", "reachable")
-        return Check("database", "FAIL", "unreachable: docker compose -f Database/docker-compose.yml up -d")
+        return Check("database", "FAIL", "unreachable: docker compose --env-file .env -f Database/docker-compose.yml up -d")
 
     def ffmpeg() -> Check:
         missing = [b for b in ("ffmpeg", "ffprobe") if shutil.which(b) is None]
@@ -4924,7 +4924,7 @@ async def test_chatgpt_models_and_tool_step():
 - [ ] **Step 2: Bring everything up and log in**
 
 ```bash
-docker compose -f Database/docker-compose.yml up -d
+docker compose --env-file .env -f Database/docker-compose.yml up -d
 uv run tf migrate
 uv run tf login chatgpt          # browser opens; if port 1455 is busy: uv run tf login chatgpt --device
 uv run tf doctor
@@ -4972,7 +4972,7 @@ Expected: two providers, both `"connected": true`, `"status": "ok"`; ChatGPT sho
 In `Docs/Code docs/08-infrastructure-and-repo.md`, replace the `## Dev workflow` section body with:
 ````markdown
 ```
-docker compose -f Database/docker-compose.yml up -d     # Postgres (pgvector); SearXNG arrives in Plan 2
+docker compose --env-file .env -f Database/docker-compose.yml up -d     # Postgres (pgvector); SearXNG arrives in Plan 2
 uv sync
 uv run tf migrate
 uv run tf login chatgpt        # once; `--device` if port 1455 is busy

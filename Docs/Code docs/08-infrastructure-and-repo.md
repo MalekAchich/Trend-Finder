@@ -66,7 +66,7 @@ The backend and frontend run natively (D-25).
 ## Environment (`.env`)
 
 ```
-DATABASE_URL=postgresql+asyncpg://tf:tf@localhost:5433/trendfinder
+DATABASE_URL=postgresql+asyncpg://tf:<password>@localhost:5433/trendfinder
 SEARXNG_URL=http://localhost:8888
 CHARACTERS_DIR=../AI Influencers Characters
 MEDIA_DIR=./media
@@ -100,7 +100,7 @@ PIPELINE_WORKERS=2
 ## Dev workflow
 
 ```
-docker compose -f Database/docker-compose.yml up -d     # Postgres on 127.0.0.1:5433, SearXNG on 127.0.0.1:8888
+docker compose --env-file .env -f Database/docker-compose.yml up -d     # Postgres on 127.0.0.1:5433, SearXNG on 127.0.0.1:8888
 uv sync
 cp .env.example .env           # once
 uv run tf migrate

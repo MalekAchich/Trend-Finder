@@ -3,8 +3,9 @@ services:
   db:
     image: pgvector/pgvector:pg17
     environment:
-      POSTGRES_USER: tf
-      POSTGRES_PASSWORD: tf
+      # credentials come from the app's .env (never committed): run compose with --env-file .env
+      POSTGRES_USER: ${TF_DB_USER:?set TF_DB_USER in the app's .env}
+      POSTGRES_PASSWORD: ${TF_DB_PASSWORD:?set TF_DB_PASSWORD in the app's .env}
       POSTGRES_DB: trendfinder
     ports:
       - "127.0.0.1:5433:5432"
@@ -12,14 +13,14 @@ services:
       - tf_pgdata:/var/lib/postgresql/data
       - ./init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tf -d trendfinder"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d trendfinder"]
       interval: 5s
       timeout: 3s
       retries: 20
   searxng:
     image: searxng/searxng:latest
     environment:
-      SEARXNG_SECRET: ${SEARXNG_SECRET:-trendfinder-local-only}
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET in the app's .env}
       SEARXNG_BASE_URL: http://localhost:8888/
     ports:
       - "127.0.0.1:8888:8080"
