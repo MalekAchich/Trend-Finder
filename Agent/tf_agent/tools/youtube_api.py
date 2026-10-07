@@ -89,9 +89,11 @@ def _error(r: httpx.Response) -> ToolFailure:
     if reasons & {"quotaExceeded", "dailyLimitExceeded", "rateLimitExceeded"}:
         return ToolFailure("rate_limited", "YouTube API quota used up for today (resets at midnight Pacific)",
                            retry_after_s=3600)
-    if reasons & {"API_KEY_INVALID", "keyInvalid", "accessNotConfigured", "SERVICE_DISABLED", "forbidden"} or r.status_code in (400, 401, 403):
+    if reasons & {"API_KEY_INVALID", "keyInvalid", "accessNotConfigured", "SERVICE_DISABLED", "forbidden"} or r.status_code in (401, 403):
         return ToolFailure("login_required", "YouTube API key rejected: check it, and that YouTube Data API v3 is "
                                              "enabled for its project (Settings, Accounts & keys)")
+    if r.status_code == 400:
+        return ToolFailure("invalid_input", f"YouTube API refused the search: {str(err.get('message') or '')[:160]}")
     return ToolFailure("platform_unavailable", f"YouTube API error {r.status_code}")
 
 
@@ -138,7 +140,8 @@ class YouTubeApi:
             return  # out of quota today: can't check, accept it
         try:
             async with self._client() as c:
-                r = await c.get(f"{API}/videos", params={"part": "id", "id": "dQw4w9WgXcQ", "key": key})
+                r = await c.get(f"{API}/videos", params={"part": "id", "id": "dQw4w9WgXcQ"},
+                                headers={"x-goog-api-key": key})
         except httpx.HTTPError as e:
             raise ToolFailure("platform_unavailable", f"couldn't reach Google to check the key ({type(e).__name__})") \
                 from None
@@ -154,14 +157,14 @@ class YouTubeApi:
             raise ToolFailure("rate_limited", "YouTube API daily quota used up (resets at midnight Pacific)",
                               retry_after_s=3600)
         params: dict[str, Any] = {"part": "snippet", "type": "video", "videoDuration": "short", "q": query,
-                                  "maxResults": min(max(n * 2, 10), 50), "order": order, "key": key,
-                                  "safeSearch": "none"}
+                                  "maxResults": min(max(n * 2, 10), 50), "order": order, "safeSearch": "none"}
         if published_after is not None:
             params["publishedAfter"] = published_after.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         if region:
             params["regionCode"] = region
         try:
             async with self._client() as c:
+                c.headers["x-goog-api-key"] = key  # a header, not the URL: request URLs end up in logs
                 r = await c.get(f"{API}/search", params=params)
                 if r.status_code != 200:
                     raise _error(r)
@@ -169,7 +172,7 @@ class YouTubeApi:
                 if not ids:
                     return []
                 r = await c.get(f"{API}/videos", params={"part": "snippet,statistics,contentDetails",
-                                                          "id": ",".join(ids), "key": key})
+                                                          "id": ",".join(ids)})
                 if r.status_code != 200:
                     raise _error(r)
         except httpx.HTTPError as e:  # never echo the request URL: it carries the key

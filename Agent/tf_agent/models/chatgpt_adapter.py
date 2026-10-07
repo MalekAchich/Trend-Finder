@@ -69,8 +69,11 @@ def build_payload(req: CompletionRequest) -> dict[str, Any]:
                     content.append({"type": "input_image", "image_url": _image_url(p)})
             items.append({"type": "message", "role": "user", "content": content})
         elif m.role == "assistant":
-            # our own earlier reasoning for this turn goes back first (stateless: store=False keeps nothing)
-            items.extend(dict(r) for r in m.provider_state.get(PROVIDER) or [])
+            # our own earlier reasoning for this turn goes back first (stateless: store=False keeps nothing), but only to
+            # the model that wrote it: the owner can change models between steps, and another model can't read it
+            mine = m.provider_state.get(PROVIDER) or {}
+            if mine.get("model") == req.model:
+                items.extend(dict(r) for r in mine.get("reasoning") or [])
             if m.text():
                 items.append({"type": "message", "role": "assistant",
                               "content": [{"type": "output_text", "text": m.text()}]})
@@ -281,7 +284,7 @@ class ChatGPTOAuthAdapter:
                     raise MalformedResponse(PROVIDER, "structured output was not valid JSON") from e
             return CompletionResponse(provider=PROVIDER, model=req.model, text=text, tool_calls=calls,
                                       structured=structured, usage=usage, rate=rate, reasoning=reasoning,
-                                      provider_state={PROVIDER: kept} if kept else {})
+                                      provider_state={PROVIDER: {"model": req.model, "reasoning": kept}} if kept else {})
         raise AuthRequired(PROVIDER, "still unauthorized after token refresh: run `tf login chatgpt`")
 
     async def usage(self) -> RateInfo | None:

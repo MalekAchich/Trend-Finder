@@ -668,6 +668,8 @@ class Orchestrator:
 
     # ---------- planning ----------
     def _health(self) -> dict[str, str]:
+        if (refresh := getattr(self.tools, "refresh_modes", None)) is not None:
+            refresh()
         registry = getattr(self.tools, "registry", None)
         return registry.snapshot() if registry is not None else {}
 

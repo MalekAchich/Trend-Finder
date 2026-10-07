@@ -53,6 +53,10 @@ class ToolStack:
         return [t for t in build_tools(self.platform_tools(seen_filter), self.searx, default_recent=recent)
                 if t.name in wanted]
 
+    def refresh_modes(self) -> None:
+        """Re-read which accounts are connected (Settings can connect one between runs)."""
+        self.platforms.sync_modes()
+
     async def get_video(self, url: str) -> VideoItem:
         """Metadata for one URL the owner pasted (stored like any tool result)."""
         return await self.platform_tools().get_video(url)

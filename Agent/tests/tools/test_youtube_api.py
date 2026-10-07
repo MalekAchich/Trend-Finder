@@ -35,6 +35,7 @@ async def test_search_returns_shorts_with_full_stats():
 
     def handler(r):
         seen.append(r.url)
+        assert r.headers["x-goog-api-key"] == "AIza-key" and "key" not in r.url.params
         return httpx.Response(200, json=SEARCH if r.url.path.endswith("/search") else VIDEOS)
 
     quota = MemoryQuota()
@@ -93,3 +94,10 @@ async def test_key_check_costs_one_unit_and_reports_a_bad_key():
     with pytest.raises(ToolFailure) as ei:
         await api(lambda r: httpx.Response(400, json=bad)).check_key("bad")
     assert ei.value.error.code == "login_required"
+
+
+async def test_a_bad_search_parameter_is_not_a_bad_key():
+    bad = {"error": {"code": 400, "errors": [{"reason": "invalidPublishedAfter"}], "message": "bad date"}}
+    with pytest.raises(ToolFailure) as ei:
+        await api(lambda r: httpx.Response(400, json=bad)).shorts_search("x", 5)
+    assert ei.value.error.code == "invalid_input"

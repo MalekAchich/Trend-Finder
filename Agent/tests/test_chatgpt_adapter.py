@@ -260,15 +260,16 @@ async def test_reasoning_items_come_back_as_provider_state():
     adapter, _ = make(handler)
     resp = await adapter.complete(req(tools=[ADD], reasoning_effort="medium"))
     assert "reasoning.encrypted_content" in seen["payload"]["include"]
-    items = resp.provider_state["chatgpt"]
-    assert items == [{"type": "reasoning", "encrypted_content": "gAAA-secret-blob",
+    state = resp.provider_state["chatgpt"]
+    assert state["model"] == "gpt-6-sol"
+    assert state["reasoning"] == [{"type": "reasoning", "encrypted_content": "gAAA-secret-blob",
                       "summary": [{"type": "summary_text", "text": "Check gym trends."}]}]  # no id: nothing is stored
 
 
 def test_reasoning_goes_back_before_that_turns_calls_and_only_to_chatgpt():
     call = ToolCall("call_A", "add", {"a": 1, "b": 2})
     item = {"type": "reasoning", "encrypted_content": "blob", "summary": []}
-    mine = Message.assistant("", [call], {"chatgpt": [item]})
+    mine = Message.assistant("", [call], {"chatgpt": {"model": "m", "reasoning": [item]}})
     foreign = Message.assistant("", [ToolCall("call_B", "add", {"a": 1, "b": 1})], {"claude": [{"x": 1}]})
     r = CompletionRequest(model="m", system="s", messages=[
         Message.user("go"), mine, Message.tool_result(call, "3"),
@@ -276,3 +277,12 @@ def test_reasoning_goes_back_before_that_turns_calls_and_only_to_chatgpt():
     types = [i["type"] for i in build_payload(r)["input"]]
     assert types == ["message", "reasoning", "function_call", "function_call_output", "function_call",
                      "function_call_output"]
+
+
+def test_reasoning_from_another_model_is_not_sent():
+    call = ToolCall("call_A", "add", {"a": 1, "b": 2})
+    item = {"type": "reasoning", "encrypted_content": "blob", "summary": []}
+    old = Message.assistant("", [call], {"chatgpt": {"model": "gpt-6-luna", "reasoning": [item]}})
+    r = CompletionRequest(model="gpt-6-astra", system="s", messages=[Message.user("go"), old,
+                                                                     Message.tool_result(call, "3")])
+    assert "reasoning" not in [i["type"] for i in build_payload(r)["input"]]

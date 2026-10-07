@@ -103,8 +103,11 @@ class PlatformTools:
         # every SearXNG query (site: searches and web_search) shares one politeness lane: same upstream engines
         self.search_limiter = search_limiter or RateLimiter(1.0)
         self._clock = clock
-        if not self._ig_enrich():
-            registry.configure_mode("instagram", "discovery_only")
+        self.sync_modes()
+
+    def sync_modes(self) -> None:
+        """Instagram is discovery-only until an account is connected; connecting one (any time) lifts it."""
+        self.registry.configure_mode("instagram", "full" if self._ig_enrich() else "discovery_only")
 
     def _has_session(self, platform: str) -> bool:
         return self.browser is not None and self.browser.creds.has_session(platform)

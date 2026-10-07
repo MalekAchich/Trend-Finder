@@ -103,3 +103,11 @@ async def test_youtube_api_first_then_the_old_route_on_failure(tmp_path):
     pt2, _ = make(tmp_path / "b", yt_api=failing)
     res2 = await pt2.shorts_search("deadpan", 5)
     assert any("quota" in n for n in res2.notes)
+
+
+async def test_instagram_health_follows_the_connected_account(tmp_path):
+    pt, browser = make(tmp_path)
+    assert pt.registry.health("instagram") == "degraded"  # discovery only
+    browser.creds.save_session("instagram", {"cookies": [], "origins": []})
+    pt.sync_modes()
+    assert pt.registry.health("instagram") == "ok"
