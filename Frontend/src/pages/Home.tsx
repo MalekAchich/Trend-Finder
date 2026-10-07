@@ -4,7 +4,7 @@ import { useActiveRun, useCharacters, useRun, useStartRun, useStopRun } from "..
 import type { FoundVideo, RunDetail } from "../api/types";
 import { Composer } from "../components/Composer";
 import { Engine } from "../components/Engine";
-import { Library } from "../components/Library";
+import { Library, type LibraryTab } from "../components/Library";
 import { Seam, type SeamHandle } from "../components/Seam";
 import { useRunStream } from "../stream/useRunStream";
 
@@ -23,6 +23,11 @@ export default function Home() {
   const seam = useRef<SeamHandle>(null);
   const savedStripRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const [libraryTab, setLibraryTab] = useState<LibraryTab>("found");
+  const showManual = () => {
+    setLibraryTab("manual");
+    gridRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   const chars = characters.data ?? [];
   useEffect(() => {
@@ -70,7 +75,7 @@ export default function Home() {
         )}
         <Composer characters={chars} selected={selected} onSelect={(s) => { setSelected(s); setLibrarySlug(s); }}
           running={running} starting={start.isPending} error={start.error ? (start.error as Error).message : null}
-          onStop={() => viewRunId && stop.mutate(viewRunId)}
+          onStop={() => viewRunId && stop.mutate(viewRunId)} onShowManual={showManual}
           onStart={(body) => start.mutate(body, { onSuccess: ({ run_id }) => {
             setViewRunId(run_id); setLibrarySlug(body.character); setFreshIds(new Set());
           } })} />
@@ -81,7 +86,7 @@ export default function Home() {
       </div>
       <Seam ref={seam} running={running} />
       <Library characters={chars} slug={librarySlug} onSlug={setLibrarySlug} activeRunId={running ? viewRunId : null}
-        freshIds={freshIds} gridRef={gridRef} />
+        freshIds={freshIds} gridRef={gridRef} tab={libraryTab} onTab={setLibraryTab} />
     </div>
   );
 }

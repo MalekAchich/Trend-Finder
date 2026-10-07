@@ -1,7 +1,8 @@
 import { ChevronDown } from "lucide-react";
 import { useState } from "react";
-import { useCharacterRuns, useRunVideos, useScoreRun } from "../api/hooks";
+import { useCharacterRuns, useManualVideos, useRunVideos, useScoreRun } from "../api/hooks";
 import type { Character, RunSummary } from "../api/types";
+import { ManualPanel } from "./ManualVideos";
 import { STATE_TEXT } from "./ui";
 import { VideoGrid } from "./VideoGrid";
 
@@ -12,20 +13,44 @@ interface Props {
   activeRunId: string | null;
   freshIds: Set<string>;
   gridRef: React.RefObject<HTMLDivElement | null>;
+  tab: LibraryTab;
+  onTab: (tab: LibraryTab) => void;
 }
 
-export function Library({ characters, slug, onSlug, activeRunId, freshIds, gridRef }: Props) {
+export type LibraryTab = "found" | "manual";
+
+/** The two video sections, side by side as tabs: what the agents found, and what you chose by hand. */
+export function LibraryTabs({ tab, onTab }: { tab: LibraryTab; onTab: (t: LibraryTab) => void }) {
+  const manual = useManualVideos(null).data?.items.length;
+  const item = (t: LibraryTab, label: string) => (
+    <button role="tab" aria-selected={tab === t} onClick={() => onTab(t)}
+      className={`relative pb-2 text-[26px] font-semibold transition max-sm:text-[21px] ${tab === t ? "text-ink" : "text-ink-2/55 hover:text-ink-2"}`}>
+      {label}
+      <span className={`absolute inset-x-0 -bottom-px h-[3px] rounded-full bg-ink transition ${tab === t ? "opacity-100" : "opacity-0"}`} />
+    </button>
+  );
+  return (
+    <div role="tablist" aria-label="Videos" className="flex flex-wrap items-end gap-x-7 gap-y-1">
+      {item("found", "Found videos")}
+      {item("manual", `Manually chosen${manual ? ` (${manual})` : ""}`)}
+    </div>
+  );
+}
+
+export function Library({ characters, slug, onSlug, activeRunId, freshIds, gridRef, tab, onTab }: Props) {
   const runs = useCharacterRuns(slug);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const list = runs.data ?? [];
   const isOpen = (r: RunSummary, i: number) => open[r.id] ?? (i === 0 || r.id === activeRunId);
   return (
-    <section className="bg-paper pb-24 text-ink" aria-label="Found videos">
+    <section className="bg-paper pb-24 text-ink" aria-label="Videos">
       <div className="wrap" ref={gridRef}>
         <div className="flex flex-wrap items-end justify-between gap-4 pb-8 pt-2">
           <div>
-            <h2 className="text-[26px] font-semibold">Found videos</h2>
-            <p className="mt-1 text-[13px] text-ink-2">Everything the agents saved, by character and run. Hover a video to preview it.</p>
+            <LibraryTabs tab={tab} onTab={onTab} />
+            <p className="mt-2 text-[13px] text-ink-2">{tab === "found"
+              ? "Everything the agents saved, by character and run. Hover a video to preview it."
+              : "Videos you chose: references the agents study, and targets a character should recreate."}</p>
           </div>
           <div className="flex gap-1.5 rounded-full bg-paper-2 p-1" role="tablist" aria-label="Character">
             {characters.map((c) => (
@@ -38,18 +63,19 @@ export function Library({ characters, slug, onSlug, activeRunId, freshIds, gridR
             ))}
           </div>
         </div>
-        {runs.isSuccess && list.length === 0 && (
+        {tab === "manual" && <ManualPanel characters={characters} slug={slug} />}
+        {tab === "found" && runs.isSuccess && list.length === 0 && (
           <div className="rounded-2xl border border-dashed border-rule px-6 py-14 text-center">
             <p className="text-[15px] font-medium">No runs for this character yet</p>
             <p className="mt-1 text-[13px] text-ink-2">Start one above. Videos land here as the agents save them.</p>
           </div>
         )}
-        <div className="space-y-4">
+        {tab === "found" && <div className="space-y-4">
           {list.map((r, i) => (
             <RunSection key={r.id} run={r} slug={slug!} open={isOpen(r, i)} live={r.id === activeRunId || r.active}
               onToggle={() => setOpen((o) => ({ ...o, [r.id]: !isOpen(r, i) }))} freshIds={freshIds} />
           ))}
-        </div>
+        </div>}
       </div>
     </section>
   );

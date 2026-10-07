@@ -73,6 +73,34 @@ class Target(Base):
     created_at: Mapped[datetime] = _created()
 
 
+class ManualVideo(Base):
+    """A video the owner chose by hand: intel for the agents (a reference), a target to recreate, or both."""
+    __tablename__ = "manual_videos"
+    id: Mapped[uuid.UUID] = _id()
+    url: Mapped[str] = mapped_column(Text)
+    canonical_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    platform: Mapped[str] = mapped_column(String(16))
+    is_reference: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    target_character_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID_T, ForeignKey("characters.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(String(16), default="checking", server_default="checking")
+    problem: Mapped[str | None] = mapped_column(Text)
+    thumbnail_path: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created()
+
+
+class ReferenceStudy(Base):
+    """What the agents learned from one reference video, for one character (studied once, reused by every run)."""
+    __tablename__ = "reference_studies"
+    __table_args__ = (UniqueConstraint("manual_video_id", "character_id"),)
+    id: Mapped[uuid.UUID] = _id()
+    manual_video_id: Mapped[uuid.UUID] = mapped_column(UUID_T, ForeignKey("manual_videos.id", ondelete="CASCADE"))
+    character_id: Mapped[uuid.UUID] = mapped_column(UUID_T, ForeignKey("characters.id", ondelete="CASCADE"))
+    study: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    provider: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = _created()
+
+
 class TasteProfile(Base):
     __tablename__ = "taste_profiles"
     __table_args__ = (UniqueConstraint("character_id", "version"),)
@@ -218,6 +246,9 @@ class FindingScore(Base):
     adaptation_idea: Mapped[str | None] = mapped_column(Text)
     feasibility_notes: Mapped[str | None] = mapped_column(Text)
     niche_guess: Mapped[str | None] = mapped_column(String(128))
+    tags: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    trend_type: Mapped[str | None] = mapped_column(String(64))
+    audio_use: Mapped[str | None] = mapped_column(String(200))
     feasibility: Mapped[float | None] = mapped_column(Float)
     momentum: Mapped[float | None] = mapped_column(Float)
     freshness: Mapped[float | None] = mapped_column(Float)

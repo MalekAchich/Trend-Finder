@@ -132,3 +132,35 @@ async def test_phases_announce_once_and_trend_study_shows_up_as_an_agent(db_sess
     assert states.count("reading_character") == 1
     kinds = [(e["type"], (e["payload"].get("agent") or {}).get("role")) for e in events]
     assert kinds.index(("agent.started", "seed_study")) < kinds.index(("trend.studied", "seed_study"))
+
+
+
+# ---- Plan 8: references live in the owner's list, studied once per character ----
+async def test_references_are_studied_once_and_reused_by_later_runs(db_sessionmaker, tmp_path):
+    from tf_agent.manual import ManualVideos
+
+    world = World()
+    orch = await build(db_sessionmaker, tmp_path, world)
+    first = await orch.create_run("testy", settings(trend_urls=[TREND], freshness="day"))
+    await orch.execute(first)
+    assert world.studies == 1
+    (card,) = await ManualVideos(db_sessionmaker).list("testy")
+    assert card["is_reference"] and card["study"]["format"] == "slow-motion walk-in to a beat drop"
+    second = await orch.create_run("testy", settings(freshness="day"))  # no links given: the list is used
+    await orch.execute(second)
+    assert world.studies == 1  # reused, not studied again
+    async with db_sessionmaker() as s:
+        run = await s.get(Run, second)
+    assert run.inputs["trend_studies"][TREND]["format"] == "slow-motion walk-in to a beat drop"
+    assert "The owner's reference videos (1 studied" in world.master_prompts[-1]
+
+
+def test_the_planner_gets_a_summary_and_the_best_fits():
+    from tf_agent.orchestrator.run import STUDY_DETAIL, reference_lines
+
+    studies = [{"format": f"f{i}", "trend_type": "dance" if i % 2 else "skit", "niche": "office", "tags": ["desk"],
+                "fit_score": i % 11} for i in range(30)]
+    lines = reference_lines(studies)
+    assert "dance (15)" in lines[1] and "skit (15)" in lines[1] and "office (30)" in lines[2]
+    detail = [ln for ln in lines if ln.startswith("- [")]
+    assert len(detail) == STUDY_DETAIL and detail[0].startswith("- [10/10]")

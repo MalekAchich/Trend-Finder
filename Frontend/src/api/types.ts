@@ -81,9 +81,47 @@ export interface FoundVideo {
   best_segment: { start_s: number; end_s: number } | null;
   watch_out: string | null;
   niche_guess: string | null;
+  tags: string[];
+  trend_type: string | null;
+  audio_use: string | null;
   source: "agent" | "owner";
   found_at: string | null;
   feedback: { rating: Rating; note: string | null } | null;
+}
+
+/** What the agents learned from one reference video (for one character). */
+export interface ReferenceStudy {
+  format?: string;
+  hook?: string;
+  why_it_works?: string;
+  search_angles?: string[];
+  fit_for_character?: string;
+  niche?: string;
+  tags?: string[];
+  trend_type?: string;
+  audio_use?: string;
+  fit_score?: number;
+}
+
+/** A video the owner chose by hand: a reference (intel), a target for one character, or both. */
+export interface ManualVideo {
+  id: string;
+  url: string;
+  canonical_id: string | null;
+  platform: Platform;
+  platform_id: string | null;
+  thumbnail_url: string | null;
+  status: "checking" | "ready" | "problem";
+  problem: string | null;
+  creator: string | null;
+  caption: string | null;
+  views: number | null;
+  duration_s: number | null;
+  posted_at: string | null;
+  is_reference: boolean;
+  target: { slug: string; name: string; state: "waiting" | "analysed"; run_id: string | null; score: number | null } | null;
+  study: ReferenceStudy | null;
+  added_at: string | null;
 }
 
 export interface StreamEvent {

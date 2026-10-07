@@ -71,6 +71,9 @@ export function VideoSheet({ video, onClose, children }: { video: FoundVideo | n
             )}
             {video.watch_out && <Block title="Watch out for">{video.watch_out}</Block>}
             {video.niche_guess && <Block title="Niche">{video.niche_guess}</Block>}
+            {video.trend_type && <Block title="Trend type">{video.trend_type}</Block>}
+            {video.audio_use && <Block title="Audio">{video.audio_use}</Block>}
+            {(video.tags ?? []).length > 0 && <Block title="Tags">{video.tags.map((t) => `#${t}`).join("  ")}</Block>}
             <a href={video.url} target="_blank" rel="noreferrer"
               className="mt-6 inline-flex items-center gap-1.5 text-[13px] font-medium underline underline-offset-4">
               Open the original on {PLATFORM_LABEL[video.platform]} <ExternalLink size={13} /></a>

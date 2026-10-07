@@ -9,7 +9,9 @@ from tf_db.models.runs import (
     Finding,
     FindingScore,
     Lead,
+    ManualVideo,
     Round,
+    ReferenceStudy,
     Run,
     ScopeClaim,
     SeenItem,
@@ -21,7 +23,7 @@ from tf_db.models.runs import (
     TrendMember,
 )
 
-__all__ = ["CardFeedback", "RunFeedback", "Character", "CharacterVersion", "Direction", "Event", "Finding", "FindingScore", "Lead", "ModelCallRow",
-           "ModelRow", "PlatformStateRow", "ProviderStateRow", "Round", "Run", "ScopeClaim", "SeenItem",
+__all__ = ["CardFeedback", "RunFeedback", "Character", "CharacterVersion", "Direction", "Event", "Finding", "FindingScore", "Lead", "ManualVideo", "ModelCallRow",
+           "ModelRow", "PlatformStateRow", "ProviderStateRow", "ReferenceStudy", "Round", "Run", "ScopeClaim", "SeenItem",
            "Setting", "Target", "TasteProfile", "Task", "ToolCacheRow", "TrendCluster", "TrendMember", "Video",
            "VideoAnalysis"]

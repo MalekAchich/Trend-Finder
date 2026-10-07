@@ -1,5 +1,7 @@
 import { useSearchParams } from "react-router-dom";
 import { useCharacter, useCharacterVideos, useCharacters } from "../api/hooks";
+import { LibraryTabs, type LibraryTab } from "../components/Library";
+import { ManualPanel } from "../components/ManualVideos";
 import { VideoGrid } from "../components/VideoGrid";
 
 const WINDOWS = [{ label: "Today", days: 1 }, { label: "7 days", days: 7 }, { label: "30 days", days: 30 },
@@ -11,6 +13,7 @@ export default function Characters() {
   const list = characters.data ?? [];
   const slug = params.get("c") ?? list[0]?.slug ?? null;
   const days = params.get("days") ? Number(params.get("days")) : null;
+  const tab: LibraryTab = params.get("tab") === "manual" ? "manual" : "found";
   const detail = useCharacter(slug);
   const videos = useCharacterVideos(slug, days);
   const set = (k: string, v: string | null) => {
@@ -81,27 +84,30 @@ export default function Characters() {
         )}
       </section>
       <div className="seam" data-running={false} aria-hidden><div className="seam-grain" /></div>
-      <section className="bg-paper pb-24 text-ink" aria-label="Found videos for this character">
+      <section className="bg-paper pb-24 text-ink" aria-label="Videos for this character">
         <div className="wrap">
           <div className="flex flex-wrap items-end justify-between gap-4 pb-6 pt-2">
             <div>
-              <h2 className="text-[24px] font-semibold">Found videos{d ? ` for ${d.name}` : ""}</h2>
-              <p className="mt-1 text-[13px] text-ink-2">Every video the agents saved for this character, newest first.</p>
+              <LibraryTabs tab={tab} onTab={(t) => set("tab", t === "found" ? null : t)} />
+              <p className="mt-2 text-[13px] text-ink-2">{tab === "found"
+                ? `Every video the agents saved${d ? ` for ${d.name}` : ""}, newest first.`
+                : `Your references (with what was learned for ${d?.name ?? "this character"}) and targets.`}</p>
             </div>
-            <div className="flex gap-1 rounded-full bg-paper-2 p-1" role="radiogroup" aria-label="Found">
+            {tab === "found" && <div className="flex gap-1 rounded-full bg-paper-2 p-1" role="radiogroup" aria-label="Found">
               {WINDOWS.map((w) => (
                 <button key={w.label} role="radio" aria-checked={days === w.days}
                   onClick={() => set("days", w.days == null ? null : String(w.days))}
                   className={`rounded-full px-3 py-1 text-[13px] ${days === w.days ? "bg-white font-medium shadow-sm" : "text-ink-2 hover:text-ink"}`}>
                   {w.label}</button>
               ))}
-            </div>
+            </div>}
           </div>
-          {videos.isSuccess && (videos.data?.length ?? 0) === 0 && (
+          {tab === "manual" && <ManualPanel characters={characters.data ?? []} slug={slug} />}
+          {tab === "found" && videos.isSuccess && (videos.data?.length ?? 0) === 0 && (
             <div className="rounded-2xl border border-dashed border-rule px-6 py-14 text-center text-[13px] text-ink-2">
               {days ? "Nothing found in this window. Try a longer one." : "No videos yet. Start a run from Home."}</div>
           )}
-          <VideoGrid videos={videos.data ?? []} />
+          {tab === "found" && <VideoGrid videos={videos.data ?? []} />}
         </div>
       </section>
     </>

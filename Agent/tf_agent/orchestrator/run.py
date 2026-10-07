@@ -64,6 +64,32 @@ FRESHNESS = ("day", "week", "month", "any")
 OWNER = {"id": "owner", "role": "owner", "platform": None}
 
 
+STUDY_PARALLEL = 2  # reference videos studied at once (each is downloaded and analysed)
+STUDY_DETAIL = 12  # how many reference studies the planner reads in full (the rest feed the summary)
+
+
+def _top(values: list[str], n: int) -> str:
+    counts: dict[str, int] = {}
+    for v in values:
+        if v:
+            counts[v] = counts.get(v, 0) + 1
+    return ", ".join(f"{k} ({c})" for k, c in sorted(counts.items(), key=lambda kv: -kv[1])[:n]) or "-"
+
+
+def reference_lines(studies: list[dict[str, Any]]) -> list[str]:
+    """The owner's reference videos for the planner: what they have in common, then the best fits in detail."""
+    lines = [f"The owner's reference videos ({len(studies)} studied; search for these formats for this character).",
+             f"- trend types: {_top([str(s.get('trend_type') or '').lower() for s in studies], 8)}",
+             f"- niches: {_top([str(s.get('niche') or '').lower() for s in studies], 8)}",
+             f"- tags: {_top([t for s in studies for t in s.get('tags') or []], 15)}",
+             f"Best fits for this character (of {len(studies)}):"]
+    best = sorted(studies, key=lambda s: -int(s.get("fit_score") or 0))[:STUDY_DETAIL]
+    lines += [f"- [{s.get('fit_score', '?')}/10] {s.get('trend_type') or '?'} | {s.get('format')} | "
+              f"hook: {s.get('hook')} | why: {s.get('why_it_works')} | audio: {s.get('audio_use') or '-'} | "
+              f"angles: {', '.join(s.get('search_angles') or [])}" for s in best]
+    return lines
+
+
 class InputError(ValueError):
     """A run input the owner gave can't be used (bad URL, unknown character)."""
 
@@ -220,8 +246,14 @@ class Orchestrator:
         return targets
 
     async def create_run(self, slug: str, settings: RunSettings) -> uuid.UUID:
+        from tf_agent.manual import ManualVideos
+
         ch = await load_character(self._sm, slug)
         targets = await self._validate_inputs(settings)
+        manual = ManualVideos(self._sm)  # links given with a run join the owner's manually chosen videos
+        await manual.add(list(settings.trend_urls), reference=True)
+        for t in settings.targets:
+            await manual.add([str(t["url"]).strip()], reference=False, target=str(t["character"]).strip())
         async with self._sm() as s:
             rated = (await s.execute(select(func.count()).select_from(Direction).where(
                 Direction.character_id == ch.character_id, (Direction.alpha + Direction.beta) > 0))).scalar_one()
@@ -414,40 +446,61 @@ class Orchestrator:
 
     async def _study_trends(self, run_id: uuid.UUID, settings: RunSettings, ch: LoadedCharacter,
                             clock: ActiveClock) -> None:
+        """The owner's reference videos: each is studied once per character (kept), then every run reuses it."""
+        from tf_agent.manual import ManualVideos
+
+        manual = ManualVideos(self._sm)
+        refs = await manual.references_for(ch.character_id)
         studies = dict((await self._reload(run_id)).inputs.get("trend_studies") or {})
-        todo = [u for u in settings.trend_urls if u not in studies]
+        for r in refs:
+            if r.study is not None:
+                studies.setdefault(r.url, r.study)
+        todo = [r for r in refs if r.study is None and r.url not in studies]
         if not todo:
+            if studies:
+                await self._save_inputs(run_id, trend_studies=studies)
             return
         await self._set_state(run_id, "studying_trends")
-        for i, url in enumerate(todo, 1):
-            agent = {"id": f"trend-{len(studies) + 1}", "role": "seed_study", "platform": None}
-            await self.blackboard.record_event(run_id, "agent.started", {"agent": agent, "goal": f"study {url}"})
-            try:
-                item = await self.tools.get_video(url)
-                agent["platform"] = item.platform
-                result = await self.analyzer.analyze(item)
-                if not result.contact_sheet_path:
-                    raise ToolFailure("media_unavailable", (result.filtered_reason or "no frames").replace("_", " "))
-                from tf_agent.orchestrator.analysis import candidate_facts
+        slots, lock = asyncio.Semaphore(STUDY_PARALLEL), asyncio.Lock()
 
-                judged = await self._with_usage_wait(
-                    run_id, clock, "studying_trends", lambda item=item, result=result: self.roles.study_seed(
-                        ch.brief, result.contact_sheet_path, candidate_facts(item, result), run_id=run_id))
-                study = judged.result.model_dump()
-                await self.blackboard.record_event(run_id, "trend.studied", {"agent": agent, "url": url,
-                                                                             "study": study})
-                await self.blackboard.record_event(run_id, "agent.finished", {
-                    "agent": agent, "accepted": 0, "rejected": 0, "leads": len(study.get("search_angles") or []),
-                    "failed": None})
-            except (ToolFailure, RoleOutputError, InvalidRequest) as e:
-                reason = e.error.message if isinstance(e, ToolFailure) else str(e)[:200]
-                study = {"error": reason}
-                await self.blackboard.record_event(run_id, "error", {
-                    "agent": agent, "message": f"couldn't study {url}: {reason}"[:300]})
-                await self.blackboard.record_event(run_id, "agent.finished", {
-                    "agent": agent, "accepted": 0, "rejected": 0, "leads": 0, "failed": reason[:200]})
-            studies[url] = study
-            await self._save_inputs(run_id, trend_studies=studies)
+        async def study_one(n: int, ref: Any) -> None:
+            agent = {"id": f"trend-{n}", "role": "seed_study", "platform": None}
+            async with slots:
+                await self.blackboard.record_event(run_id, "agent.started", {"agent": agent,
+                                                                             "goal": f"study {ref.url}"})
+                try:
+                    item = await self.tools.get_video(ref.url)
+                    agent["platform"] = item.platform
+                    result = await self.analyzer.analyze(item)
+                    if not result.contact_sheet_path:
+                        raise ToolFailure("media_unavailable", (result.filtered_reason or "no frames").replace("_", " "))
+                    from tf_agent.orchestrator.analysis import candidate_facts
+
+                    judged = await self._with_usage_wait(
+                        run_id, clock, "studying_trends", lambda item=item, result=result: self.roles.study_seed(
+                            ch.brief, result.contact_sheet_path, candidate_facts(item, result), run_id=run_id))
+                    study = judged.result.model_dump()
+                    study["tags"] = [t.strip().lstrip("#").lower() for t in study.get("tags") or [] if t.strip()]
+                    await manual.save_study(ref.id, ch.character_id, study, judged.provider)
+                    await self.blackboard.record_event(run_id, "trend.studied", {"agent": agent, "url": ref.url,
+                                                                                 "study": study})
+                    await self.blackboard.record_event(run_id, "agent.finished", {
+                        "agent": agent, "accepted": 0, "rejected": 0,
+                        "leads": len(study.get("search_angles") or []), "failed": None})
+                except (ToolFailure, RoleOutputError, InvalidRequest) as e:
+                    reason = e.error.message if isinstance(e, ToolFailure) else str(e)[:200]
+                    study = {"error": reason}
+                    if isinstance(e, ToolFailure):  # the card in "Manually chosen" shows why
+                        await manual._update(ref.id, status="problem", problem=reason[:300])
+                    await self.blackboard.record_event(run_id, "error", {
+                        "agent": agent, "message": f"couldn't study {ref.url}: {reason}"[:300]})
+                    await self.blackboard.record_event(run_id, "agent.finished", {
+                        "agent": agent, "accepted": 0, "rejected": 0, "leads": 0, "failed": reason[:200]})
+            async with lock:
+                studies[ref.url] = study
+                await self._save_inputs(run_id, trend_studies=dict(studies))
+
+        await asyncio.gather(*(study_one(i, r) for i, r in enumerate(todo, 1)))
 
     async def _take_targets(self, run_id: uuid.UUID, ch: LoadedCharacter) -> None:
         """The owner's target videos for this character go straight to analysis (no scout needed)."""
@@ -704,10 +757,7 @@ class Orchestrator:
             lines += [f"- {d.key} | {d.label} | {d.niche or '-'} | {d.alpha} | {d.beta}" for d, _ in ranked[:15]]
         studies = {u: st for u, st in (run.inputs or {}).get("trend_studies", {}).items() if "error" not in st}
         if studies:
-            lines.append("Formats trending in AI-influencer content right now (studied from the owner's examples; "
-                         "search for these formats for this character):")
-            lines += [f"- {st.get('format')} | hook: {st.get('hook')} | why: {st.get('why_it_works')} | "
-                      f"angles: {', '.join(st.get('search_angles') or [])}" for st in list(studies.values())[:8]]
+            lines += reference_lines(list(studies.values()))
         if leads:
             lines.append("Open leads (use lead_id for deep_dive tasks):")
             lines += [f"- {l['id']} | {l['platform']} {l['type']} = {l['value']} | {l['why'] or ''}" for l in leads]

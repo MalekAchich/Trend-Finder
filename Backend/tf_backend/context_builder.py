@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from tf_agent.config import AppSettings
 from tf_agent.curation.curate import Curator
 from tf_agent.learning.learner import Learner
+from tf_agent.manual import ManualVideos
 from tf_agent.orchestrator.run import Orchestrator
 from tf_agent.pipeline.analyze import process_pool_runner
 from tf_agent.roles.runners import Roles
@@ -34,7 +35,8 @@ async def build_context(settings: AppSettings | None = None) -> tuple[AppContext
     runs = RunManager(sm, make_orchestrator)
     context = AppContext(sessionmaker=sm, runs=runs, learner=learner,
                          media_dir=s.media_dir, characters_dir=s.characters_dir,
-                         sse_poll_s=1.0, browser=stack.browser, youtube_api=stack.youtube_api)
+                         sse_poll_s=1.0, browser=stack.browser, youtube_api=stack.youtube_api,
+                         manual=ManualVideos(sm, get_video=stack.get_video, thumbs_dir=s.media_dir / "thumbs"))
 
     async def cleanup() -> None:
         await runs.shutdown()

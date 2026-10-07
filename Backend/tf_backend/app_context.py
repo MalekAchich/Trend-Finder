@@ -22,4 +22,5 @@ class AppContext:
     sse_poll_s: float = 0.05
     browser: Any = None  # BrowserSessions: scraping-account logins + their credential store
     youtube_api: Any = None  # YouTubeApi: checks a key before it's saved
+    manual: Any = None  # ManualVideos: the owner's manually chosen videos
     extras: dict[str, Any] = field(default_factory=dict)

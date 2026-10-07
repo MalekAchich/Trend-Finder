@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { AccountItem, Character, CharacterDetail, FoundVideo, ModelChoice, ProviderPriority, ProviderStatus, ProviderUsage, Rating, RunDetail,
+import type { AccountItem, Character, ManualVideo, CharacterDetail, FoundVideo, ModelChoice, ProviderPriority, ProviderStatus, ProviderUsage, Rating, RunDetail,
   RunHistoryRow, RunSummary, StartRun } from "./types";
 
 export const useCharacters = () =>
@@ -69,6 +69,31 @@ export function useAccountAction() {
       onSuccess: done }),
     connect: useMutation({ mutationFn: (id: string) => api.post(`/api/settings/accounts/${id}/connect`, {}),
       onSuccess: done }),
+  };
+}
+
+export const useManualVideos = (character: string | null) =>
+  useQuery({
+    queryKey: ["manual-videos", character],
+    queryFn: () => api.get<{ items: ManualVideo[] }>(`/api/manual-videos${character ? `?character=${character}` : ""}`),
+    // while links are being looked up, refresh so their cards fill in by themselves
+    refetchInterval: (q) => q.state.data?.items.some((v) => v.status === "checking") ? 2000 : false,
+  });
+
+export function useManualActions() {
+  const qc = useQueryClient();
+  const done = () => qc.invalidateQueries({ queryKey: ["manual-videos"] });
+  return {
+    add: useMutation({
+      mutationFn: (v: { urls: string[]; reference: boolean; target: string | null }) =>
+        api.post<{ added: number }>("/api/manual-videos", v), onSuccess: done }),
+    setRoles: useMutation({
+      mutationFn: (v: { id: string; is_reference?: boolean; target?: string | null }) => {
+        const { id, ...body } = v;
+        return api.patch(`/api/manual-videos/${id}`, body);
+      }, onSuccess: done }),
+    recheck: useMutation({ mutationFn: (id: string) => api.post(`/api/manual-videos/${id}/check`, {}), onSuccess: done }),
+    remove: useMutation({ mutationFn: (id: string) => api.del(`/api/manual-videos/${id}`), onSuccess: done }),
   };
 }
 

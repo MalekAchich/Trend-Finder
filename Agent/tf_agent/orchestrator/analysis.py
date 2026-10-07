@@ -182,7 +182,9 @@ class AnalysisStage:
         await self._save_score(finding_id, {
             **sub, "overall": score, "fit_breakdown": r.fit_breakdown.model_dump(), "fit_justification": r.justification,
             "adaptation_idea": r.adaptation_idea, "feasibility_notes": r.feasibility_notes,
-            "niche_guess": r.niche_guess, "analyst_provider": judged.provider, "analyst_model": judged.model})
+            "niche_guess": r.niche_guess, "tags": [t.strip().lstrip("#").lower() for t in r.tags if t.strip()][:10],
+            "trend_type": r.trend_type or None, "audio_use": r.audio_use or None,
+            "analyst_provider": judged.provider, "analyst_model": judged.model})
         await self._status(finding_id, "analyzed")
         await self._saved(task, finding_id, item.platform)
         return {"overall": score, "fit": sub["fit"], "provider": judged.provider}

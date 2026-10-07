@@ -59,6 +59,7 @@ class World:
             self.reads += 1
             return CompletionResponse("a", "a-model", structured=READ)
         if req.schema_name == "seed_study":
+            self.studies = getattr(self, "studies", 0) + 1
             return CompletionResponse("a", "a-model", structured=STUDY)
         if req.schema_name == "taste_profile":
             return CompletionResponse("a", "a-model", structured={

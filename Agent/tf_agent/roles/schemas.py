@@ -75,6 +75,9 @@ class AnalystResult(BaseModel):
     adaptation_idea: str = Field(min_length=3, max_length=700)
     feasibility_notes: str = Field(max_length=500)
     niche_guess: str = Field(max_length=80)
+    tags: list[str] = Field(default_factory=list, max_length=10, description="3-10 topic tags, lowercase, no #")
+    trend_type: str = Field("", max_length=60, description="dance, skit, lip-sync, POV, transition, …")
+    audio_use: str = Field("", max_length=200, description="how the sound carries it: trending song, voiceover, …")
 
     @property
     def fit(self) -> float:
@@ -93,3 +96,8 @@ class SeedStudy(BaseModel):
     why_it_works: str = Field(max_length=500)
     search_angles: list[str] = Field(default_factory=list, max_length=8)
     fit_for_character: str = Field(max_length=400)
+    niche: str = Field("", max_length=80)
+    tags: list[str] = Field(default_factory=list, max_length=10, description="3-10 topic tags, lowercase, no #")
+    trend_type: str = Field("", max_length=60, description="dance, skit, lip-sync, POV, transition, …")
+    audio_use: str = Field("", max_length=200, description="how the sound carries it: trending song, voiceover, …")
+    fit_score: int = Field(5, ge=0, le=10, description="how well this direction suits the character")

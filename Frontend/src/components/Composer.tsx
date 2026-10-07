@@ -1,8 +1,9 @@
-import { ChevronDown, Link2, Plus, Settings2, Sparkles, Square, Play, X } from "lucide-react";
+import { ChevronDown, Link2, Settings2, Sparkles, Square, Play } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useManualActions, useManualVideos } from "../api/hooks";
 import type { Character, Platform, StartRun } from "../api/types";
 import { BrandLogo } from "./brand";
-import { PLATFORM_LABEL, PlatformIcon, platformOf, shortUrl } from "./ui";
+import { PLATFORM_LABEL, platformOf } from "./ui";
 
 const FRESHNESS = [
   { id: "day", label: "Past day" }, { id: "week", label: "Past week" },
@@ -18,40 +19,30 @@ interface Props {
   error: string | null;
   onStart: (body: StartRun) => void;
   onStop: () => void;
+  onShowManual: () => void;
 }
 
-export function Composer({ characters, selected, onSelect, running, starting, error, onStart, onStop }: Props) {
+export function Composer({ characters, selected, onSelect, running, starting, error, onStart, onStop, onShowManual }: Props) {
   const [open, setOpen] = useState<{ trending: boolean; targets: boolean }>({ trending: false, targets: false });
   const toggle = (k: "trending" | "targets") => setOpen((o) => ({ ...o, [k]: !o[k] }));
-  const [trendDraft, setTrendDraft] = useState("");
-  const [trends, setTrends] = useState<string[]>([]);
-  const [targets, setTargets] = useState<{ url: string; character: string }[]>([]);
+  const manual = useManualActions();
+  const saved = useManualVideos(null).data?.items ?? [];
+  const refCount = saved.filter((v) => v.is_reference).length;
+  const targetCount = saved.filter((v) => v.target).length;
   const [platforms, setPlatforms] = useState<Platform[]>(["tiktok", "instagram", "youtube"]);
   const [freshness, setFreshness] = useState<StartRun["freshness"]>("week");
   const [minutes, setMinutes] = useState(60);
   const [localError, setLocalError] = useState<string | null>(null);
   const name = characters.find((c) => c.slug === selected)?.name;
 
-  const addTrend = () => {
-    const urls = trendDraft.split(/\s+/).map((u) => u.trim()).filter(Boolean);
-    const bad = urls.find((u) => !platformOf(u));
-    if (bad) { setLocalError(`That isn't a TikTok, Instagram, YouTube or X link: ${bad}`); return; }
-    setTrends((t) => [...new Set([...t, ...urls])]);
-    setTrendDraft("");
-    setLocalError(null);
-  };
-  const onTrendKey = (e: KeyboardEvent<HTMLInputElement>) => { if (e.key === "Enter") { e.preventDefault(); addTrend(); } };
   const togglePlatform = (p: Platform) =>
     setPlatforms((ps) => (ps.includes(p) ? ps.filter((x) => x !== p) : [...ps, p]));
 
   const start = () => {
-    const cleanTargets = targets.filter((t) => t.url.trim());
-    const bad = cleanTargets.find((t) => !platformOf(t.url));
-    if (bad) { setLocalError(`That isn't a TikTok, Instagram, YouTube or X link: ${bad.url}`); setOpen((o) => ({ ...o, targets: true })); return; }
     if (!selected) return;
     setLocalError(null);
-    onStart({ character: selected, platforms, freshness, minutes, trend_urls: trends,
-      targets: cleanTargets.map((t) => ({ url: t.url.trim(), character: t.character || selected })) });
+    // reference videos and targets come from the saved list (Manually chosen videos)
+    onStart({ character: selected, platforms, freshness, minutes, trend_urls: [], targets: [] });
   };
 
   const shown = localError ?? error;
@@ -85,54 +76,25 @@ export function Composer({ characters, selected, onSelect, running, starting, er
         </div>
 
         <div className="min-w-0">
-          <h2 className="mb-4 text-[13px] font-medium text-mist">Optional inputs</h2>
+          <h2 className="text-[13px] font-medium text-snow">Your reference videos</h2>
+          <p className="mb-4 mt-1 text-[12.5px] text-mist">Not required, but the agents study these first and give them priority.
+            Everything you add is saved under <button className="underline decoration-white/30 underline-offset-2 hover:text-snow"
+              onClick={onShowManual}>Manually chosen videos</button>.</p>
           <div className="overflow-hidden rounded-xl border border-line bg-[color-mix(in_oklch,var(--color-panel)_45%,var(--color-night))]">
             <Section id="trending" icon={<Sparkles size={18} />} open={open.trending}
-              title="Trending AI-influencer videos" subtitle="Viral AI-influencer posts the agents study for formats"
-              state={trends.length ? `${trends.length} added` : "None"} onToggle={() => toggle("trending")}>
-              <div className="flex gap-2">
-                <input className="field" placeholder="Paste a TikTok, Reels or Shorts link and press Enter" value={trendDraft}
-                  onChange={(e) => setTrendDraft(e.target.value)} onKeyDown={onTrendKey} disabled={running}
-                  aria-label="Trending video link" />
-                <button className="btn-ghost shrink-0" onClick={addTrend} disabled={running || !trendDraft.trim()}>Add</button>
-              </div>
-              {trends.length > 0 && (
-                <ul className="mt-4 flex flex-wrap gap-2">
-                  {trends.map((u) => (
-                    <li key={u} className="chip !text-snow">
-                      <PlatformIcon platform={platformOf(u)} /> <span className="max-w-[260px] truncate">{shortUrl(u)}</span>
-                      <button aria-label={`Remove ${u}`} onClick={() => setTrends((t) => t.filter((x) => x !== u))}
-                        disabled={running} className="-mr-1 rounded-full p-0.5 hover:bg-white/10"><X size={13} /></button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              title="Trend references" subtitle="Videos the agents study to learn what works and find more like them"
+              state={refCount ? `${refCount} saved` : "None yet"} onToggle={() => toggle("trending")}>
+              <LinkAdder placeholder="Paste one or more TikTok, Instagram, YouTube or X links (one per line)"
+                label="Reference video links" button="Save as references"
+                onAdd={(urls) => manual.add.mutateAsync({ urls, reference: true, target: null })} />
             </Section>
             <div className="border-t border-line" />
             <Section id="targets" icon={<Link2 size={18} />} open={open.targets}
-              title="Target videos I found" subtitle="Specific videos you think one of your characters should recreate"
-              state={targets.filter((t) => t.url.trim()).length ? `${targets.filter((t) => t.url.trim()).length} added` : "None"}
-              onToggle={() => { toggle("targets"); if (!targets.length) setTargets([{ url: "", character: selected ?? "" }]); }}>
-              <ul className="space-y-3">
-                {targets.map((t, i) => (
-                  <li key={i} className="flex gap-2">
-                    <input className="field" placeholder="https://www.tiktok.com/@creator/video/…" value={t.url} disabled={running}
-                      aria-label={`Target video ${i + 1}`}
-                      onChange={(e) => setTargets((ts) => ts.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)))} />
-                    <select className="field !w-40 shrink-0" value={t.character || selected || ""} disabled={running}
-                      aria-label={`Character for target ${i + 1}`}
-                      onChange={(e) => setTargets((ts) => ts.map((x, j) => (j === i ? { ...x, character: e.target.value } : x)))}>
-                      {characters.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
-                    </select>
-                    <button className="btn-ghost !px-2.5" aria-label="Remove this target" disabled={running}
-                      onClick={() => setTargets((ts) => ts.filter((_, j) => j !== i))}><X size={15} /></button>
-                  </li>
-                ))}
-              </ul>
-              <button className="mt-4 inline-flex items-center gap-1.5 text-[13px] text-mist hover:text-snow" disabled={running}
-                onClick={() => setTargets((ts) => [...ts, { url: "", character: selected ?? "" }])}>
-                <Plus size={14} /> Add another
-              </button>
+              title="Targets to recreate" subtitle="Videos a character should recreate: analysed and scored in its next run"
+              state={targetCount ? `${targetCount} saved` : "None yet"} onToggle={() => toggle("targets")}>
+              <LinkAdder placeholder="Paste one or more video links (one per line)" label="Target video links"
+                button="Save as targets" characters={characters} defaultCharacter={selected}
+                onAdd={(urls, character) => manual.add.mutateAsync({ urls, reference: false, target: character ?? selected })} />
             </Section>
           </div>
 
@@ -175,6 +137,49 @@ export function Composer({ characters, selected, onSelect, running, starting, er
         </div>
       </div>
     </section>
+  );
+}
+
+function LinkAdder({ placeholder, label, button, characters, defaultCharacter, onAdd }: {
+  placeholder: string; label: string; button: string; characters?: Character[]; defaultCharacter?: string | null;
+  onAdd: (urls: string[], character: string | null) => Promise<{ added: number }>;
+}) {
+  const [draft, setDraft] = useState("");
+  const [character, setCharacter] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const urls = draft.split(/\s+/).map((u) => u.trim()).filter(Boolean);
+  const save = async () => {
+    const bad = urls.filter((u) => !platformOf(u));
+    if (bad.length) { setNote({ ok: false, text: `Not a TikTok, Instagram, YouTube or X link: ${bad.slice(0, 3).join(", ")}` }); return; }
+    setBusy(true);
+    try {
+      const { added } = await onAdd(urls, character ?? defaultCharacter ?? null);
+      const again = urls.length - added;
+      setNote({ ok: true, text: `Saved ${urls.length} ${urls.length === 1 ? "video" : "videos"}${again ? ` (${again} already in your list: updated)` : ""}. Each one is being checked now.` });
+      setDraft("");
+    } catch (e) {
+      setNote({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div>
+      <textarea className="field !h-auto min-h-[88px] resize-y py-2.5 leading-relaxed" placeholder={placeholder} value={draft}
+        onChange={(e) => { setDraft(e.target.value); setNote(null); }} aria-label={label} spellCheck={false} />
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {characters && (
+          <select className="field !w-44" value={character ?? defaultCharacter ?? ""} aria-label="Which character recreates them"
+            onChange={(e) => setCharacter(e.target.value)}>
+            {characters.map((c) => <option key={c.slug} value={c.slug}>For {c.name}</option>)}
+          </select>
+        )}
+        <button className="btn-lime !h-[38px]" onClick={save} disabled={busy || urls.length === 0}>
+          {busy ? "Saving…" : urls.length > 1 ? `${button} (${urls.length})` : button}</button>
+        {note && <p role={note.ok ? "status" : "alert"} className={`text-[12.5px] ${note.ok ? "text-mist" : "text-bad"}`}>{note.text}</p>}
+      </div>
+    </div>
   );
 }
 
