@@ -9,6 +9,5 @@
 | [Plan 5](2026-10-06-plan-5-single-page-redesign.md) | Single page, images-only characters, live agent stream, URL-only found videos ([spec](../Specs/2026-10-06-single-page-redesign.md)) | Done |
 | [Plan 6](2026-10-06-plan-6-navbar-pages-polish.md) | Navbar + logo, Characters / Runs / Settings / Socials pages, model choice, usage, polish | Done |
 | [Plan 7](2026-10-07-plan-7-context-accounts-x.md) | One model per agent conversation, reasoning kept; Accounts & keys (YouTube API, TikTok/Instagram/X accounts); X platform; brand platform buttons; monetization rules | Done |
-
-Deferred by the owner: throwaway TikTok/Instagram logins (`tf login tiktok|instagram`), the YouTube Data API key, and TikTok Creative Center (needs Playwright).
 | [Plan 8](2026-10-07-plan-8-manually-chosen-videos.md) | Manually chosen videos (references + targets) with cards; studies give niche, tags, trend type, audio | Done |
+
