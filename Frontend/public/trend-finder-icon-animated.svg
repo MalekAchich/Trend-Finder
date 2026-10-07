@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="112" height="112" viewBox="0 0 112 112" role="img" aria-labelledby="tf-icon-title">
+  <title id="tf-icon-title">Trend Finder icon</title>
+  <style>
+    .tf-scan { stroke-dasharray:28 260; stroke-dashoffset:28; opacity:0; animation:tf-scan 4s linear infinite }
+    .tf-runner { opacity:0; animation:tf-runner 4s linear infinite }
+    .tf-dot { transform-box:fill-box; transform-origin:center; animation:tf-dot 4s ease-in-out infinite }
+    .tf-ping { transform-box:fill-box; transform-origin:center; opacity:0; animation:tf-ping 4s ease-out infinite }
+    @keyframes tf-scan {
+      0% { stroke-dashoffset:28; opacity:0 }
+      4% { opacity:.9 }
+      54% { opacity:.9 }
+      60%,100% { stroke-dashoffset:-228.8001; opacity:0 }
+    }
+    @keyframes tf-runner {
+      0%,55% { transform:translate(29px,61px); opacity:0 }
+      57% { opacity:1 }
+      62.72% { transform:translate(40.5px,49.5px) }
+      68.42% { transform:translate(49px,58px) }
+      81.5% { opacity:1 }
+      83.5%,100% { transform:translate(71px,35px); opacity:0 }
+    }
+    @keyframes tf-dot {
+      0%,78%,100% { transform:scale(1) }
+      84% { transform:scale(1.2) }
+      91% { transform:scale(1) }
+    }
+    @keyframes tf-ping {
+      0%,78% { transform:scale(1); opacity:0 }
+      79% { opacity:.65 }
+      99%,100% { transform:scale(2.55); opacity:0 }
+    }
+    @media (prefers-reduced-motion:reduce) {
+      .tf-scan,.tf-runner,.tf-dot,.tf-ping { animation:none!important }
+      .tf-scan,.tf-runner,.tf-ping { opacity:0 }
+    }
+  </style>
+  <g transform="translate(6 6)" fill="none" stroke="#D5FF45" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M56.772 11.592 A39 39 0 1 0 87.672 39.906" stroke-width="12.5"/>
+    <path class="tf-scan" d="M56.772 11.592 A39 39 0 1 0 87.672 39.906" stroke="#F5FFE2" stroke-width="6.5"/>
+    <path d="M29 61 L40.5 49.5 L49 58 L71 35" stroke-width="10"/>
+    <path d="M56 35 H71 V50" stroke-width="10"/>
+    <circle class="tf-runner" r="2.7" fill="#F5FFE2" stroke="none"/>
+    <circle class="tf-ping" cx="82.3" cy="21.5" r="5.8" stroke-width="1.8"/>
+    <circle class="tf-dot" cx="82.3" cy="21.5" r="5.8" fill="#D5FF45" stroke="none"/>
+  </g>
+</svg>

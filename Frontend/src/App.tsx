@@ -1,6 +1,8 @@
+import { useEffect, useRef } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { useActiveRun } from "./api/hooks";
 import { Navbar } from "./components/Navbar";
+import { createTabIcon } from "./lib/tabIcon";
 import Characters from "./pages/Characters";
 import Home from "./pages/Home";
 import RunPage from "./pages/RunPage";
@@ -11,6 +13,13 @@ import Socials from "./pages/Socials";
 export default function App() {
   const active = useActiveRun();
   const location = useLocation();
+  const tabIcon = useRef<ReturnType<typeof createTabIcon> | null>(null);
+  useEffect(() => {
+    tabIcon.current = createTabIcon();
+    return () => tabIcon.current?.dispose();
+  }, []);
+  const running = !!active.data;
+  useEffect(() => tabIcon.current?.set(running), [running]);
   return (
     <div className="min-h-screen bg-night">
       <Navbar active={active.data ?? null} />
