@@ -115,3 +115,51 @@ async def test_usage_limits_requeue_the_analysis(db_sessionmaker, tmp_path):
     with pytest.raises(Requeue) as ei:
         await run_one(db_sessionmaker, q, stage, run, task_id)
     assert abs(ei.value.not_before.timestamp() - reset) < 1
+
+
+# ---- Plan 7: one scoring model per run, so scores in a run are comparable ----
+async def two_provider_stage(sm, tmp_path, script_a, script_b):
+    char_id, run, (task_id,) = await make_run(sm, n_tasks=1)
+    store = VideoStore(sm)
+    await store.upsert_videos([VideoItem(canonical_id=f"tiktok:{i}", platform="tiktok",
+                                         url=f"https://www.tiktok.com/@u/video/{i}", posted_at=NOW - timedelta(hours=5),
+                                         duration_s=9, metrics=Metrics(views=50_000, likes=5000)) for i in (1, 2)])
+    canon = tmp_path / "canon.png"
+    canon.write_bytes(b"x")
+    character = SimpleNamespace(character_id=char_id, brief="# Character: N", canonical_image_path=str(canon))
+    fa, fb = FakeAdapter("a", script_a), FakeAdapter("b", script_b)
+    client, _, _ = make_client({"a": fa, "b": fb})
+    events = []
+
+    async def emit(run_id, type_, payload):
+        events.append((type_, payload))
+
+    stage = AnalysisStage(sm, FakeAnalyzer(ok_analysis(tmp_path)), Roles(client), store, character, emit=emit)
+    q = TaskQueue(sm)
+    await CandidateSink(sm, q).submit(run, task_id, None, [Candidate(canonical_id=f"tiktok:{i}", why="fit",
+                                                                     preliminary_fit=7) for i in (1, 2)])
+    return run, q, stage, fa, fb, events, client
+
+
+async def test_the_run_keeps_the_scoring_model_of_its_first_analysis(db_sessionmaker, tmp_path):
+    from tf_agent.models.errors import TransientProviderError
+
+    run, q, stage, fa, fb, _, client = await two_provider_stage(
+        db_sessionmaker, tmp_path, [], [text_response("b", structured=ANALYSIS)] * 2)
+    fa.push(*[TransientProviderError("a", "blip")] * client.max_attempts, text_response("a", structured=ANALYSIS))
+    for _ in range(2):
+        await stage.handle(await q.claim_next(run, ["analyze"]))
+    assert len(fb.requests) == 2  # a recovered for the second video, but the run's scorer stays b
+    async with db_sessionmaker() as s:
+        assert {sc.analyst_provider for sc in (await s.execute(select(FindingScore))).scalars()} == {"b"}
+
+
+async def test_the_scoring_model_moves_once_when_it_hits_its_limit(db_sessionmaker, tmp_path):
+    run, q, stage, fa, fb, events, _ = await two_provider_stage(
+        db_sessionmaker, tmp_path, [text_response("a", structured=ANALYSIS), UsageLimited("a", "limit", None)],
+        [text_response("b", structured=ANALYSIS)])
+    for _ in range(2):
+        await stage.handle(await q.claim_next(run, ["analyze"]))
+    switched = [p for t, p in events if t == "provider.switched"]
+    assert len(switched) == 1 and (switched[0]["from"], switched[0]["to"]) == ("a", "b")
+    assert stage.analyst_provider == "b"

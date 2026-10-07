@@ -241,3 +241,38 @@ async def test_usage_reads_both_windows_without_spending_anything():
 async def test_usage_failure_is_none_not_an_error():
     adapter, _ = make(lambda r: httpx.Response(403, text="<html>blocked</html>"))
     assert await adapter.usage() is None
+
+
+# ---- Plan 7: ChatGPT keeps its own reasoning between agent steps ----
+REASONING_ITEM = {"id": "rs_1", "type": "reasoning", "status": "completed", "encrypted_content": "gAAA-secret-blob",
+                  "summary": [{"type": "summary_text", "text": "Check gym trends."}]}
+
+
+async def test_reasoning_items_come_back_as_provider_state():
+    events = ({"type": "response.created"}, {"type": "response.output_item.done", "item": REASONING_ITEM},
+              *TOOL_EVENTS[1:])
+    seen = {}
+
+    def handler(r):
+        seen["payload"] = json.loads(r.content)
+        return httpx.Response(200, headers=RATE_HEADERS, content=sse(*events))
+
+    adapter, _ = make(handler)
+    resp = await adapter.complete(req(tools=[ADD], reasoning_effort="medium"))
+    assert "reasoning.encrypted_content" in seen["payload"]["include"]
+    items = resp.provider_state["chatgpt"]
+    assert items == [{"type": "reasoning", "encrypted_content": "gAAA-secret-blob",
+                      "summary": [{"type": "summary_text", "text": "Check gym trends."}]}]  # no id: nothing is stored
+
+
+def test_reasoning_goes_back_before_that_turns_calls_and_only_to_chatgpt():
+    call = ToolCall("call_A", "add", {"a": 1, "b": 2})
+    item = {"type": "reasoning", "encrypted_content": "blob", "summary": []}
+    mine = Message.assistant("", [call], {"chatgpt": [item]})
+    foreign = Message.assistant("", [ToolCall("call_B", "add", {"a": 1, "b": 1})], {"claude": [{"x": 1}]})
+    r = CompletionRequest(model="m", system="s", messages=[
+        Message.user("go"), mine, Message.tool_result(call, "3"),
+        foreign, Message.tool_result(foreign.tool_calls[0], "2")])
+    types = [i["type"] for i in build_payload(r)["input"]]
+    assert types == ["message", "reasoning", "function_call", "function_call_output", "function_call",
+                     "function_call_output"]

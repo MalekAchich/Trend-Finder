@@ -88,6 +88,7 @@ class Roles:
                     raise RoleOutputError(f"{role}: invalid output after repair: {problem}") from e
                 messages = [*messages, Message.assistant(resp.text or json.dumps(resp.structured)),
                             Message.user(f"Your output was invalid: {problem}. Return corrected JSON for the schema.")]
+                only = only or resp.provider  # the repair goes to the model that wrote the answer it repairs
         raise AssertionError("unreachable")
 
     async def plan(self, context: str, brief: str = "", *, run_id: uuid.UUID | None = None) -> WorkPlan:

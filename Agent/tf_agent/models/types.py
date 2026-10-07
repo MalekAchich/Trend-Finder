@@ -35,14 +35,18 @@ class Message:
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
     tool_name: str | None = None
+    # opaque per-provider data for this turn (ChatGPT's encrypted reasoning items), sent back only to that provider
+    provider_state: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def user(cls, text: str, images: list[ImagePart] | tuple[ImagePart, ...] = ()) -> Message:
         return cls(role="user", parts=[TextPart(text), *images])
 
     @classmethod
-    def assistant(cls, text: str = "", tool_calls: list[ToolCall] | None = None) -> Message:
-        return cls(role="assistant", parts=[TextPart(text)] if text else [], tool_calls=list(tool_calls or []))
+    def assistant(cls, text: str = "", tool_calls: list[ToolCall] | None = None,
+                  provider_state: dict[str, Any] | None = None) -> Message:
+        return cls(role="assistant", parts=[TextPart(text)] if text else [], tool_calls=list(tool_calls or []),
+                   provider_state=dict(provider_state or {}))
 
     @classmethod
     def tool_result(cls, call: ToolCall, content: str) -> Message:
@@ -73,6 +77,7 @@ class CompletionRequest:
     schema_name: str = "result"
     reasoning_effort: str | None = None
     timeout_s: float = 180.0  # D-31 per-call default
+    conversation: str | None = None  # one agent conversation: Claude keeps one CLI session for it
 
     def __post_init__(self) -> None:
         if self.tools and self.output_schema is not None:
@@ -116,6 +121,7 @@ class CompletionResponse:
     usage: Usage = field(default_factory=Usage)
     rate: RateInfo | None = None
     reasoning: str = ""  # the model's reasoning summary, when the provider exposes one
+    provider_state: dict[str, Any] = field(default_factory=dict)  # stored on the assistant turn (Message)
 
 
 @dataclass(frozen=True)

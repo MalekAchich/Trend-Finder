@@ -18,6 +18,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -36,6 +37,7 @@ from tf_agent.models.types import (
     CompletionRequest,
     CompletionResponse,
     ImagePart,
+    Message,
     ModelInfo,
     ProviderHealth,
     RateInfo,
@@ -92,11 +94,12 @@ def defuse(text: str) -> str:
     return _LIVE_MENTION_RE.sub("@\u200b", text)
 
 
-def isolation_flags(empty_mcp_config: Path) -> list[str]:
-    # stream-json (+ --verbose) also reports the concrete model and the subscription's usage windows
+def isolation_flags(empty_mcp_config: Path, persist: bool = False) -> list[str]:
+    # stream-json (+ --verbose) also reports the concrete model and the subscription's usage windows.
+    # Sessions are saved only for agent conversations (persist=True), which resume them step after step.
     return ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "dontAsk", "--tools", "",
-            "--no-session-persistence", "--strict-mcp-config", "--mcp-config", str(empty_mcp_config),
-            "--setting-sources", ""]
+            *([] if persist else ["--no-session-persistence"]), "--strict-mcp-config", "--mcp-config",
+            str(empty_mcp_config), "--setting-sources", ""]
 
 
 def step_schema(tools: list[ToolSpec]) -> dict[str, Any]:
@@ -121,9 +124,9 @@ def step_schema(tools: list[ToolSpec]) -> dict[str, Any]:
     }
 
 
-def render_prompt(req: CompletionRequest, image_ref: Callable[[ImagePart], str]) -> str:
-    out = ["<conversation>"]
-    for m in req.messages:
+def _render_messages(messages: list[Message], image_ref: Callable[[ImagePart], str]) -> list[str]:
+    out: list[str] = []
+    for m in messages:
         if m.role == "user":
             out.append("[user]")
             out.append(defuse(m.text()))
@@ -138,17 +141,53 @@ def render_prompt(req: CompletionRequest, image_ref: Callable[[ImagePart], str])
         else:
             out.append(f"[tool result id={m.tool_call_id} name={m.tool_name}]")
             out.append(defuse(m.text()))
-    out.append("</conversation>")
+    return out
+
+
+def _render_tail(req: CompletionRequest, with_tools: bool = True) -> list[str]:
+    out: list[str] = []
     if req.tools:
-        out.append("<tools>")
-        out.extend(defuse(json.dumps({"name": t.name, "description": t.description, "parameters": t.parameters},
-                                     ensure_ascii=False)) for t in req.tools)
-        out.append("</tools>")
+        if with_tools:
+            out.append("<tools>")
+            out.extend(defuse(json.dumps({"name": t.name, "description": t.description, "parameters": t.parameters},
+                                         ensure_ascii=False)) for t in req.tools)
+            out.append("</tools>")
         out.append('Decide your next step. Reply ONLY with JSON matching the schema: one or more tool calls in '
                    '"calls", each with the tool "name" and "arguments" matching that tool\'s parameters.')
     elif req.output_schema is not None:
         out.append("Reply ONLY with JSON matching the required schema.")
-    return "\n".join(out)
+    return out
+
+
+def render_prompt(req: CompletionRequest, image_ref: Callable[[ImagePart], str]) -> str:
+    return "\n".join(["<conversation>", *_render_messages(req.messages, image_ref), "</conversation>",
+                      *_render_tail(req)])
+
+
+def render_delta(req: CompletionRequest, new: list[Message], image_ref: Callable[[ImagePart], str],
+                 tools_changed: bool) -> str:
+    """A resumed session already holds everything before `new` (and Claude's own replies and thinking)."""
+    return "\n".join(["<conversation continues>", *_render_messages(new, image_ref), "</conversation continues>",
+                      *_render_tail(req, with_tools=tools_changed)])
+
+
+def _fingerprint(m: Message) -> str:
+    raw = json.dumps([m.role, m.text(), [i.path for i in m.images()], m.tool_call_id,
+                      [[c.name, c.arguments] for c in m.tool_calls]], sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+
+@dataclass
+class _Session:
+    """One agent conversation's CLI session: what it already holds, so each step sends only what's new."""
+    sid: str
+    model: str
+    system: str
+    seen: list[str]  # fingerprints of the request messages the session holds (its own reply follows them)
+    tools: tuple[str, ...]
+
+
+SESSION_TTL_S = 24 * 3600
 
 
 CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -293,8 +332,9 @@ class ClaudeCliAuth:
 class ClaudeCLIAdapter:
     name = PROVIDER
 
-    def __init__(self, auth: ClaudeCliAuth, runtime_dir: Path | None = None) -> None:
+    def __init__(self, auth: ClaudeCliAuth, runtime_dir: Path | None = None, claude_home: Path | None = None) -> None:
         self.auth = auth
+        self._sessions: dict[str, _Session] = {}
         self.runtime_dir = Path(runtime_dir or Path(tempfile.gettempdir()) / "tf-claude").resolve()
         if " " in str(self.runtime_dir):
             raise ValueError("runtime_dir must not contain spaces (Claude @-mentions break on spaces)")
@@ -307,6 +347,31 @@ class ClaudeCLIAdapter:
         self.image_dir.mkdir(parents=True, exist_ok=True)
         if not self.mcp_config.exists():
             self.mcp_config.write_text('{"mcpServers": {}}')
+        home = claude_home or Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        # the CLI saves a session under projects/<cwd with every non-alphanumeric char as "-">/<id>.jsonl
+        self.sessions_dir = home / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(self.cwd))
+        self._sweep_sessions()
+
+    def _sweep_sessions(self) -> None:
+        """Sessions left by a crash (only our private cwd's folder, never the owner's own Claude projects)."""
+        if not self.sessions_dir.is_dir():
+            return
+        cutoff = time.time() - SESSION_TTL_S
+        for f in self.sessions_dir.glob("*.jsonl"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except OSError:
+                pass
+
+    def _drop_session(self, conversation: str) -> None:
+        sess = self._sessions.pop(conversation, None)
+        if sess is not None:
+            (self.sessions_dir / f"{sess.sid}.jsonl").unlink(missing_ok=True)
+            shutil.rmtree(self.sessions_dir / sess.sid, ignore_errors=True)
+
+    def end_conversation(self, conversation: str) -> None:
+        self._drop_session(conversation)
 
     def _image_ref(self, img: ImagePart) -> str:
         src = Path(img.path).resolve()
@@ -360,21 +425,52 @@ class ClaudeCLIAdapter:
             raise classify_failure(f"{envelope.get('result') or ''} {stderr}", envelope.get("api_error_status"))
         return envelope
 
+    def _session_args(self, req: CompletionRequest, system: str) -> tuple[list[str], str | None, _Session | None]:
+        """(--session-id/--resume args, a delta prompt when resuming, the session to record after success)."""
+        conv = req.conversation
+        if conv is None:
+            return [], None, None
+        fps = [_fingerprint(m) for m in req.messages]
+        tools = tuple(t.name for t in req.tools)
+        sess = self._sessions.get(conv)
+        n = len(sess.seen) if sess else 0
+        if (sess is not None and sess.model == req.model and sess.system == system and len(fps) > n + 1
+                and fps[:n] == sess.seen and req.messages[n].role == "assistant"):
+            delta = render_delta(req, req.messages[n + 1:], self._image_ref, tools != sess.tools)
+            return ["--resume", sess.sid], delta, _Session(sess.sid, req.model, system, fps, tools)
+        self._drop_session(conv)  # first step, or the history changed under it (compaction): start clean
+        sid = str(uuid.uuid4())
+        return ["--session-id", sid], None, _Session(sid, req.model, system, fps, tools)
+
     async def complete(self, req: CompletionRequest) -> CompletionResponse:
         prompt = render_prompt(req, self._image_ref)
         system = req.system
         if len(system.encode()) > MAX_SYSTEM_ARG_BYTES:
             prompt = f"<system>\n{system}\n</system>\n{prompt}"
             system = "Follow the instructions in the <system> block of the user message."
-        cmd = [self.auth.bin, *isolation_flags(self.mcp_config), "--model", req.model, "--system-prompt", system]
+        session_args, delta, session = self._session_args(req, system)
+        if delta is not None:
+            prompt = delta
+        cmd = [self.auth.bin, *isolation_flags(self.mcp_config, persist=session is not None), *session_args,
+               "--model", req.model, "--system-prompt", system]
         if req.reasoning_effort in CLAUDE_EFFORTS:
             cmd += ["--effort", req.reasoning_effort]
         if req.tools:
             cmd += ["--json-schema", json.dumps(step_schema(req.tools))]
         elif req.output_schema is not None:
             cmd += ["--json-schema", json.dumps(req.output_schema)]
-        envelope = await self._run(cmd, prompt, req.timeout_s)
+        try:
+            envelope = await self._run(cmd, prompt, req.timeout_s)
+            resp = self._response(req, envelope)
+        except BaseException:
+            if req.conversation is not None:
+                self._drop_session(req.conversation)  # unknown what the session recorded: next step starts clean
+            raise
+        if session is not None and req.conversation is not None:
+            self._sessions[req.conversation] = session
+        return resp
 
+    def _response(self, req: CompletionRequest, envelope: dict[str, Any]) -> CompletionResponse:
         raw_usage = envelope.get("usage") or {}
         usage = Usage(
             input_tokens=sum(int(raw_usage.get(k) or 0) for k in

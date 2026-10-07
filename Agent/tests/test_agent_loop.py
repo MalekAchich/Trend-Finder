@@ -180,3 +180,62 @@ def test_compaction_elides_old_tool_outputs_only():
     assert all(m.text() != ELIDED for m in out[-6:])
     assert sum(1 for m in out if m.text() == ELIDED) >= 5
     assert compact_transcript(msgs[:3], max_chars=10_000) == msgs[:3]
+
+
+# ---- Plan 7: one model per conversation, clean restart, conversation ids ----
+def two(script_a, script_b):
+    from tf_agent.models.fake import FakeAdapter as FA
+
+    fa, fb = FA("a", list(script_a)), FA("b", list(script_b))
+    client, gov, _ = make_client({"a": fa, "b": fb})
+    return client, gov, fa, fb
+
+
+async def test_agent_stays_on_the_provider_that_answered_its_first_step():
+    from tf_agent.models.errors import TransientProviderError
+
+    client, _, fa, fb = two([], [tool_call_response("b", ("add", {"a": 1, "b": 2})),
+                                 tool_call_response("b", ("submit_result", {"answer": 3}))])
+    fa.push(*[TransientProviderError("a", "blip")] * client.max_attempts,  # step 1 falls through to b...
+            call("submit_result", {"answer": 99}))  # ...and a is healthy again by step 2, but b keeps the task
+    res = await run(client)
+    assert res.result.answer == 3 and res.provider == "b" and len(fb.requests) == 2
+    assert len({r.conversation for r in fb.requests}) == 1 and fb.requests[0].conversation
+
+
+async def test_usage_limit_mid_task_restarts_fresh_on_the_other_provider():
+    from tf_agent.models.errors import UsageLimited
+
+    switches = []
+    client, _, fa, fb = two([call("add", {"a": 2, "b": 3}), UsageLimited("a", "5-hour limit", None)],
+                            [tool_call_response("b", ("submit_result", {"answer": 5}))])
+
+    async def on_switch(ctx, frm, to, reason):
+        switches.append((frm, to, reason))
+
+    client.on_switch = on_switch
+    res = await run(client)
+    assert res.status == "succeeded" and res.provider == "b"
+    fresh = fb.requests[0].messages
+    assert [m.role for m in fresh] == ["user"]  # no transcript written by the other model
+    text = fresh[0].text()
+    assert text.startswith("compute") and "Progress so far" in text and "add" in text and "5" in text
+    assert fb.requests[0].conversation != fa.requests[0].conversation
+    assert switches and switches[0][:2] == ("a", "b") and "fresh" in switches[0][2]
+
+
+async def test_restart_happens_once_then_the_limit_is_raised():
+    from tf_agent.models.errors import AllProvidersUnavailable, UsageLimited
+
+    client, _, fa, fb = two([call("add", {"a": 1, "b": 1}), UsageLimited("a", "limit", None)],
+                            [call("add", {"a": 1, "b": 1}), UsageLimited("b", "limit", None)])
+    with pytest.raises(AllProvidersUnavailable):
+        await run(client)
+
+
+async def test_conversation_is_ended_when_the_agent_finishes():
+    ended = []
+    client, fa = setup(call("submit_result", {"answer": 1}))
+    fa.end_conversation = lambda cid: ended.append(cid)
+    await run(client)
+    assert ended == [fa.requests[0].conversation]

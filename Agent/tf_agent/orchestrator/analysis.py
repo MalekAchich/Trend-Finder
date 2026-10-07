@@ -96,6 +96,9 @@ class AnalysisStage:
         self._emit_fn = emit
         self.weights = weights or DEFAULT_WEIGHTS
         self._peers: dict[str, tuple[float, list[float], list[float]]] = {}
+        # one scoring model per run, so every score in it is on the same scale; it may move once, at a usage limit
+        self.analyst_provider: str | None = None
+        self._analyst_moved = False
 
     async def _peer(self, platform: str) -> tuple[list[float], list[float]]:
         cached = self._peers.get(platform)
@@ -156,9 +159,7 @@ class AnalysisStage:
             await self._finished(task, cid, "filtered", item.platform, f"filtered: {reason.replace('_', ' ')}")
             return {"filtered": reason}
         try:
-            judged = await self.roles.analyze(self.character.brief, self.character.canonical_image_path,
-                                              analysis.contact_sheet_path, candidate_facts(item, analysis),
-                                              run_id=task.run_id, task_id=task.id)
+            judged = await self._judge(task, item, analysis)
         except AllProvidersUnavailable as e:
             reset = e.earliest_reset or time.time() + 900
             raise Requeue(datetime.fromtimestamp(reset, UTC), "all providers usage-limited") from e
@@ -185,6 +186,27 @@ class AnalysisStage:
         await self._status(finding_id, "analyzed")
         await self._saved(task, finding_id, item.platform)
         return {"overall": score, "fit": sub["fit"], "provider": judged.provider}
+
+    async def _judge(self, task: Task, item: VideoItem, analysis: VideoAnalysisResult) -> Any:
+        async def ask() -> Any:
+            return await self.roles.analyze(self.character.brief, self.character.canonical_image_path,
+                                            analysis.contact_sheet_path, candidate_facts(item, analysis),
+                                            run_id=task.run_id, task_id=task.id, provider=self.analyst_provider)
+        try:
+            judged = await ask()
+        except AllProvidersUnavailable:
+            client = self.roles.client
+            others = [p for p in client.adapters if p != self.analyst_provider and client.governor.available(p)]
+            if self.analyst_provider is None or self._analyst_moved or not others:
+                raise
+            old, self.analyst_provider, self._analyst_moved = self.analyst_provider, others[0], True
+            await self._emit(task, "provider.switched", {
+                "from": old, "to": others[0],
+                "reason": "the scoring model hit its usage limit; the rest of this run is scored by the other one"},
+                item.platform)
+            judged = await ask()
+        self.analyst_provider = self.analyst_provider or judged.provider
+        return judged
 
     async def _saved(self, task: Task, finding_id: uuid.UUID, platform: str) -> None:
         if self._emit_fn is None:

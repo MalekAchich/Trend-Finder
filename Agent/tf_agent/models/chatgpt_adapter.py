@@ -69,6 +69,8 @@ def build_payload(req: CompletionRequest) -> dict[str, Any]:
                     content.append({"type": "input_image", "image_url": _image_url(p)})
             items.append({"type": "message", "role": "user", "content": content})
         elif m.role == "assistant":
+            # our own earlier reasoning for this turn goes back first (stateless: store=False keeps nothing)
+            items.extend(dict(r) for r in m.provider_state.get(PROVIDER) or [])
             if m.text():
                 items.append({"type": "message", "role": "assistant",
                               "content": [{"type": "output_text", "text": m.text()}]})
@@ -84,7 +86,7 @@ def build_payload(req: CompletionRequest) -> dict[str, Any]:
         "input": items,
         "store": False,
         "stream": True,
-        "include": [],
+        "include": ["reasoning.encrypted_content"],
     }
     if req.tools:
         payload["tools"] = [{"type": "function", "name": t.name, "description": t.description,
@@ -148,7 +150,16 @@ def _error_from_status(status: int, body: str, headers: Mapping[str, str]) -> Pr
     return InvalidRequest(PROVIDER, f"request rejected ({status}): {body[:500]}")
 
 
-async def _consume_sse(lines: AsyncIterator[str]) -> tuple[str, list[ToolCall], Usage, str]:
+def _reasoning_item(item: dict[str, Any]) -> dict[str, Any] | None:
+    """A reasoning output item to send back next step: encrypted content + summary, without the server-side id
+    (nothing is stored with store=False, so an id would point at nothing)."""
+    if not item.get("encrypted_content"):
+        return None
+    return {"type": "reasoning", "encrypted_content": item["encrypted_content"], "summary": item.get("summary") or []}
+
+
+async def _consume_sse(lines: AsyncIterator[str]) -> tuple[str, list[ToolCall], Usage, str, list[dict[str, Any]]]:
+    reasoning_items: list[dict[str, Any]] = []
     texts: list[str] = []
     summaries: list[str] = []
     deltas: list[str] = []
@@ -171,6 +182,8 @@ async def _consume_sse(lines: AsyncIterator[str]) -> tuple[str, list[ToolCall], 
         elif kind == "response.output_item.done":
             item = event.get("item") or {}
             if item.get("type") == "reasoning":
+                if (kept := _reasoning_item(item)) is not None:
+                    reasoning_items.append(kept)
                 summaries.extend(str(p.get("text") or "") for p in item.get("summary") or []
                                  if p.get("type") == "summary_text")
             elif item.get("type") == "message":
@@ -201,7 +214,7 @@ async def _consume_sse(lines: AsyncIterator[str]) -> tuple[str, list[ToolCall], 
     if not completed:
         raise TransientProviderError(PROVIDER, "stream ended without response.completed")
     reasoning = "\n\n".join(t for t in summaries if t) or "".join(deltas)
-    return "".join(texts), calls, usage, reasoning.strip()
+    return "".join(texts), calls, usage, reasoning.strip(), reasoning_items
 
 
 def _levels(model: dict[str, Any]) -> tuple[str, ...]:
@@ -257,7 +270,7 @@ class ChatGPTOAuthAdapter:
                             body = (await r.aread()).decode(errors="replace")
                             raise _error_from_status(r.status_code, body, r.headers)
                         rate = parse_rate_headers(r.headers)
-                        text, calls, usage, reasoning = await _consume_sse(r.aiter_lines())
+                        text, calls, usage, reasoning, kept = await _consume_sse(r.aiter_lines())
             except httpx.TransportError as e:
                 raise TransientProviderError(PROVIDER, f"network error: {type(e).__name__}") from e
             structured = None
@@ -267,7 +280,8 @@ class ChatGPTOAuthAdapter:
                 except json.JSONDecodeError as e:
                     raise MalformedResponse(PROVIDER, "structured output was not valid JSON") from e
             return CompletionResponse(provider=PROVIDER, model=req.model, text=text, tool_calls=calls,
-                                      structured=structured, usage=usage, rate=rate, reasoning=reasoning)
+                                      structured=structured, usage=usage, rate=rate, reasoning=reasoning,
+                                      provider_state={PROVIDER: kept} if kept else {})
         raise AuthRequired(PROVIDER, "still unauthorized after token refresh: run `tf login chatgpt`")
 
     async def usage(self) -> RateInfo | None:

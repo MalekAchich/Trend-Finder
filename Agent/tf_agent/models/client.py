@@ -122,6 +122,16 @@ class ModelClient:
             except Exception as e:  # narration must never mask the refusal
                 log.warning("refusal hook failed: %s", e)
 
+    def end_conversation(self, conversation: str) -> None:
+        """An agent finished: providers drop what they kept for its conversation (Claude's CLI session)."""
+        for adapter in self.adapters.values():
+            end = getattr(adapter, "end_conversation", None)
+            if end is not None:
+                try:
+                    end(conversation)
+                except Exception as e:  # cleanup must never fail an agent
+                    log.warning("ending conversation on %s failed: %s", getattr(adapter, "name", "?"), e)
+
     async def complete(self, req: CompletionRequest, ctx: CallContext, only: str | None = None,
                        prefer: str | None = None) -> CompletionResponse:
         last_error: Exception | None = None

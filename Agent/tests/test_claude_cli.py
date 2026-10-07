@@ -304,3 +304,81 @@ async def test_usage_refreshes_with_one_tiny_call_only_when_stale(fake_claude):
     a._rate_at -= 601
     await a.usage()
     assert len(fake_claude.calls()) == 2
+
+
+# ---- Plan 7: one CLI session per agent conversation (Claude keeps its own thinking between steps) ----
+def step_reply(fake):
+    fake.respond(fake.envelope(structured={"note": "n", "calls": [{"name": "add", "arguments": {"a": 1}}]}))
+
+
+def convo_adapter(fake):
+    return ClaudeCLIAdapter(ClaudeCliAuth(fake.bin, stats_path=fake.tmp / "stats.json"), runtime_dir=fake.tmp / "rt",
+                            claude_home=fake.tmp / "home")
+
+
+async def two_steps(a, first_text="hi", conv="conv-1", diverge=False):
+    r1 = await a.complete(req(first_text, tools=[ADD], require_tool=True, conversation=conv))
+    call = r1.tool_calls[0]
+    history = [Message.user("changed" if diverge else first_text), Message.assistant(r1.text, [call]),
+               Message.tool_result(call, "RESULT-42")]
+    return await a.complete(CompletionRequest(model="opus", system="You are a scout.", messages=history, tools=[ADD],
+                                              require_tool=True, conversation=conv))
+
+
+async def test_a_conversation_keeps_one_cli_session(fake_claude):
+    step_reply(fake_claude)
+    await two_steps(convo_adapter(fake_claude))
+    first, second = fake_claude.calls()
+    sid = flag_value(first["argv"], "--session-id")
+    assert "--no-session-persistence" not in first["argv"] and "--resume" not in first["argv"]
+    assert flag_value(second["argv"], "--resume") == sid and "--session-id" not in second["argv"]
+    assert "RESULT-42" in second["stdin"] and "[user]\nhi" not in second["stdin"]  # only what's new
+
+
+async def test_changed_history_starts_a_new_session(fake_claude):
+    step_reply(fake_claude)
+    await two_steps(convo_adapter(fake_claude), diverge=True)
+    first, second = fake_claude.calls()
+    assert "--resume" not in second["argv"]
+    assert flag_value(second["argv"], "--session-id") != flag_value(first["argv"], "--session-id")
+    assert "[user]\nchanged" in second["stdin"]
+
+
+async def test_ending_a_conversation_deletes_its_session_file(fake_claude):
+    step_reply(fake_claude)
+    a = convo_adapter(fake_claude)
+    await a.complete(req(tools=[ADD], require_tool=True, conversation="c9"))
+    sid = flag_value(fake_claude.calls()[0]["argv"], "--session-id")
+    f = a.sessions_dir / f"{sid}.jsonl"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("{}")
+    a.end_conversation("c9")
+    assert not f.exists()
+
+
+async def test_a_failed_step_drops_the_session(fake_claude):
+    a = convo_adapter(fake_claude)
+    step_reply(fake_claude)
+    r1 = await a.complete(req(tools=[ADD], require_tool=True, conversation="c2"))
+    fake_claude.respond("garbage")
+    with pytest.raises(MalformedResponse):
+        await a.complete(CompletionRequest(model="opus", system="You are a scout.", tools=[ADD], require_tool=True,
+                                           conversation="c2", messages=[Message.user("hi"),
+                                                                        Message.assistant("", r1.tool_calls),
+                                                                        Message.tool_result(r1.tool_calls[0], "1")]))
+    step_reply(fake_claude)
+    await a.complete(req(tools=[ADD], require_tool=True, conversation="c2"))
+    assert "--session-id" in fake_claude.calls()[-1]["argv"]
+
+
+def test_stale_session_files_are_swept_at_start(fake_claude):
+    a = convo_adapter(fake_claude)
+    a.sessions_dir.mkdir(parents=True, exist_ok=True)
+    old, new = a.sessions_dir / "old.jsonl", a.sessions_dir / "new.jsonl"
+    old.write_text("{}")
+    new.write_text("{}")
+    past = time.time() - 2 * 86400
+    import os
+    os.utime(old, (past, past))
+    convo_adapter(fake_claude)
+    assert not old.exists() and new.exists()
