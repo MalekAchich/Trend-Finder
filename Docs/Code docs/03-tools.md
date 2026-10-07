@@ -53,22 +53,31 @@ Missing metrics are `null`, never guessed.
 
 `get_video` is usually triggered by the orchestrator (analysis), not by agents. Agents call it only when a task needs one specific URL resolved.
 
-## Access modes per platform (D-34)
+## Access modes per platform (D-34, D-48 to D-50)
 
-| Platform | Anonymous mode (v1 default) | Upgraded mode (later, config only) |
+Each search uses the best source it has, and falls back by itself (the result's `notes` say which one answered):
+
+| Platform | 1. Connected account / key (Settings, Accounts & keys) | 2. Anonymous fallback |
 |---|---|---|
-| TikTok | SearXNG `site:tiktok.com` queries → yt-dlp metadata; Creative Center trends (public); logged-out Playwright for hashtag/sound/creator pages where TikTok allows them | Logged-in Playwright profile |
-| Instagram | SearXNG `site:instagram.com/reel` queries → yt-dlp metadata (works for many public reels) | Logged-in Playwright profile (needed for search, audio and creator feeds) |
-| YouTube Shorts | yt-dlp `ytsearchN:<query>` filtered to duration ≤ 180 s, plus SearXNG `site:youtube.com/shorts` | YouTube Data API v3 |
+| TikTok | The site's own search (`/search/video`), read from the JSON it fetches (`tools/session_search.py`) | SearXNG `site:tiktok.com/@` queries, then yt-dlp metadata |
+| Instagram | Instagram's keyword search JSON; the session's cookies also unlock yt-dlp metadata and analysis | SearXNG `site:instagram.com/reel` (discovery only) |
+| YouTube Shorts | YouTube Data API v3 `search.list` (`videoDuration=short`, `publishedAfter`) + `videos.list`, 101 units a search, daily quota tracked in `settings.youtube_quota` | yt-dlp `ytsearchN:` (≤ 180 s) plus SearXNG `site:youtube.com/shorts` |
+| X | X's own search (`filter:native_video`, `since:`), read from the `SearchTimeline` JSON | SearXNG `site:x.com` (finds few, older posts) |
 
-Tools that need an unavailable mode return `{"error":{"code":"login_required"}}`, and the Master sees this in `platform_health`, so it plans around it.
+- **Fallback triggers:** a captcha or bot check, a login wall (the session is then marked expired in Settings), or a failure all fall back.
+- **TikTok trends:** TikTok Creative Center moved behind a TikTok One login in 2026. The trends tool gets built once a TikTok account is connected and its real data can be read.
+- **TikTok Research API:** not used. It's academic-only, limited to certain regions, and excludes commercial use.
 
-## Platform session management
+## Accounts and keys
 
-- Persistent Playwright profiles: `secrets/browser-profiles/{tiktok,instagram}/` (git-ignored).
-- One-time login: `tf login tiktok` / `tf login instagram` opens a **visible** browser; the owner logs in to the throwaway account; the profile is saved.
-- `login_required` errors flip the platform to `needs_login` in the UI.
-- **Never** use the character's real posting accounts here (Q-03).
+- **Storage:** everything lives in `secrets/` (`tf_agent/credentials.py`): `keys.json` and `sessions/<platform>/{state.json, cookies.txt, meta.json}`. Files are 0600 and folders 0700.
+- **The API never returns a secret,** only whether it's set, a masked hint and dates.
+- **Connecting an account** (Settings, or `POST /api/settings/accounts/{platform}/connect`):
+  - It opens a **visible** Chromium window on this computer. The owner logs in by hand (2FA and checkpoints included).
+  - Only the session is saved, never the password.
+- **The YouTube key** is checked with one 1-unit call before it's saved.
+- **Credentials are read at use time,** so rotating one needs no restart.
+- **Never** use the character's real posting accounts here.
 
 ## Rate limiting and politeness
 

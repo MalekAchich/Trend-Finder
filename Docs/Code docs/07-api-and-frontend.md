@@ -31,6 +31,9 @@ Guards:
 | `GET /usage` | Per subscription: status, % of the usage window used, window length and reset (ChatGPT reports these; Claude doesn't), cooling-until, last error, tokens and calls in the last 24 h, average tokens per run (last 20 runs) |
 | `GET /settings/models` · `PUT /settings/models` | Per provider: offered models, the chosen main + fast model and effort, the efforts allowed. PUT `{provider, main, fast, effort|null}` validates and applies immediately (stored in `settings.models`, loaded at start) |
 | `GET /settings/priority` · `PUT /settings/priority` | `{first, providers}` (`first` is a provider or null). PUT `{first}` sets which subscription every agent tries first (null = Balanced); 422 for an unknown provider. Stored in `settings.provider_priority`, loaded at start (D-47) |
+| `GET /settings/accounts` | Accounts & keys: per item `{id, label, kind: key\|session, set, hint, updated_at, status, connecting}`; never a secret (D-49) |
+| `PUT /settings/accounts/{id}` · `DELETE /settings/accounts/{id}` | PUT `{value}` saves a key after checking it with the provider (422 if rejected, value never echoed); DELETE removes a key or disconnects an account |
+| `POST /settings/accounts/{platform}/connect` | 202: opens a visible login window for `tiktok`, `instagram` or `x`; progress in `connecting` (409 if one is already open) |
 | `GET /media/{thumbs\|characters}/{path}` | Video thumbnails and character images, confined to their roots (traversal → 404). Video files are never stored or served |
 
 Any other non-`/api` GET serves the web app.

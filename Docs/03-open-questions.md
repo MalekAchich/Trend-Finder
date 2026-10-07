@@ -6,8 +6,8 @@
 
 | ID | Question | Notes |
 |---|---|---|
-| Q-03 | Throwaway TikTok / Instagram accounts for logged-in scraping | **Deferred.** Anonymous mode first (D-34). Plug in later with `tf login tiktok\|instagram`. |
-| Q-04 | YouTube Data API key | **Deferred to launch** (owner: "launch factor"). Shorts uses yt-dlp `ytsearch` until then (D-34). |
+| Q-03 | Throwaway TikTok / Instagram / X accounts for logged-in scraping | **Resolved (2026-10-07):** the owner will create scraping accounts and connect them in Settings, Accounts & keys (D-49). |
+| Q-04 | YouTube Data API key | **Resolved (2026-10-07):** the owner adds it in Settings, Accounts & keys; Shorts search uses it first (D-48). |
 | Q-10 | Target audience region and language for trends | Default: language EN, no region filter. |
 | Q-11 | Initial seed videos for Nicolaiz | Owner supplies 3–10 URLs when ready; runs work without seeds. |
 | Q-12 | Fix the NVIDIA driver (GTX 1650)? | Optional; the pipeline runs on CPU. |
