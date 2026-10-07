@@ -1,8 +1,8 @@
 import { MessageSquareText, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FoundVideo, Rating } from "../api/types";
-import { embedUrl } from "../lib/embed";
 import { createHoverIntent } from "../lib/hover";
+import { HoverPreview } from "./HoverPreview";
 import { PLATFORM_LABEL, PlatformIcon, age, formatViews } from "./ui";
 
 interface Props {
@@ -16,7 +16,6 @@ export function VideoCard({ video, fresh, onOpen, onRate }: Props) {
   const [previewing, setPreviewing] = useState(false);
   const hover = useMemo(() => createHoverIntent(400, () => setPreviewing(true), () => setPreviewing(false)), []);
   useEffect(() => () => hover.leave(), [hover]);
-  const src = embedUrl(video.platform, video.platform_id);
   const rated = video.feedback?.rating ?? null;
   const rateable = !!video.cluster_id;
 
@@ -28,9 +27,7 @@ export function VideoCard({ video, fresh, onOpen, onRate }: Props) {
         {video.thumbnail_url
           ? <img src={video.thumbnail_url} alt="" loading="lazy" className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.035]" />
           : <span className="grid h-full place-items-center text-[12px] text-ink-2">No preview</span>}
-        {previewing && src && (
-          <iframe src={src} title="Preview" allow="autoplay; encrypted-media" className="pointer-events-none absolute inset-0 h-full w-full border-0 bg-black" />
-        )}
+        {previewing && <HoverPreview platform={video.platform} platformId={video.platform_id} canonicalId={video.canonical_id} />}
         <span className="absolute left-2.5 top-2.5 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-1 text-[10.5px] font-semibold backdrop-blur">
           <PlatformIcon platform={video.platform} size={11} />{PLATFORM_LABEL[video.platform]}
         </span>

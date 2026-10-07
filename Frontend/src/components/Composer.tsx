@@ -1,9 +1,9 @@
-import { ChevronDown, Link2, Settings2, Sparkles, Square, Play } from "lucide-react";
+import { ChevronDown, Link2, Settings2, Sparkles, Square, Play, X } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useManualActions, useManualVideos } from "../api/hooks";
-import type { Character, Platform, StartRun } from "../api/types";
+import type { Character, ManualVideo, Platform, StartRun } from "../api/types";
 import { BrandLogo } from "./brand";
-import { PLATFORM_LABEL, platformOf } from "./ui";
+import { PLATFORM_LABEL, PlatformIcon, platformOf, shortUrl } from "./ui";
 
 const FRESHNESS = [
   { id: "day", label: "Past day" }, { id: "week", label: "Past week" },
@@ -27,8 +27,8 @@ export function Composer({ characters, selected, onSelect, running, starting, er
   const toggle = (k: "trending" | "targets") => setOpen((o) => ({ ...o, [k]: !o[k] }));
   const manual = useManualActions();
   const saved = useManualVideos(null).data?.items ?? [];
-  const refCount = saved.filter((v) => v.is_reference).length;
-  const targetCount = saved.filter((v) => v.target).length;
+  const refs = saved.filter((v) => v.is_reference);
+  const targets = saved.filter((v) => v.target);
   const [platforms, setPlatforms] = useState<Platform[]>(["tiktok", "instagram", "youtube"]);
   const [freshness, setFreshness] = useState<StartRun["freshness"]>("week");
   const [minutes, setMinutes] = useState(60);
@@ -83,19 +83,56 @@ export function Composer({ characters, selected, onSelect, running, starting, er
           <div className="overflow-hidden rounded-xl border border-line bg-[color-mix(in_oklch,var(--color-panel)_45%,var(--color-night))]">
             <Section id="trending" icon={<Sparkles size={18} />} open={open.trending}
               title="Trend references" subtitle="Videos the agents study to learn what works and find more like them"
-              state={refCount ? `${refCount} saved` : "None yet"} onToggle={() => toggle("trending")}>
-              <LinkAdder placeholder="Paste one or more TikTok, Instagram, YouTube or X links (one per line)"
-                label="Reference video links" button="Save as references"
+              state={refs.length ? `${refs.length} saved` : "None yet"} onToggle={() => toggle("trending")}>
+              <LinkInput placeholder="Paste a TikTok, Instagram, YouTube or X link and press Enter" label="Reference video link"
                 onAdd={(urls) => manual.add.mutateAsync({ urls, reference: true, target: null })} />
+              {refs.length > 0 && (
+                <ul className="mt-4 flex flex-wrap gap-2">
+                  {refs.map((v) => (
+                    <li key={v.id} className="chip !text-snow" title={v.problem ?? undefined}>
+                      <SavedState video={v} /><PlatformIcon platform={v.platform} />
+                      <span className="max-w-[240px] truncate">{shortUrl(v.url)}</span>
+                      <button aria-label={`Remove ${v.url} from references`} disabled={manual.setRoles.isPending || manual.remove.isPending}
+                        onClick={() => v.target ? manual.setRoles.mutate({ id: v.id, is_reference: false }) : manual.remove.mutate(v.id)}
+                        className="-mr-1 rounded-full p-0.5 hover:bg-white/10"><X size={13} /></button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Section>
             <div className="border-t border-line" />
             <Section id="targets" icon={<Link2 size={18} />} open={open.targets}
               title="Targets to recreate" subtitle="Videos a character should recreate: analysed and scored in its next run"
-              state={targetCount ? `${targetCount} saved` : "None yet"} onToggle={() => toggle("targets")}>
-              <LinkAdder placeholder="Paste one or more video links (one per line)" label="Target video links"
-                button="Save as targets" characters={characters} defaultCharacter={selected}
+              state={targets.length ? `${targets.length} saved` : "None yet"} onToggle={() => toggle("targets")}>
+              <LinkInput placeholder="Paste a video link and press Enter" label="Target video link" characters={characters}
+                defaultCharacter={selected}
                 onAdd={(urls, character) => manual.add.mutateAsync({ urls, reference: false, target: character ?? selected })} />
+              {targets.length > 0 && (
+                <ul className="mt-4 space-y-2">
+                  {targets.map((v) => (
+                    <li key={v.id} className="flex items-center gap-2">
+                      <span className="flex h-[38px] min-w-0 flex-1 items-center gap-2 rounded-lg border border-line-2 px-3 text-[13px]"
+                        title={v.problem ?? undefined}>
+                        <SavedState video={v} /><PlatformIcon platform={v.platform} />
+                        <span className="truncate">{v.url}</span>
+                      </span>
+                      <select className="field !w-40 shrink-0" value={v.target?.slug ?? ""} aria-label={`Character for ${v.url}`}
+                        disabled={manual.setRoles.isPending} onChange={(e) => manual.setRoles.mutate({ id: v.id, target: e.target.value })}>
+                        {characters.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
+                      </select>
+                      <button className="btn-ghost !h-[38px] !px-2.5" aria-label={`Remove ${v.url} from targets`}
+                        disabled={manual.setRoles.isPending || manual.remove.isPending}
+                        onClick={() => v.is_reference ? manual.setRoles.mutate({ id: v.id, target: null }) : manual.remove.mutate(v.id)}>
+                        <X size={15} /></button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Section>
+            {(manual.setRoles.error || manual.remove.error) && (
+              <p role="alert" className="border-t border-line px-6 py-3 text-[12.5px] text-bad">
+                {((manual.setRoles.error ?? manual.remove.error) as Error).message}</p>
+            )}
           </div>
 
           <div className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-3">
@@ -140,45 +177,53 @@ export function Composer({ characters, selected, onSelect, running, starting, er
   );
 }
 
-function LinkAdder({ placeholder, label, button, characters, defaultCharacter, onAdd }: {
-  placeholder: string; label: string; button: string; characters?: Character[]; defaultCharacter?: string | null;
+/** A saved video's lookup state, as a dot: checking (pulsing), ready, or a problem (the title says why). */
+function SavedState({ video }: { video: ManualVideo }) {
+  const tone = video.status === "ready" ? "bg-lime" : video.status === "problem" ? "bg-bad" : "bg-mist pulse-dot";
+  const label = video.status === "ready" ? "Ready" : video.status === "problem" ? `Can't open it: ${video.problem}` : "Checking";
+  return <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone}`} aria-label={label} title={label} />;
+}
+
+function LinkInput({ placeholder, label, characters, defaultCharacter, onAdd }: {
+  placeholder: string; label: string; characters?: Character[]; defaultCharacter?: string | null;
   onAdd: (urls: string[], character: string | null) => Promise<{ added: number }>;
 }) {
   const [draft, setDraft] = useState("");
   const [character, setCharacter] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
-  const urls = draft.split(/\s+/).map((u) => u.trim()).filter(Boolean);
+  const [problem, setProblem] = useState<string | null>(null);
+  const urls = draft.split(/\s+/).map((u) => u.trim()).filter(Boolean);  // pasting several links at once also works
   const save = async () => {
+    if (!urls.length || busy) return;
     const bad = urls.filter((u) => !platformOf(u));
-    if (bad.length) { setNote({ ok: false, text: `Not a TikTok, Instagram, YouTube or X link: ${bad.slice(0, 3).join(", ")}` }); return; }
+    if (bad.length) { setProblem(`That isn't a TikTok, Instagram, YouTube or X link: ${bad[0]}`); return; }
     setBusy(true);
     try {
-      const { added } = await onAdd(urls, character ?? defaultCharacter ?? null);
-      const again = urls.length - added;
-      setNote({ ok: true, text: `Saved ${urls.length} ${urls.length === 1 ? "video" : "videos"}${again ? ` (${again} already in your list: updated)` : ""}. Each one is being checked now.` });
+      await onAdd(urls, character ?? defaultCharacter ?? null);
       setDraft("");
+      setProblem(null);
     } catch (e) {
-      setNote({ ok: false, text: (e as Error).message });
+      setProblem((e as Error).message);
     } finally {
       setBusy(false);
     }
   };
   return (
     <div>
-      <textarea className="field !h-auto min-h-[88px] resize-y py-2.5 leading-relaxed" placeholder={placeholder} value={draft}
-        onChange={(e) => { setDraft(e.target.value); setNote(null); }} aria-label={label} spellCheck={false} />
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="flex gap-2">
+        <input className="field" placeholder={placeholder} value={draft} aria-label={label} spellCheck={false}
+          onChange={(e) => { setDraft(e.target.value); setProblem(null); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void save(); } }} />
         {characters && (
-          <select className="field !w-44" value={character ?? defaultCharacter ?? ""} aria-label="Which character recreates them"
+          <select className="field !w-40 shrink-0" value={character ?? defaultCharacter ?? ""} aria-label="Which character recreates it"
             onChange={(e) => setCharacter(e.target.value)}>
-            {characters.map((c) => <option key={c.slug} value={c.slug}>For {c.name}</option>)}
+            {characters.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
           </select>
         )}
-        <button className="btn-lime !h-[38px]" onClick={save} disabled={busy || urls.length === 0}>
-          {busy ? "Saving…" : urls.length > 1 ? `${button} (${urls.length})` : button}</button>
-        {note && <p role={note.ok ? "status" : "alert"} className={`text-[12.5px] ${note.ok ? "text-mist" : "text-bad"}`}>{note.text}</p>}
+        <button className="btn-ghost shrink-0" onClick={() => void save()} disabled={busy || !urls.length}>
+          {busy ? "Saving…" : "Add"}</button>
       </div>
+      {problem && <p role="alert" className="mt-2 text-[12.5px] text-bad">{problem}</p>}
     </div>
   );
 }

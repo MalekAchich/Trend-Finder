@@ -23,4 +23,5 @@ class AppContext:
     browser: Any = None  # BrowserSessions: scraping-account logins + their credential store
     youtube_api: Any = None  # YouTubeApi: checks a key before it's saved
     manual: Any = None  # ManualVideos: the owner's manually chosen videos
+    previews: Any = None  # Previews: hover playback for Instagram and X
     extras: dict[str, Any] = field(default_factory=dict)

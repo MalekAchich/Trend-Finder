@@ -30,11 +30,11 @@ for (const [w, h, name] of [[1440, 900, "desktop"], [1280, 800, "laptop"], [390,
     await p.getByRole("button", { name: /Trend references/ }).click();
     await p.getByRole("button", { name: /Targets to recreate/ }).click();
     await p.waitForTimeout(400);
-    check(await p.getByLabel("Reference video links").isVisible() && await p.getByLabel("Target video links").isVisible(),
+    check(await p.getByLabel("Reference video link").isVisible() && await p.getByLabel("Target video link").isVisible(),
       "desktop: both reference sections open at once");
     if (shots) await p.screenshot({ path: `${shots}/inputs_open.png`, clip: { x: 0, y: 0, width: 1440, height: 900 } });
-    await p.getByLabel("Reference video links").fill("https://example.com/nope");
-    await p.getByRole("button", { name: /Save as references/ }).click();
+    await p.getByLabel("Reference video link").fill("https://example.com/nope");
+    await p.keyboard.press("Enter");
     check(await p.getByRole("alert").first().isVisible(), "desktop: a non-video link is refused with a message");
     await p.getByRole("tab", { name: /Manually chosen/ }).click();
     await p.waitForTimeout(800);

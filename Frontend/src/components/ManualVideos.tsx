@@ -2,8 +2,8 @@ import { AlertTriangle, ExternalLink, Loader2, RotateCw, Trash2 } from "lucide-r
 import { useEffect, useMemo, useState } from "react";
 import { useManualActions, useManualVideos } from "../api/hooks";
 import type { Character, ManualVideo } from "../api/types";
-import { embedUrl } from "../lib/embed";
 import { createHoverIntent } from "../lib/hover";
+import { HoverPreview } from "./HoverPreview";
 import { PLATFORM_LABEL, PlatformIcon, formatViews } from "./ui";
 
 type Filter = "all" | "references" | "targets";
@@ -45,7 +45,6 @@ function ManualCard({ video, characters }: { video: ManualVideo; characters: Cha
   const [previewing, setPreviewing] = useState(false);
   const hover = useMemo(() => createHoverIntent(400, () => setPreviewing(true), () => setPreviewing(false)), []);
   useEffect(() => () => hover.leave(), [hover]);
-  const src = video.platform_id ? embedUrl(video.platform, video.platform_id) : null;
   const st = video.study;
   const busy = setRoles.isPending || remove.isPending;
   const error = (setRoles.error ?? remove.error) as Error | null;
@@ -58,8 +57,8 @@ function ManualCard({ video, characters }: { video: ManualVideo; characters: Cha
         {video.thumbnail_url
           ? <img src={video.thumbnail_url} alt="" loading="lazy" className="h-full w-full object-cover" />
           : <span className="grid h-full place-items-center text-ink-2"><PlatformIcon platform={video.platform} size={26} /></span>}
-        {previewing && src && video.status === "ready" && (
-          <iframe src={src} title="Preview" allow="autoplay; encrypted-media" className="pointer-events-none absolute inset-0 h-full w-full border-0 bg-black" />
+        {previewing && video.status === "ready" && (
+          <HoverPreview platform={video.platform} platformId={video.platform_id} canonicalId={video.canonical_id} />
         )}
         <span className="absolute left-2.5 top-2.5 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-1 text-[10.5px] font-semibold backdrop-blur">
           <PlatformIcon platform={video.platform} size={11} />{PLATFORM_LABEL[video.platform]}
@@ -101,8 +100,11 @@ function ManualCard({ video, characters }: { video: ManualVideo; characters: Cha
           </div>
         )}
         <div className="flex flex-wrap items-center gap-1.5">
-          <button onClick={() => setRoles.mutate({ id: video.id, is_reference: !video.is_reference })} disabled={busy}
-            aria-pressed={video.is_reference} title="Reference: the agents study it to find more like it"
+          <button onClick={() => setRoles.mutate({ id: video.id, is_reference: !video.is_reference })}
+            disabled={busy || (video.is_reference && !video.target)} aria-pressed={video.is_reference}
+            title={video.is_reference && !video.target
+              ? "Reference: the agents study it to learn the trend and find more like it. To stop using it, pick a target or remove it."
+              : "Reference: the agents study it to learn the trend and find more like it (for every character)"}
             className={`h-7 rounded-md px-2 text-[11.5px] transition ${video.is_reference ? "bg-ink text-white" : "bg-paper-2 text-ink-2 hover:text-ink"}`}>
             Reference</button>
           <select value={video.target?.slug ?? ""} disabled={busy} aria-label="Target for a character"

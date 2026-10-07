@@ -17,6 +17,7 @@ CookiesFor = Callable[[str], Path | None]  # platform -> the scraping account's 
 _HASHTAG_RE = re.compile(r"#(\w+)", re.UNICODE)
 # Only the platforms we support: never the generic extractor (which would fetch arbitrary URLs).
 ALLOWED_EXTRACTORS = ["tiktok.*", "vm\\.tiktok", "instagram.*", "youtube.*", "twitter.*"]
+PREVIEW_FORMAT = "b[height<=720][ext=mp4]/bv*[height<=720][ext=mp4]/b[height<=720]/b"
 DOWNLOAD_FORMAT = ("bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/bv*[height<=720]+ba/"
                    "b[height<=720]/b")
 
@@ -135,6 +136,14 @@ class YtDlp:
     async def metadata(self, url: str) -> VideoItem:
         info = await self._run(url, self._opts(url, skip_download=True), False, self.timeout_s)
         return info_to_video_item(info)
+
+    async def stream_url(self, url: str) -> str:
+        """A direct, short-lived link to the video itself (≤ 720p), for a hover preview: nothing is downloaded."""
+        info = await self._run(url, self._opts(url, skip_download=True, format=PREVIEW_FORMAT), False, self.timeout_s)
+        direct = info.get("url") or next((f.get("url") for f in info.get("requested_formats") or [] if f.get("url")), None)
+        if not direct:
+            raise ToolFailure("platform_unavailable", "no playable stream for this video")
+        return str(direct)
 
     async def search_youtube(self, query: str, n: int = 10, max_duration_s: float = 180.0) -> list[VideoItem]:
         info = await self._run(f"ytsearch{n}:{query}", self._opts(extract_flat="in_playlist", noplaylist=False),
