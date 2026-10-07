@@ -205,13 +205,13 @@ class Orchestrator:
             raise InputError(f"freshness must be one of {', '.join(FRESHNESS)}")
         for url in settings.trend_urls:
             if canonical_id(url) is None:
-                raise InputError(f"not a TikTok, Instagram or YouTube video URL: {url}")
+                raise InputError(f"not a TikTok, Instagram, YouTube or X video URL: {url}")
         targets = []
         for t in settings.targets:
             url, slug = str(t.get("url", "")).strip(), str(t.get("character", "")).strip()
             cid = canonical_id(url)
             if cid is None:
-                raise InputError(f"not a TikTok, Instagram or YouTube video URL: {url}")
+                raise InputError(f"not a TikTok, Instagram, YouTube or X video URL: {url}")
             async with self._sm() as s:
                 char_id = (await s.execute(select(Character.id).where(Character.slug == slug))).scalar_one_or_none()
             if char_id is None:

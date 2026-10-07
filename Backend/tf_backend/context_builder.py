@@ -34,12 +34,14 @@ async def build_context(settings: AppSettings | None = None) -> tuple[AppContext
     runs = RunManager(sm, make_orchestrator)
     context = AppContext(sessionmaker=sm, runs=runs, learner=learner,
                          media_dir=s.media_dir, characters_dir=s.characters_dir,
-                         sse_poll_s=1.0)
+                         sse_poll_s=1.0, browser=stack.browser, youtube_api=stack.youtube_api)
 
     async def cleanup() -> None:
         await runs.shutdown()
         for pool in pools:
             pool.close()
+        if stack.browser is not None:
+            await stack.browser.close()
         await close_services(services)
 
     return context, services, cleanup

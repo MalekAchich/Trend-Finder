@@ -162,22 +162,23 @@ async def _demo(provider: str, question: str) -> None:
 
 from tf_agent.tools.types import ToolFailure  # noqa: E402
 
-PLATFORM_SEARCH = {"tiktok": "tiktok_search", "instagram": "instagram_search", "shorts": "shorts_search"}
+PLATFORM_SEARCH = {"tiktok": "tiktok_search", "instagram": "instagram_search", "shorts": "shorts_search",
+                   "x": "x_search"}
 
 
 @app.command()
 def search(
-    platform: str = typer.Argument(..., help="tiktok, instagram or shorts"),
+    platform: str = typer.Argument(..., help="tiktok, instagram, shorts or x"),
     query: str = typer.Argument(..., help="search words"),
     max_results: int = typer.Option(10, "--max", min=1, max=30),
     recent: str | None = typer.Option(None, help="day, week, month or year"),
 ) -> None:
-    """Discover videos on one platform (no account needed; Instagram is discovery-only)."""
+    """Discover videos on one platform (connected accounts and the YouTube key are used when set)."""
     if recent not in (None, "day", "week", "month", "year"):
         typer.echo("--recent must be day, week, month or year", err=True)
         raise typer.Exit(2)
     if platform not in PLATFORM_SEARCH:
-        typer.echo("platform must be one of: tiktok, instagram, shorts", err=True)
+        typer.echo("platform must be one of: tiktok, instagram, shorts, x", err=True)
         raise typer.Exit(2)
     asyncio.run(_search(platform, query, max_results, recent))
 
@@ -202,7 +203,7 @@ async def _search(platform: str, query: str, max_results: int, recent: str | Non
 
 
 @app.command()
-def analyze(url: str = typer.Argument(..., help="TikTok, Instagram or YouTube video URL")) -> None:
+def analyze(url: str = typer.Argument(..., help="TikTok, Instagram, YouTube or X video URL")) -> None:
     """Download and analyse one video: contact sheet, pose-based Kling feasibility, transcript."""
     asyncio.run(_analyze(url))
 

@@ -1,7 +1,10 @@
-"""Anonymous-first discovery for TikTok, Instagram Reels and YouTube Shorts (D-34, 03-tools.md).
+"""Discovery for TikTok, Instagram Reels, YouTube Shorts and X (D-34, 03-tools.md).
 
-Flow per search: SearXNG `site:` query → canonical IDs (dedupe) → seen-filter (blackboard) → per-video
-yt-dlp enrichment (cached) → items. Instagram stays discovery-only until a logged-in session exists.
+Best source first, falling back automatically:
+- a connected scraping account (TikTok, Instagram, X): the site's own search, read from the JSON it fetches;
+- the YouTube Data API when a key is set (Shorts);
+- anonymous: SearXNG `site:` query → canonical IDs → seen-filter → per-video yt-dlp enrichment (cached).
+Instagram stays discovery-only until a logged-in session exists.
 """
 from __future__ import annotations
 
@@ -10,7 +13,8 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from tf_agent.tools.health import PlatformRegistry
 from tf_agent.tools.limiter import RateLimiter
@@ -22,8 +26,13 @@ from tf_agent.tools.normalize import (
     norm_query,
     platform_of,
 )
+from tf_agent.tools import session_search as ss
 from tf_agent.tools.types import ToolFailure, VideoItem
 from tf_agent.tools.web import SearchHit, SearchResponse
+
+if TYPE_CHECKING:
+    from tf_agent.tools.browser import BrowserSessions
+    from tf_agent.tools.youtube_api import YouTubeApi
 
 SeenFilter = Callable[[list[VideoItem]], Awaitable[tuple[list[VideoItem], int]]]
 ItemsSink = Callable[[list[VideoItem]], Awaitable[None]]
@@ -33,6 +42,11 @@ META_TTL_S = 6 * 3600
 _HASHTAG_RE = re.compile(r"#(\w+)", re.UNICODE)
 _COUNTED_FAILURES = ("platform_unavailable", "rate_limited")
 Recent = Literal["day", "week", "month", "year"] | None
+RECENT_DAYS = {"day": 1, "week": 7, "month": 31, "year": 366}
+
+
+def recent_since(recent: Recent) -> datetime | None:
+    return datetime.now(UTC) - timedelta(days=RECENT_DAYS[recent]) if recent else None
 
 
 class SearchBackend(Protocol):
@@ -79,16 +93,49 @@ class PlatformTools:
     def __init__(self, searx: SearchBackend, ytdlp: MetadataBackend, cache: Cache | None,
                  registry: PlatformRegistry, *, seen_filter: SeenFilter | None = None,
                  on_items: ItemsSink | None = None, instagram_enrich: bool = False, enrich_parallel: int = 4,
-                 search_limiter: RateLimiter | None = None, clock: Callable[[], float] = time.time) -> None:
+                 search_limiter: RateLimiter | None = None, clock: Callable[[], float] = time.time,
+                 browser: BrowserSessions | None = None, youtube_api: YouTubeApi | None = None) -> None:
         self.searx, self.ytdlp, self.cache, self.registry = searx, ytdlp, cache, registry
+        self.browser, self.youtube_api = browser, youtube_api
         self.seen_filter, self.on_items = seen_filter, on_items
         self.instagram_enrich = instagram_enrich
         self._enrich_slots = asyncio.Semaphore(enrich_parallel)
         # every SearXNG query (site: searches and web_search) shares one politeness lane: same upstream engines
         self.search_limiter = search_limiter or RateLimiter(1.0)
         self._clock = clock
-        if not instagram_enrich:
+        if not self._ig_enrich():
             registry.configure_mode("instagram", "discovery_only")
+
+    def _has_session(self, platform: str) -> bool:
+        return self.browser is not None and self.browser.creds.has_session(platform)
+
+    def _ig_enrich(self) -> bool:
+        """Instagram metadata needs a logged-in session's cookies (read now: an account can be connected any time)."""
+        return self.instagram_enrich or self._has_session("instagram")
+
+    async def _session_search(self, platform: str, url: str, pattern: re.Pattern[str],
+                              parse: Callable[[list[Any]], list[VideoItem]], max_results: int, recent: Recent,
+                              notes: list[str]) -> DiscoveryResult | None:
+        """The site's own logged-in search; None (with a note) when it can't be used, so the caller falls back."""
+        if self.browser is None or not self._has_session(platform):
+            return None
+        browser = self.browser
+
+        async def run() -> list[VideoItem]:
+            captured = await browser.capture_json(platform, url, pattern, need_session=True, blocked=ss.is_captcha)
+            return parse(captured)
+
+        try:
+            items = await self._guarded(platform, run)
+        except ToolFailure as e:
+            notes.append(f"logged-in search unavailable ({e.error.message}); used web search instead")
+            return None
+        since = recent_since(recent)
+        if since is not None:
+            items = [i for i in items if i.posted_at is None or i.posted_at >= since]
+        kept, hidden = await self._filter_seen(items)
+        notes.append("from the logged-in account's search")
+        return await self._finish(platform, kept[:max_results], hidden, notes)
 
     # ---- plumbing ----
     async def _guarded(self, platform: str, fn: Callable[[], Awaitable[Any]],
@@ -191,9 +238,15 @@ class PlatformTools:
 
     # ---- public tools ----
     async def tiktok_search(self, query: str, max_results: int = 15, recent: Recent = None) -> DiscoveryResult:
+        notes: list[str] = []
+        q = norm_query(query)
+        if (res := await self._session_search("tiktok", ss.tiktok_search_url(q), ss.TIKTOK_PATTERN, ss.tiktok_items,
+                                              max_results, recent, notes)) is not None:
+            return res
         # `site:tiktok.com/@` keeps engines on /@user/video/ID pages (measured: 20/20 videos vs 2/20 with recency)
-        return await self._site_search("tiktok", f"site:tiktok.com/@ {norm_query(query)}", max_results, True,
-                                       recent=recent)
+        res = await self._site_search("tiktok", f"site:tiktok.com/@ {q}", max_results, True, recent=recent)
+        res.notes[:0] = notes
+        return res
 
     async def tiktok_creator(self, handle: str, max_results: int = 15) -> DiscoveryResult:
         return await self._site_search("tiktok", f"site:tiktok.com/@{norm_handle(handle)}", max_results, True)
@@ -202,9 +255,16 @@ class PlatformTools:
         return await self._site_search("tiktok", f'site:tiktok.com "#{norm_hashtag(tag)}"', max_results, True)
 
     async def instagram_search(self, query: str, max_results: int = 15, recent: Recent = None) -> DiscoveryResult:
+        notes: list[str] = []
+        if (res := await self._session_search("instagram", ss.instagram_search_url(norm_query(query)),
+                                              ss.INSTAGRAM_PATTERN, ss.instagram_items, max_results, recent,
+                                              notes)) is not None:
+            return res
         q = f"site:instagram.com/reel {norm_query(query)}"
-        if self.instagram_enrich:
-            return await self._site_search("instagram", q, max_results, True, recent=recent)
+        if self._ig_enrich():
+            res = await self._site_search("instagram", q, max_results, True, recent=recent)
+            res.notes[:0] = notes
+            return res
         res = await self._site_search("instagram", q, max_results, False, media_access="login_required",
                                       recent=recent)
         res.notes.append("instagram: discovery only without a logged-in session (no metrics, no video analysis)")
@@ -213,6 +273,17 @@ class PlatformTools:
     async def shorts_search(self, query: str, max_results: int = 15, recent: Recent = None) -> DiscoveryResult:
         q = norm_query(query)
         notes: list[str] = []
+        if self.youtube_api is not None and self.youtube_api.configured():
+            api = self.youtube_api
+            try:
+                found = await self._guarded("youtube", lambda: api.shorts_search(
+                    q, max_results * 2, published_after=recent_since(recent)))
+            except ToolFailure as e:
+                notes.append(f"YouTube API unavailable ({e.error.message}); used the search page instead")
+            else:
+                kept, hidden = await self._filter_seen(found)
+                notes.append("from the YouTube Data API")
+                return await self._finish("youtube", kept[:max_results], hidden, notes)
         merged: dict[str, VideoItem] = {}
         failures: list[ToolFailure] = []
         try:
@@ -234,6 +305,19 @@ class PlatformTools:
         kept = await self._enrich("youtube", kept[:max_results], notes)
         return await self._finish("youtube", kept, hidden, notes)
 
+    async def x_search(self, query: str, max_results: int = 15, recent: Recent = None) -> DiscoveryResult:
+        notes: list[str] = []
+        q = norm_query(query)
+        since = recent_since(recent)
+        if (res := await self._session_search("x", ss.x_search_url(q, since.date().isoformat() if since else None),
+                                              ss.X_PATTERN, ss.x_items, max_results, recent, notes)) is not None:
+            return res
+        notes.append("X without a connected account: web search only finds a few, older posts")
+        res = await self._site_search("x", f"site:x.com {q} video", max_results, self._has_session("x"),
+                                      recent=recent)
+        res.notes[:0] = notes
+        return res
+
     async def web_search(self, query: str, max_results: int = 8, time_range: Recent = None) -> SearchResponse:
         return await self._guarded("web", lambda: self.searx.search(query, max_results=max_results,
                                                                      time_range=time_range), self.search_limiter)
@@ -241,9 +325,9 @@ class PlatformTools:
     async def get_video(self, url: str) -> VideoItem:
         platform = platform_of(url)
         if platform is None:
-            raise ToolFailure("invalid_input", "not a TikTok, Instagram or YouTube URL")
+            raise ToolFailure("invalid_input", "not a TikTok, Instagram, YouTube or X URL")
         cid = canonical_id(url)
-        if platform == "instagram" and not self.instagram_enrich:
+        if platform == "instagram" and not self._ig_enrich():
             if cid is None:
                 raise ToolFailure("invalid_input", "not an Instagram reel URL")
             return _skeleton(cid, None, url, "login_required")

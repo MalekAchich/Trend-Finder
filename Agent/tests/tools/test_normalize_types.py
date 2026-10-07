@@ -60,3 +60,27 @@ def test_video_item_rates():
 def test_tool_failure_carries_error():
     f = ToolFailure("rate_limited", "slow down", retry_after_s=30)
     assert f.error.model_dump() == {"code": "rate_limited", "message": "slow down", "retry_after_s": 30.0}
+
+
+# ---- Plan 7: X is a fourth platform ----
+XID = "1843213434565656789"
+
+
+@pytest.mark.parametrize("url,expected", [
+    (f"https://x.com/someone/status/{XID}", f"x:{XID}"),
+    (f"https://twitter.com/someone/status/{XID}?s=20", f"x:{XID}"),
+    (f"https://mobile.twitter.com/someone/status/{XID}/video/1", f"x:{XID}"),
+    (f"https://x.com/i/status/{XID}", f"x:{XID}"),
+    ("https://x.com/someone", None),
+    ("https://x.com/search?q=dance", None),
+])
+def test_x_canonical_id(url, expected):
+    assert canonical_id(url) == expected
+
+
+def test_x_platform_and_clean_url():
+    from tf_agent.tools.normalize import canonical_url
+
+    assert platform_of("https://x.com/a/status/1") == "x" and platform_of("https://twitter.com/a") == "x"
+    assert canonical_url(f"x:{XID}") == f"https://x.com/i/status/{XID}"
+    VideoItem(canonical_id=f"x:{XID}", platform="x", url=canonical_url(f"x:{XID}"))

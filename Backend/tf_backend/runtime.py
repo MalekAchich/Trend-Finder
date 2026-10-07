@@ -22,6 +22,8 @@ class Runtime:
 
     async def close(self) -> None:
         self.heavy.close()
+        if self.stack.browser is not None:
+            await self.stack.browser.close()
         await close_services(self.services)
 
 

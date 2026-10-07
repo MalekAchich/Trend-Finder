@@ -9,6 +9,8 @@ _IG_MEDIA = re.compile(r"/(?:[^/]+/)?(?:reels?|p|tv)/([A-Za-z0-9_-]{8,40})/?$")
 _IG_RESERVED = {"audio", "videos", "explore", "tags", "stories", "accounts", "reels", "reel"}
 _YT_PATH = re.compile(r"^/(?:shorts|embed|live)/([A-Za-z0-9_-]{11})")
 _YT_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_X_STATUS = re.compile(r"^/(?:[^/]+|i(?:/web)?)/status(?:es)?/(\d{5,25})(?:/|$)")
+_X_HOSTS = {"x.com", "twitter.com", "mobile.twitter.com", "mobile.x.com", "www.x.com", "www.twitter.com"}
 
 
 def _host(url: str) -> str | None:
@@ -31,11 +33,14 @@ def platform_of(url: str) -> str | None:
         return "instagram"
     if host in ("youtu.be", "youtube.com") or host.endswith(".youtube.com"):
         return "youtube"
+    if host in _X_HOSTS:
+        return "x"
     return None
 
 
 def canonical_id(url: str) -> str | None:
-    """`tiktok:<id>`, `instagram:<shortcode>`, `youtube:<id>`; None for non-video or unresolved short links."""
+    """`tiktok:<id>`, `instagram:<shortcode>`, `youtube:<id>`, `x:<status id>`; None for non-video or unresolved
+    short links."""
     platform = platform_of(url)
     if platform is None:
         return None
@@ -44,6 +49,9 @@ def canonical_id(url: str) -> str | None:
     if platform == "tiktok":
         m = _TT_VIDEO.search(path)
         return f"tiktok:{m.group(1)}" if m else None
+    if platform == "x":
+        m = _X_STATUS.match(path)
+        return f"x:{m.group(1)}" if m else None
     if platform == "instagram":
         m = _IG_MEDIA.match(path)
         if not m or m.group(1).lower() in _IG_RESERVED:
@@ -69,6 +77,8 @@ def canonical_url(cid: str, original: str | None = None) -> str:
         return f"https://www.youtube.com/shorts/{vid}"
     if platform == "instagram":
         return f"https://www.instagram.com/reel/{vid}/"
+    if platform == "x":
+        return f"https://x.com/i/status/{vid}"
     return (original or "").split("?")[0].split("#")[0]
 
 

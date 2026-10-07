@@ -36,6 +36,7 @@ DEFAULT_PLATFORMS: dict[str, PlatformConfig] = {
     "tiktok": PlatformConfig(1.0, 1.0),
     "instagram": PlatformConfig(5.0, 5.0),
     "youtube": PlatformConfig(0.3, 0.3),
+    "x": PlatformConfig(3.0, 2.0),
     "web": PlatformConfig(1.0),
 }
 

@@ -9,13 +9,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from tf_agent.tools.normalize import canonical_id, norm_handle, norm_hashtag
+from tf_agent.tools.normalize import canonical_id, norm_handle, norm_hashtag, platform_of
 from tf_agent.tools.types import Creator, Metrics, Sound, ToolErrorCode, ToolFailure, VideoItem
 
 Extractor = Callable[[str, dict[str, Any], bool], dict[str, Any]]
+CookiesFor = Callable[[str], Path | None]  # platform -> the scraping account's cookies.txt, read at call time
 _HASHTAG_RE = re.compile(r"#(\w+)", re.UNICODE)
-# Only the three platforms we support: never the generic extractor (which would fetch arbitrary URLs).
-ALLOWED_EXTRACTORS = ["tiktok.*", "vm\\.tiktok", "instagram.*", "youtube.*"]
+# Only the platforms we support: never the generic extractor (which would fetch arbitrary URLs).
+ALLOWED_EXTRACTORS = ["tiktok.*", "vm\\.tiktok", "instagram.*", "youtube.*", "twitter.*"]
 DOWNLOAD_FORMAT = ("bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/bv*[height<=720]+ba/"
                    "b[height<=720]/b")
 
@@ -55,6 +56,8 @@ def info_to_video_item(info: dict[str, Any]) -> VideoItem:
         cid = f"tiktok:{info['id']}"
     if cid is None and "instagram" in extractor and info.get("id"):
         cid = f"instagram:{info['id']}"
+    if cid is None and "twitter" in extractor and info.get("id"):
+        cid = f"x:{str(info['id']).split('_')[0]}"  # multi-video posts get "<status id>_<n>" ids
     if cid is None:
         raise ToolFailure("invalid_input", f"unsupported video URL: {url}")
     platform, vid = cid.split(":", 1)
@@ -90,19 +93,26 @@ def info_to_video_item(info: dict[str, Any]) -> VideoItem:
 
 class YtDlp:
     def __init__(self, timeout_s: float = 45.0, max_parallel: int = 2, cookies_file: Path | None = None,
-                 extractor: Extractor | None = None) -> None:
+                 extractor: Extractor | None = None, cookies_for: CookiesFor | None = None) -> None:
         self.timeout_s = timeout_s
         self.cookies_file = cookies_file
+        self.cookies_for = cookies_for
         self._extract = extractor or _default_extract
         # a dedicated pool: timed-out calls keep their thread until they finish, so the bound really holds
         self._pool = ThreadPoolExecutor(max_workers=max_parallel, thread_name_prefix="yt-dlp")
 
-    def _opts(self, **extra: Any) -> dict[str, Any]:
+    def _cookies(self, url: str | None) -> Path | None:
+        platform = platform_of(url) if url else None
+        if self.cookies_for is not None and platform is not None and (f := self.cookies_for(platform)) is not None:
+            return f
+        return self.cookies_file
+
+    def _opts(self, url: str | None = None, **extra: Any) -> dict[str, Any]:
         opts: dict[str, Any] = {"quiet": True, "no_warnings": True, "noprogress": True, "noplaylist": True,
                                 "socket_timeout": 20,
                                 "allowed_extractors": ALLOWED_EXTRACTORS}
-        if self.cookies_file:
-            opts["cookiefile"] = str(self.cookies_file)
+        if (cookies := self._cookies(url)) is not None:
+            opts["cookiefile"] = str(cookies)
         opts.update(extra)
         return opts
 
@@ -118,7 +128,7 @@ class YtDlp:
             raise ToolFailure(classify_ytdlp_error(str(e)), str(e).splitlines()[0][:300]) from e
 
     async def metadata(self, url: str) -> VideoItem:
-        info = await self._run(url, self._opts(skip_download=True), False, self.timeout_s)
+        info = await self._run(url, self._opts(url, skip_download=True), False, self.timeout_s)
         return info_to_video_item(info)
 
     async def search_youtube(self, query: str, n: int = 10, max_duration_s: float = 180.0) -> list[VideoItem]:
@@ -139,7 +149,7 @@ class YtDlp:
     async def download(self, url: str, dest_dir: Path, max_height: int = 720) -> Path:
         dest_dir.mkdir(parents=True, exist_ok=True)
         fmt = DOWNLOAD_FORMAT.replace("720", str(max_height))
-        opts = self._opts(format=fmt, merge_output_format="mp4", outtmpl=str(dest_dir / "%(id)s.%(ext)s"))
+        opts = self._opts(url, format=fmt, merge_output_format="mp4", outtmpl=str(dest_dir / "%(id)s.%(ext)s"))
         info = await self._run(url, opts, True, self.timeout_s * 4)
         files = [d.get("filepath") for d in info.get("requested_downloads") or [] if d.get("filepath")]
         if not files or not Path(files[0]).is_file():

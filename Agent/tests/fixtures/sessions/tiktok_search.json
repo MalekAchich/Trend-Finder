@@ -1,0 +1,56 @@
+{
+ "status_code": 0,
+ "data": [
+  {
+   "type": 1,
+   "item": {
+    "id": "7560000000000000001",
+    "desc": "boss walks in #deadpan #office",
+    "createTime": 1791200000,
+    "author": {
+     "uniqueId": "Stiff.Guy",
+     "nickname": "Stiff"
+    },
+    "authorStats": {
+     "followerCount": 120000
+    },
+    "stats": {
+     "playCount": 2300000,
+     "diggCount": 210000,
+     "commentCount": 1500,
+     "shareCount": 9000,
+     "collectCount": 12000
+    },
+    "video": {
+     "duration": 14,
+     "cover": "https://p16.tiktokcdn.com/c1.jpg"
+    },
+    "music": {
+     "id": "m1",
+     "title": "original sound"
+    }
+   }
+  },
+  {
+   "type": 4,
+   "user_list": []
+  }
+ ],
+ "item_list": [
+  {
+   "id": "7560000000000000002",
+   "desc": "second",
+   "createTime": 1791100000,
+   "author": {
+    "uniqueId": "b"
+   },
+   "statsV2": {
+    "playCount": "5000",
+    "diggCount": "40"
+   },
+   "video": {
+    "duration": 9
+   }
+  }
+ ]
+}

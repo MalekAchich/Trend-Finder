@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-Platform = Literal["tiktok", "instagram", "youtube"]
+Platform = Literal["tiktok", "instagram", "youtube", "x"]
 ToolErrorCode = Literal["rate_limited", "login_required", "platform_unavailable", "not_found", "invalid_input"]
 
 
@@ -29,7 +29,7 @@ class Metrics(BaseModel):
     saves: int | None = None
 
 
-CANONICAL_ID_PATTERN = r"^(tiktok|instagram|youtube):[A-Za-z0-9_-]{1,64}$"
+CANONICAL_ID_PATTERN = r"^(tiktok|instagram|youtube|x):[A-Za-z0-9_-]{1,64}$"
 
 
 class VideoItem(BaseModel):

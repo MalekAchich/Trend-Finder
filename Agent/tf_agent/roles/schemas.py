@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-Platform = Literal["tiktok", "instagram", "youtube"]
+Platform = Literal["tiktok", "instagram", "youtube", "x"]
 TaskType = Literal["scout", "radar", "deep_dive"]
 
 

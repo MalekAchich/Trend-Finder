@@ -30,7 +30,7 @@ class TargetIn(BaseModel):
 
 class RunIn(BaseModel):
     character: str = Field(min_length=1, max_length=64)
-    platforms: list[Literal["tiktok", "instagram", "youtube"]] = Field(
+    platforms: list[Literal["tiktok", "instagram", "youtube", "x"]] = Field(
         default_factory=lambda: ["tiktok", "youtube", "instagram"], min_length=1)
     freshness: Literal["day", "week", "month", "any"] = "week"
     minutes: float = Field(60.0, ge=5, le=600)

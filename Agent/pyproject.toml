@@ -17,6 +17,7 @@ dependencies = [
   "imagehash>=4.3",
   "numpy>=1.26",
   "curl-cffi>=0.10",
+  "playwright>=1.55",
 ]
 
 [tool.uv.sources]

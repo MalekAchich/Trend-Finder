@@ -1,0 +1,45 @@
+{
+ "media_grid": {
+  "sections": [
+   {
+    "layout_content": {
+     "medias": [
+      {
+       "media": {
+        "code": "DXyz12345ab",
+        "media_type": 2,
+        "product_type": "clips",
+        "taken_at": 1791150000,
+        "video_duration": 21.5,
+        "play_count": 880000,
+        "like_count": 41000,
+        "comment_count": 300,
+        "caption": {
+         "text": "monday energy #deadpan"
+        },
+        "user": {
+         "username": "Dry.Humor"
+        },
+        "image_versions2": {
+         "candidates": [
+          {
+           "url": "https://scontent.cdninstagram.com/t.jpg"
+          }
+         ]
+        }
+       }
+      },
+      {
+       "media": {
+        "code": "PHOTO123456",
+        "media_type": 1,
+        "taken_at": 1791150000,
+        "like_count": 5
+       }
+      }
+     ]
+    }
+   }
+  ]
+ }
+}
