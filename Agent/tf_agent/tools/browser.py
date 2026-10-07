@@ -49,6 +49,11 @@ async def wait_for_login(jar: CookieJar, spec: SessionSpec, timeout_s: float, cl
         await asyncio.sleep(poll_s)
 
 
+def logged_in(state: dict[str, Any], spec: SessionSpec) -> bool:
+    return any(spec.domain in str(c.get("domain")) and c.get("value") and (not spec.proof or c.get("name") in spec.proof)
+               for c in state.get("cookies") or [])
+
+
 class StateSource(Protocol):
     async def storage_state(self) -> dict[str, Any]: ...
 
@@ -74,6 +79,7 @@ class BrowserSessions:
         self.creds = creds
         self._pw: Any = None
         self._browser: Any = None
+        self._ua: str | None = None
         self._start = asyncio.Lock()
         self._pages = asyncio.Semaphore(max_pages)
         self.connecting: dict[str, dict[str, str]] = {}  # platform -> {state: waiting|connected|failed, message}
@@ -92,6 +98,10 @@ class BrowserSessions:
             if self._browser is None or not self._browser.is_connected():
                 # the full Chromium in its new headless mode: closer to a real browser than the headless shell
                 self._browser = await pw.chromium.launch(headless=True, channel="chromium")
+                # its own identity, minus the "Headless" marker that sites answer with 403 (version stays real)
+                probe = await self._browser.new_page()
+                self._ua = (await probe.evaluate("navigator.userAgent")).replace("HeadlessChrome", "Chrome")
+                await probe.close()
             return self._browser
 
     async def close(self) -> None:
@@ -116,8 +126,10 @@ class BrowserSessions:
                 await page.goto(spec.login_url)
                 if spec.cookie is None:
                     state = await wait_for_close(ctx, timeout_s, closed=lambda: not browser.is_connected() or page.is_closed())
-                    if not any(spec.domain in str(c.get("domain")) for c in state.get("cookies") or []):
-                        raise LoginCancelled("the window was closed before anything was saved")
+                    if not logged_in(state, spec):
+                        raise LoginCancelled("the window was closed before the login finished (nothing was saved). "
+                                             "Log in with the account's email or phone and password: Google sign-in "
+                                             "is blocked inside automated browser windows.")
                     self.creds.save_session(platform, state)
                 else:
                     await wait_for_login(ctx, spec, timeout_s,
@@ -151,7 +163,7 @@ class BrowserSessions:
         state = str(self.creds.state_file(platform)) if has else None
         async with self._pages:
             browser = await self._headless()
-            ctx = await browser.new_context(storage_state=state, locale="en-US",
+            ctx = await browser.new_context(storage_state=state, locale="en-US", user_agent=self._ua,
                                             viewport={"width": 1280, "height": 900})
             try:
                 page = await ctx.new_page()

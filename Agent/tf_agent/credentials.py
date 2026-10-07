@@ -25,6 +25,7 @@ class SessionSpec:
     login_url: str
     cookie: str | None  # present (non-empty) once logged in; None: the owner closes the window when done
     domain: str
+    proof: tuple[str, ...] = ()  # for close-the-window logins: one of these cookies shows the login really happened
 
 
 SESSIONS = {
@@ -35,7 +36,8 @@ SESSIONS = {
     "x": SessionSpec("x", "X scraping account", "https://x.com/i/flow/login", "auth_token", "x.com"),
     # TikTok's trend rankings (Creative Center, now inside TikTok One) have their own login on ads.tiktok.com
     "tiktok_one": SessionSpec("tiktok_one", "TikTok One (trend rankings)",
-                              "https://ads.tiktok.com/creative/creativeCenter/trends", None, "tiktok.com"),
+                              "https://ads.tiktok.com/creative/creativeCenter/trends", None, "tiktok.com",
+                              proof=("sessionid", "sessionid_ss", "sid_tt", "sid_guard", "sid_ucp_v1")),
 }
 
 

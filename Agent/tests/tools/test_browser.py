@@ -7,7 +7,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from tf_agent.credentials import SESSIONS, Credentials
-from tf_agent.tools.browser import BrowserSessions, LoginCancelled, wait_for_close, wait_for_login
+from tf_agent.tools.browser import BrowserSessions, LoginCancelled, logged_in, wait_for_close, wait_for_login
 from tf_agent.tools.types import ToolFailure
 
 PAGE = """<html><body><h1>feed</h1><script>
@@ -103,3 +103,11 @@ async def test_closing_the_window_keeps_the_last_session_it_had():
     s = States(3)
     state = await wait_for_close(s, 60, closed=s.closed, poll_s=0)
     assert state["cookies"][0]["name"] == "c3"
+
+
+def test_a_close_the_window_login_needs_a_real_login_cookie():
+    spec = SESSIONS["tiktok_one"]
+    tracking_only = {"cookies": [{"name": "ttwid", "value": "x", "domain": ".tiktok.com"},
+                                 {"name": "msToken", "value": "x", "domain": "ads.tiktok.com"}]}
+    assert not logged_in(tracking_only, spec)
+    assert logged_in({"cookies": [{"name": "sid_tt", "value": "x", "domain": ".tiktok.com"}]}, spec)
