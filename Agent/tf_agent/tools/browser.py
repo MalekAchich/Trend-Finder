@@ -237,10 +237,11 @@ class BrowserSessions:
     async def capture_json(self, platform: str, url: str, pattern: re.Pattern[str], *, scrolls: int = 2,
                            settle_ms: int = 2500, need_session: bool = False,
                            blocked: Callable[[str, str], bool] | None = None,
-                           follow: Callable[[list[str]], list[str]] | None = None,
+                           follow: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
                            follow_headers: dict[str, str] | None = None) -> list[Any]:
-        """JSON bodies of the page's own requests whose URL matches `pattern`. `follow` maps the matched request URLs
-        to more URLs fetched from inside the page (same cookies and origin), e.g. the same API with other filters."""
+        """JSON bodies of the page's own requests whose URL matches `pattern`. `follow` maps the matched requests
+        ({url, method, body}) to more requests sent from inside the page (same cookies and origin), e.g. the same API
+        with another page or filter."""
         has = platform in SESSIONS and self.creds.has_session(platform)
         if need_session and not has:
             raise ToolFailure("login_required", f"{platform}: no scraping account connected "
@@ -253,7 +254,7 @@ class BrowserSessions:
             try:
                 page = await ctx.new_page()
                 found: list[Any] = []
-                matched: list[str] = []
+                matched: list[dict[str, Any]] = []
                 pending: list[asyncio.Task[None]] = []
 
                 async def keep(resp: Any) -> None:
@@ -264,7 +265,7 @@ class BrowserSessions:
 
                 def on_response(r: Any) -> None:
                     if pattern.search(r.url):
-                        matched.append(r.url)
+                        matched.append({"url": r.url, "method": r.request.method, "body": r.request.post_data})
                         pending.append(asyncio.ensure_future(keep(r)))
 
                 page.on("response", on_response)
@@ -289,8 +290,9 @@ class BrowserSessions:
                 for extra in (follow(matched) if follow is not None else [])[:6]:
                     try:
                         found.append(await page.evaluate(
-                            "async ([u, h]) => (await fetch(u, {credentials: 'include', headers: h})).json()",
-                            [extra, follow_headers or {}]))
+                            """async ([u, m, b, h]) => (await fetch(u, {method: m, body: b, credentials: 'include',
+                                headers: b ? {...h, 'content-type': 'application/json'} : h})).json()""",
+                            [extra["url"], extra.get("method") or "GET", extra.get("body"), follow_headers or {}]))
                     except Exception as e:  # one failed extra fetch only costs its results
                         log.info("follow-up fetch failed on %s: %s", platform, type(e).__name__)
                 return found

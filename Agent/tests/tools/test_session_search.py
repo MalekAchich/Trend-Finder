@@ -1,9 +1,11 @@
 """Logged-in search results read from the JSON each site fetches (tolerant walkers), on made-up samples."""
+import json
 from datetime import UTC, datetime
 
 from tf_agent.tools.session_search import (
     instagram_items,
     is_captcha,
+    hashtag_first_page,
     organic_variants,
     tiktok_items,
     trend_hashtags,
@@ -76,6 +78,15 @@ def test_trend_urls_and_organic_variants():
     assert trends_page_url("videos", "gb", 30) == \
         "https://ads.tiktok.com/creative/creativeCenter/trends/video?region=GB&period=30"
     api = "https://api.invalid/CreativeCenterGetTopContentsList?countryCode=US&limit=20&orderByMetric=1&organicOnly=false"
-    out = organic_variants([api, "https://api.invalid/GetHashtagList"])
-    assert len(out) == 2 and all("organicOnly=true" in u for u in out)
-    assert {u.split("orderByMetric=")[1][0] for u in out} == {"1", "2"}
+    out = organic_variants([{"url": api, "method": "GET"}, {"url": "https://api.invalid/GetHashtagList"}])
+    assert len(out) == 2 and all("organicOnly=true" in r["url"] for r in out)
+    assert {r["url"].split("orderByMetric=")[1][0] for r in out} == {"1", "2"}
+
+
+def test_hashtags_ask_for_the_first_page_the_html_carried():
+    page2 = {"url": "https://api.invalid/GetHashtagList", "method": "POST",
+             "body": '{"timeRange": 7, "countryCode": "US", "page": 2, "limit": 20}'}
+    (first,) = hashtag_first_page([page2])
+    assert first["method"] == "POST" and json.loads(first["body"]) == {"timeRange": 7, "countryCode": "US", "page": 1,
+                                                                        "limit": 20}
+    assert hashtag_first_page([{**page2, "body": '{"page": 1}'}]) == [] and hashtag_first_page([]) == []

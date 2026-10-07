@@ -261,8 +261,8 @@ class PlatformTools:
         url = ss.trends_page_url(kind, region, period)
 
         async def run() -> list[Any]:
-            return await browser.capture_json("tiktok_one", url, ss.TRENDS_PATTERN, scrolls=1, settle_ms=6000,
-                                              follow=ss.organic_variants if kind == "videos" else None,
+            return await browser.capture_json("tiktok_one", url, ss.TRENDS_PATTERN, scrolls=2, settle_ms=6000,
+                                              follow=ss.organic_variants if kind == "videos" else ss.hashtag_first_page,
                                               follow_headers=ss.FOLLOW_HEADERS)
 
         captured = await self._guarded("tiktok_trends", run)

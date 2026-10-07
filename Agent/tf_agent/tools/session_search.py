@@ -9,6 +9,7 @@ import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
+import json
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from tf_agent.tools.normalize import norm_handle, norm_hashtag
@@ -170,18 +171,34 @@ def trends_page_url(kind: str, region: str, period: int) -> str:
     return f"https://ads.tiktok.com/creative/creativeCenter/trends/{tab}?region={region.upper()}&period={period}"
 
 
-def organic_variants(urls: list[str]) -> list[str]:
+def organic_variants(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The page asks for top videos including paid reach; ask the same API for organic-only, by views and by
-    engagement (fetched from inside the page, so it carries the page's own cookies and headers)."""
-    out: list[str] = []
-    for u in urls:
-        if "GetTopContentsList" not in u:
+    engagement (sent from inside the page, so it carries the page's own cookies and headers)."""
+    out: list[dict[str, Any]] = []
+    for r in requests:
+        if "GetTopContentsList" not in r["url"]:
             continue
-        parts = urlsplit(u)
+        parts = urlsplit(r["url"])
         q = dict(parse_qsl(parts.query, keep_blank_values=True))
         for metric in ("1", "2"):
-            out.append(urlunsplit(parts._replace(query=urlencode({**q, "organicOnly": "true", "orderByMetric": metric}))))
+            out.append({"url": urlunsplit(parts._replace(query=urlencode({**q, "organicOnly": "true",
+                                                                          "orderByMetric": metric}))),
+                        "method": "GET"})
     return out
+
+
+def hashtag_first_page(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The hashtag ranking's first page comes inside the page's HTML; only later pages arrive as data. Ask the same
+    API for page 1 with the page's own filters."""
+    for r in requests:
+        if "GetHashtagList" in r["url"] and r.get("body"):
+            try:
+                body = json.loads(r["body"])
+            except ValueError:
+                continue
+            if isinstance(body, dict) and body.get("page") != 1:
+                return [{"url": r["url"], "method": r.get("method") or "POST", "body": json.dumps({**body, "page": 1})}]
+    return []
 
 
 def _direction(curve: list[dict[str, Any]]) -> str:
