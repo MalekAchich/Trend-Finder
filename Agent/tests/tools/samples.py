@@ -95,3 +95,76 @@ def instagram_profile_reels() -> list[dict]:
                             "user": {"username": "Creator_H"}, "ai_label_info": {"ai_label_type": "AI_GENERATED"}}}},
         {"node": {"media": {"pk": "4002616216279166824", "code": "TESTREEL102", "product_type": "clips", "media_type": 2,
                             "play_count": 900, "like_count": 4, "user": {"username": "creator_h"}, "ai_label_info": {}}}}]}}}]
+
+
+# ---- our own channels (Plan 9): the official APIs' shapes and public profile captures, all made up ----
+def ig_me() -> dict:
+    return {"user_id": "17800000000000001", "username": "made_up_channel", "followers_count": 140, "media_count": 2}
+
+
+def ig_media_page(after: str | None = None) -> dict:
+    """Newest first; the first page links to a second one, whose post is older than the window."""
+    if after == "PAGE2":
+        return {"data": [{"id": "17900000000000003", "media_type": "VIDEO", "media_product_type": "REELS",
+                          "permalink": "https://www.instagram.com/reel/TESTOWN003/", "timestamp": "2026-06-01T10:00:00+0000",
+                          "like_count": 1, "comments_count": 0}]}
+    return {"data": [
+        {"id": "17900000000000001", "media_type": "VIDEO", "media_product_type": "REELS", "caption": "made-up reel one",
+         "permalink": "https://www.instagram.com/reel/TESTOWN001/", "thumbnail_url": "https://cover.invalid/o1.jpg",
+         "timestamp": "2026-10-07T18:00:00+0000", "like_count": 41, "comments_count": 3},
+        {"id": "17900000000000002", "media_type": "IMAGE", "media_product_type": "FEED", "caption": "a photo",
+         "permalink": "https://www.instagram.com/p/TESTOWN002/", "timestamp": "2026-10-06T18:00:00+0000",
+         "like_count": 5, "comments_count": 0}],
+        "paging": {"next": "https://graph.instagram.com/me/media?after=PAGE2"}}
+
+
+def ig_insights() -> dict:
+    """Reels watch times come in milliseconds; some metrics as `values`, newer ones as `total_value`."""
+    return {"data": [{"name": "views", "values": [{"value": 1820}]}, {"name": "reach", "values": [{"value": 1400}]},
+                     {"name": "likes", "values": [{"value": 41}]}, {"name": "comments", "values": [{"value": 3}]},
+                     {"name": "shares", "total_value": {"value": 12}}, {"name": "saved", "values": [{"value": 9}]},
+                     {"name": "ig_reels_avg_watch_time", "values": [{"value": 6400}]},
+                     {"name": "ig_reels_video_view_total_time", "values": [{"value": 11648000}]}]}
+
+
+def ig_error(code: int, message: str) -> dict:
+    return {"error": {"message": message, "type": "OAuthException", "code": code}}
+
+
+def tt_user_info() -> dict:
+    return {"data": {"user": {"open_id": "made-up-open-id", "username": "made_up_channel", "display_name": "Made Up",
+                              "follower_count": 230, "likes_count": 1900, "video_count": 2}},
+            "error": {"code": "ok", "message": "", "log_id": "made-up-log"}}
+
+
+def tt_video_list(cursor: int | None = None) -> dict:
+    if cursor:
+        return {"data": {"videos": [{"id": "1000000000000000099", "create_time": 1_780_000_000,
+                                     "share_url": "https://www.tiktok.com/@made_up_channel/video/1000000000000000099",
+                                     "view_count": 10}], "cursor": 0, "has_more": False},
+                "error": {"code": "ok", "message": ""}}
+    return {"data": {"videos": [
+        {"id": "1000000000000000010", "create_time": T0 + 86400, "cover_image_url": "https://cover.invalid/t1.jpg",
+         "share_url": "https://www.tiktok.com/@made_up_channel/video/1000000000000000010",
+         "video_description": "made-up tiktok one #tagone", "duration": 12, "view_count": 5400, "like_count": 610,
+         "comment_count": 22, "share_count": 31}], "cursor": 1_790_000_000_000, "has_more": True},
+        "error": {"code": "ok", "message": ""}}
+
+
+def tt_error(code: str) -> dict:
+    return {"data": {}, "error": {"code": code, "message": "made-up message", "log_id": "made-up-log"}}
+
+
+def ig_profile_capture() -> list[dict]:
+    """A public profile page's own data: the user (followers) and its Reels grid."""
+    return [{"data": {"user": {"username": "made_up_channel", "follower_count": 138, "media_count": 2}}},
+            *instagram_profile_reels()]
+
+
+def tt_profile_capture() -> list[dict]:
+    return [{"itemList": [{"id": "1000000000000000010", "desc": "made-up tiktok one", "createTime": T0 + 86400,
+                           "author": {"uniqueId": "made_up_channel"},
+                           "authorStats": {"followerCount": 229, "heartCount": 1890, "videoCount": 2},
+                           "stats": {"playCount": 5300, "diggCount": 600, "commentCount": 21, "shareCount": 30,
+                                     "collectCount": 8},
+                           "video": {"duration": 12, "cover": "https://cover.invalid/t1.jpg"}}]}]

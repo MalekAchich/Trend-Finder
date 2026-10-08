@@ -141,6 +141,33 @@ def _instagram(d: dict[str, Any]) -> VideoItem | None:
         ai_generated=bool(label.get("ai_label_type") or label.get("label")) if isinstance(label, dict) else None)
 
 
+def instagram_profile_stats(captured: list[Any], handle: str) -> dict[str, int | None]:
+    """A public profile page's own numbers for `handle`: followers and posts (the user object it loads)."""
+    mine = norm_handle(handle)
+    for d in _walk(captured):
+        if isinstance(d.get("username"), str) and norm_handle(d["username"]) == mine and (
+                "follower_count" in d or "edge_followed_by" in d):
+            followers = d.get("follower_count")
+            if followers is None:
+                followers = (d.get("edge_followed_by") or {}).get("count")
+            posts = d.get("media_count")
+            if posts is None:
+                posts = (d.get("edge_owner_to_timeline_media") or {}).get("count")
+            return {"followers": _num(followers), "posts": _num(posts), "total_likes": None}
+    return {"followers": None, "posts": None, "total_likes": None}
+
+
+def tiktok_profile_stats(captured: list[Any], handle: str) -> dict[str, int | None]:
+    """The creator's own numbers that every one of their videos carries (authorStats)."""
+    mine = norm_handle(handle)
+    for d in _walk(captured):
+        author, stats = d.get("author"), d.get("authorStats")
+        if isinstance(author, dict) and isinstance(stats, dict) and norm_handle(str(author.get("uniqueId") or "")) == mine:
+            return {"followers": _num(stats.get("followerCount")), "posts": _num(stats.get("videoCount")),
+                    "total_likes": _num(stats.get("heartCount") or stats.get("heart"))}
+    return {"followers": None, "posts": None, "total_likes": None}
+
+
 def instagram_items(captured: list[Any]) -> list[VideoItem]:
     return _dedupe([it for d in _walk(captured) if (it := _instagram(d)) is not None])
 
