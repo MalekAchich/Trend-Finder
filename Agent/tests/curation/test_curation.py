@@ -137,3 +137,21 @@ async def test_curation_never_destroys_owner_feedback(db_sessionmaker, tmp_path)
     async with db_sessionmaker() as s:
         assert (await s.execute(select(TrendCluster))).scalar_one().id == cid
         assert len((await s.execute(select(CardFeedback))).scalars().all()) == 1
+
+
+async def test_the_owners_bar_applies_after_the_second_opinion(db_sessionmaker, tmp_path):
+    sheet = tmp_path / "s.jpg"
+    sheet.write_bytes(b"x")
+    _, run_id, (task_id,) = await create_test_run(db_sessionmaker)
+    await add_finding(db_sessionmaker, run_id, task_id, "tiktok:1", A, 90, 85, sheet=str(sheet))
+    await add_finding(db_sessionmaker, run_id, task_id, "tiktok:2", B, 82, 78, sheet=str(sheet))
+    b = FakeAdapter("b", [text_response("b", structured={"fit": 88, "justification": "agree"}),
+                          text_response("b", structured={"fit": 30, "justification": "not like the references"})])
+    client, _, _ = make_client({"a": FakeAdapter("a"), "b": b})
+    ch = SimpleNamespace(brief="b", canonical_image_path=str(sheet))
+    await Curator(db_sessionmaker, Roles(client), top_k=5).curate(run_id, ch, min_score=75)
+    async with db_sessionmaker() as s:
+        kept = (await s.execute(select(Finding.canonical_id).join(TrendCluster, TrendCluster.best_finding_id == Finding.id)
+                                )).scalars().all()
+        status = dict((await s.execute(select(Finding.canonical_id, Finding.status))).all())
+    assert kept == ["tiktok:1"] and status["tiktok:2"] == "below_bar"

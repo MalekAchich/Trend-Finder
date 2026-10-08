@@ -4,7 +4,8 @@ No model calls here. It starts from the owner's reference videos (and targets):
 1. their creators' recent videos;
 2. searches built from what the reference studies have in common (AI themes, niches, trend types);
 3. the creators behind the biggest hits of those searches (one step further).
-Then a gate picks two kinds of recent videos for the analyst, and only those few are judged:
+Then the look check compares the covers of the most promising few hundred with the references' covers (one model
+call per 20), and a gate picks two kinds of recent videos for the analyst, and only those few are judged:
 - viral: big numbers, ranked by how fast they're exploding (plays per hour since posting);
 - hidden gems: small numbers but close to the references (same themes, AI-made, from the reference creators),
   which can mean an original idea nobody has copied yet.
@@ -20,8 +21,10 @@ from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Protocol
 
+from tf_agent.discovery.triage import Look, Triage
 from tf_agent.tools.types import ToolFailure, VideoItem
 
 log = logging.getLogger(__name__)
@@ -29,6 +32,9 @@ Emit = Callable[..., Awaitable[None]]
 LIKES_TO_PLAYS = 25  # when a platform hides plays (Instagram search), likes x 25 is a typical reach estimate
 MIN_AGE_H = 6.0  # a 1-hour-old video's plays/hour isn't meaningful yet
 SECOND_DEGREE_MIN_PLAYS = 1_000_000
+# the platforms' own accounts re-post other people's hits: big numbers, but not creators to follow (run 3)
+PLATFORM_ACCOUNTS = frozenset({"instagram", "creators", "reels", "tiktok", "tiktokcreators", "youtube", "youtubeshorts",
+                               "x", "twitter"})
 GEM_MIN_RELEVANCE = 3  # see relevance(): e.g. two shared themes, or a reference creator plus one theme
 
 
@@ -43,6 +49,10 @@ class Gate:
     max_platform_share: float = 0.6  # leave room for the other platforms' strongest finds
     max_gems: int = 10  # of max_judged: small videos close to the references (originality)
     gem_min_plays: int = 1_000  # below this nobody has really seen it yet; too early to tell
+    max_checked: int = 200  # covers compared with the references (10 model calls)
+    max_checked_per_creator: int = 6
+    min_look: int = 6  # 0-10 from the look check: under it, it doesn't look like the references
+    min_look_gem: int = 7  # a small video has to look closer
 
 
 @dataclass
@@ -52,6 +62,7 @@ class Pick:
     velocity: float
     lane: str = "viral"  # or "gem"
     relevance: int = 0
+    look: int | None = None  # the look check's 0-10, when it ran
 
 
 @dataclass
@@ -139,32 +150,68 @@ def theme_queries(studies: list[dict[str, Any]], limit: int) -> list[str]:
     return seen[:limit]
 
 
-def gate(pool: Pool, exclude: set[str], g: Gate, now: datetime,
-         terms: set[str] | frozenset[str] = frozenset()) -> tuple[list[Pick], Counter[str]]:
-    """Recent videos only, in two lanes: viral (fastest-growing first) and hidden gems (closest to the references
-    first). At most a few per creator, and room for every platform that has strong candidates.
-    Returns the picks and why the rest were dropped."""
+def eligible(pool: Pool, exclude: set[str], g: Gate, now: datetime) -> tuple[list[VideoItem], Counter[str]]:
+    """Not already chosen or found, posted in the window, and seen by at least a few people."""
     oldest = now - timedelta(days=g.days)
     dropped: Counter[str] = Counter()
-    viral: list[Pick] = []
-    gems: list[Pick] = []
+    ok: list[VideoItem] = []
     for cid, i in pool.items.items():
-        r = reach(i)
         if cid in exclude:
             dropped["already yours or already found"] += 1
         elif i.posted_at is not None and i.posted_at < oldest:
             dropped[f"older than {g.days} days"] += 1
+        elif reach(i) < g.gem_min_plays:
+            dropped[f"under {g.gem_min_plays:,} plays"] += 1
+        else:
+            ok.append(i)
+    return ok, dropped
+
+
+def to_check(items: list[VideoItem], g: Gate, now: datetime) -> list[VideoItem]:
+    """The covers worth a look: fastest-growing first, a few per creator, so one feed can't fill the check."""
+    per: Counter[tuple[str, str]] = Counter()
+    out: list[VideoItem] = []
+    for i in sorted(items, key=lambda i: velocity(i, now), reverse=True):
+        key = (i.platform, i.creator.handle or i.canonical_id)
+        if per[key] < g.max_checked_per_creator and len(out) < g.max_checked:
+            per[key] += 1
+            out.append(i)
+    return out
+
+
+def gate(pool: Pool, exclude: set[str], g: Gate, now: datetime,
+         terms: set[str] | frozenset[str] = frozenset(),
+         looks: dict[str, Look] | None = None) -> tuple[list[Pick], Counter[str]]:
+    """Recent videos in two lanes, viral and hidden gems, at most a few per creator and room for every platform.
+    With the look check: only videos that look like the references, the closest first (then the fastest-growing).
+    Without it (no reference covers): viral ranks by plays per hour, gems by shared themes.
+    Returns the picks and why the rest were dropped."""
+    items, dropped = eligible(pool, exclude, g, now)
+    viral: list[Pick] = []
+    gems: list[Pick] = []
+    for i in items:
+        cid, r = i.canonical_id, reach(i)
+        if looks is not None:
+            look = looks.get(cid)
+            if look is None:
+                dropped["not among the covers checked"] += 1
+            elif look.score < (g.min_look if r >= g.min_plays else g.min_look_gem):
+                dropped["doesn't look like your references"] += 1
+            elif r >= g.min_plays:
+                viral.append(Pick(i, f"{pool.why[cid]}; looks like your references ({look.why})", velocity(i, now),
+                                  look=look.score))
+            else:
+                gems.append(Pick(i, f"{pool.why[cid]}; a hidden gem: only {r:,} plays but looks like your "
+                                    f"references ({look.why})", velocity(i, now), lane="gem", look=look.score))
         elif r >= g.min_plays:
             viral.append(Pick(i, pool.why[cid], velocity(i, now)))
-        elif r < g.gem_min_plays:
-            dropped[f"under {g.gem_min_plays:,} plays"] += 1
         elif (rel := relevance(i, terms, pool.kind.get(cid))) < GEM_MIN_RELEVANCE:
             dropped["small and not close enough to your references"] += 1
         else:
             gems.append(Pick(i, f"{pool.why[cid]}; a hidden gem: only {r:,} plays but close to your references",
                              velocity(i, now), lane="gem", relevance=rel))
-    viral.sort(key=lambda p: p.velocity, reverse=True)
-    gems.sort(key=lambda p: (p.relevance, p.velocity), reverse=True)
+    viral.sort(key=lambda p: (p.look or 0, p.velocity), reverse=True)
+    gems.sort(key=lambda p: (p.look or 0, p.relevance, p.velocity), reverse=True)
     picks: list[Pick] = []
     per_creator: Counter[tuple[str, str]] = Counter()
     per_platform: Counter[str] = Counter()
@@ -186,7 +233,7 @@ def gate(pool: Pool, exclude: set[str], g: Gate, now: datetime,
     take(viral, viral_room, None)
     take(gems, g.max_judged, None)
     take(viral, g.max_judged, None)  # few gems: the viral lane gets their room
-    picks.sort(key=lambda p: (p.lane == "viral", p.velocity), reverse=True)
+    picks.sort(key=lambda p: (p.lane == "viral", p.look or 0, p.velocity), reverse=True)
     left = len(viral) + len(gems) - len(picks)
     if left:
         dropped["not among the best (or too many from one creator)"] += left
@@ -195,8 +242,32 @@ def gate(pool: Pool, exclude: set[str], g: Gate, now: datetime,
 
 class Lookalike:
     def __init__(self, sources: Sources, emit: Emit, gate_settings: Gate | None = None,
-                 clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
+                 clock: Callable[[], datetime] = lambda: datetime.now(UTC), triage: Triage | None = None,
+                 reference_covers: list[Path] | None = None) -> None:
         self.sources, self.emit, self.g, self._now = sources, emit, gate_settings or Gate(), clock
+        self.triage, self.reference_covers = triage, reference_covers or []
+
+    async def _look_check(self, pool: Pool, exclude: set[str]) -> dict[str, Look] | None:
+        """Compares the most promising covers with the references' (None when it can't run: no covers)."""
+        if self.triage is None or not self.reference_covers:
+            return None
+        items, _ = eligible(pool, exclude, self.g, self._now())
+        check = to_check(items, self.g, self._now())
+        agent = {"id": "look-check", "role": "look_check", "platform": None}
+        await self.emit("agent.started", agent=agent,
+                        goal=f"compare {len(check)} covers with your {len(self.reference_covers)} references")
+
+        async def on_batch(n: int, size: int, alike: int) -> None:
+            await self.emit("agent.tool_call", agent=agent, tool="look_check", args={"for": f"covers batch {n}"},
+                            step=n)
+            await self.emit("agent.tool_result", agent=agent, tool="look_check", ok=True, step=n,
+                            summary=f"{alike} of {size} look like your references")
+
+        looks = await self.triage.looks(self.reference_covers, check, on_batch)
+        alike = sum(1 for v in (looks or {}).values() if v.score >= self.g.min_look)
+        await self.emit("agent.finished", agent=agent, accepted=alike, rejected=len(looks or {}) - alike, leads=0,
+                        failed=None if looks is not None else "the look check couldn't run; ranked without it")
+        return looks
 
     async def _step(self, agent: dict[str, Any], goal: str, calls: list[tuple[str, Callable[[], Awaitable[Any]]]],
                     pool: Pool, why: Callable[[str], str], kind: str = "search") -> list[VideoItem]:
@@ -255,7 +326,8 @@ class Lookalike:
 
         # 3: the creators behind the biggest hits of the theme searches
         hits = [i for found in results[1:] for i in found
-                if reach(i) >= SECOND_DEGREE_MIN_PLAYS and i.creator.handle and i.platform in creators]
+                if reach(i) >= SECOND_DEGREE_MIN_PLAYS and i.creator.handle and i.platform in creators
+                and i.creator.handle not in PLATFORM_ACCOUNTS]
         hits.sort(key=lambda i: velocity(i, self._now()), reverse=True)
         second: list[tuple[str, Callable[[], Awaitable[Any]]]] = []
         known = {(p, h) for p, hs in creators.items() for h in hs}
@@ -272,8 +344,11 @@ class Lookalike:
                              lambda label: f"new from {label.split(' ', 1)[1]}, who had one of the biggest hits",
                              "hit")
 
-        picks, dropped = gate(pool, exclude, self.g, self._now(), theme_terms(studies))
+        looks = await self._look_check(pool, exclude)
+        picks, dropped = gate(pool, exclude, self.g, self._now(), theme_terms(studies), looks)
         return picks, {"seen": len(pool.items), "picked": len(picks), "gems": sum(p.lane == "gem" for p in picks),
+                       "checked": len(looks) if looks is not None else 0,
+                       "look_alike": sum(1 for v in (looks or {}).values() if v.score >= self.g.min_look),
                        "dropped": dict(dropped),
                        "queries": queries, "seed_creators": sum(len(v) for v in creators.values()),
                        "second_degree": len(second)}

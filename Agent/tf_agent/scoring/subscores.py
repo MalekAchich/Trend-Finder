@@ -12,6 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tf_db.models import Video
 
 DEFAULT_WEIGHTS: dict[str, float] = {"fit": 0.40, "feasibility": 0.30, "momentum": 0.20, "freshness": 0.10}
+# Lookalike runs: being like the owner's references is the point. Their own references measure only 63-80 on Kling
+# feasibility, so at 30 % even a near-copy of one couldn't reach the owner's bar of 75 (run 3).
+LOOKALIKE_WEIGHTS: dict[str, float] = {"fit": 0.55, "feasibility": 0.20, "momentum": 0.15, "freshness": 0.10}
 MIN_PEERS = 20
 
 

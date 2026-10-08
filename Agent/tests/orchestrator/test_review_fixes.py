@@ -229,7 +229,7 @@ async def test_stop_curates_and_ends_review_ready(db_sessionmaker, tmp_path):
     curated = []
 
     class RecordingCurator:
-        async def curate(self, run_id, character, weights=None):
+        async def curate(self, run_id, character, weights=None, min_score=0.0):
             curated.append((run_id, weights))
 
     orch = await build(db_sessionmaker, tmp_path, World())
@@ -244,7 +244,7 @@ class FlakyCurator:
     def __init__(self):
         self.calls = 0
 
-    async def curate(self, run_id, character, weights=None):
+    async def curate(self, run_id, character, weights=None, min_score=0.0):
         self.calls += 1
         if self.calls == 1:
             raise ConnectionError("db blip during curation")

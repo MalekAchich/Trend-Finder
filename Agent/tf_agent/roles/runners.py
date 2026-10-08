@@ -15,7 +15,7 @@ from tf_agent.models.client import CallContext, ModelClient
 from tf_agent.models.types import CompletionRequest, ImagePart, Message
 from tf_agent.characters.read import CharacterRead
 from tf_agent.roles.prompts import PromptLibrary
-from tf_agent.roles.schemas import AnalystResult, CrossCheck, SeedStudy, WorkerResult, WorkPlan
+from tf_agent.roles.schemas import AnalystResult, CrossCheck, LookCheck, SeedStudy, WorkerResult, WorkPlan
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -141,3 +141,10 @@ class Roles:
         return await self._structured("seed_study", self.prompts.render("seed_study", brief=brief),
                                       self._facts_text(facts), [ImagePart(contact_sheet)], SeedStudy, "seed_study",
                                       run_id=run_id)
+
+    async def look_check(self, brief: str, reference_sheet: str, candidate_sheet: str, count: int, *,
+                         run_id: uuid.UUID | None = None) -> Judged[LookCheck]:
+        return await self._structured("look_check", self.prompts.render("look_check", brief=brief, count=str(count)),
+                                      f"Score candidates 1 to {count} against the references.",
+                                      [ImagePart(reference_sheet), ImagePart(candidate_sheet)], LookCheck,
+                                      "look_check", run_id=run_id)

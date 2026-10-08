@@ -19,6 +19,7 @@ from tf_agent.orchestrator.queue import Requeue, TaskQueue
 from tf_agent.pipeline.result import VideoAnalysisResult
 from tf_agent.roles.runners import RoleOutputError, Roles
 from tf_agent.roles.schemas import Candidate
+from tf_agent.pipeline.feasibility import SOFT_REASONS
 from tf_agent.scoring.subscores import DEFAULT_WEIGHTS, freshness, momentum, overall, peer_stats
 from tf_agent.tools.store import VideoStore
 from tf_agent.tools.types import CANONICAL_ID_PATTERN, VideoItem
@@ -171,8 +172,10 @@ class AnalysisStage:
             return {"error": f"analysis crashed: {type(e).__name__}: {e}"[:300]}
         async with self._sm() as s:
             owner = (await s.get(Finding, finding_id)).source == "owner"
-        # the owner's own targets are never thrown out by a measurement: they're judged, with the issue as a warning
-        if not analysis.contact_sheet_path or (analysis.filtered_reason and not owner):
+        # a pose measurement never throws a video out (the analyst sees it, and it costs feasibility); the owner's own
+        # targets are never thrown out by any measurement
+        hard = analysis.filtered_reason and analysis.filtered_reason not in SOFT_REASONS
+        if not analysis.contact_sheet_path or (hard and not owner):
             await self._save_score(finding_id, {"feasibility": analysis.feasibility})
             await self._status(finding_id, "filtered_feasibility")
             reason = analysis.filtered_reason or "no_contact_sheet"

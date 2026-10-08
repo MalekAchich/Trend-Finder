@@ -10,6 +10,9 @@ MAX_CLEAN_MOTION = 0.5
 # exactly the trend, so it costs score instead of rejecting the video (run 1 lost 17 videos to it, 5 of them the
 # owner's own targets).
 NO_CLEAN_SEGMENT_FACTOR = 0.75
+# What the pose measures (several people, a close-up, nobody on screen) lowers the score above but never rejects the
+# video: the owner's AI-influencer references are often skits and close-ups (run 3 lost 13 of 30 lookalikes to it).
+SOFT_REASONS = frozenset({"multiple_people", "body_not_visible", "no_person"})
 
 
 def clean_segments(times: list[float], single: list[bool], cuts: list[float], motion: list[float],

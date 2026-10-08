@@ -61,7 +61,9 @@ class Curator:
             await s.commit()
 
     async def curate(self, run_id: uuid.UUID, character: CharacterLike,
-                     weights: dict[str, float] | None = None) -> None:
+                     weights: dict[str, float] | None = None, min_score: float = 0.0) -> None:
+        """Clusters the run's videos into ranked trend cards. The owner's bar applies to the final score (after the
+        second opinion), so a video that passed it on the first score but not after isn't kept."""
         weights = weights or self.weights
         async with self._sm() as s:
             rated = (await s.execute(select(CardFeedback.id).join(TrendCluster, TrendCluster.id == CardFeedback.cluster_id)
@@ -95,6 +97,13 @@ class Curator:
         for card in cards[: self.top_k]:
             await self._cross_check(card, by_id, character, weights)
         cards.sort(key=lambda c: c["overall"], reverse=True)
+        under = [c for c in cards if c["overall"] < min_score]
+        cards = [c for c in cards if c["overall"] >= min_score]
+        if under:
+            async with self._sm() as s:
+                await s.execute(update(Finding).where(Finding.id.in_(
+                    [uuid.UUID(m.finding_id) for c in under for m in c["members"]])).values(status="below_bar"))
+                await s.commit()
         async with self._sm() as s:
             await s.execute(delete(TrendCluster).where(TrendCluster.run_id == run_id))
             for rank, card in enumerate(cards, start=1):

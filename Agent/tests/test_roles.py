@@ -80,7 +80,7 @@ async def test_analyst_sees_canonical_image_then_contact_sheet(tmp_path):
     sheet.write_bytes(b"jpg")
     a = FakeAdapter("a", [text_response("a", structured=ANALYSIS)])
     out = await roles_for(a).analyze(BRIEF, str(canon), str(sheet), {"caption": "x", "views": 10})
-    assert isinstance(out.result, AnalystResult) and out.result.fit == pytest.approx(76.0)
+    assert isinstance(out.result, AnalystResult) and out.result.fit == pytest.approx(72.0)  # closeness counts most
     assert out.provider == "a"
     assert [i.path for i in a.requests[0].messages[0].images()] == [str(canon), str(sheet)]
     assert json.dumps({"caption": "x", "views": 10}) in a.requests[0].messages[0].text()

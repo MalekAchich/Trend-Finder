@@ -9,12 +9,15 @@ import asyncio
 import itertools
 import logging
 import random
+import shutil
+import tempfile
 import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 from sqlalchemy import delete, func, select, text, update
@@ -34,7 +37,7 @@ from tf_agent.roles.runners import RoleOutputError, Roles, TaskSpec
 from tf_agent.roles.schemas import WorkPlan
 from tf_agent.scoring.directions import match_direction_key, normalize_key
 from tf_agent.scoring.explore import DirectionStat, explore_ratio, split_tasks, thompson_rank
-from tf_agent.scoring.subscores import DEFAULT_WEIGHTS
+from tf_agent.scoring.subscores import DEFAULT_WEIGHTS, LOOKALIKE_WEIGHTS
 from tf_agent.tools.normalize import canonical_id
 from tf_agent.tools.platforms import SeenFilter
 from tf_agent.tools.types import ToolFailure
@@ -185,7 +188,7 @@ class ToolProvider(Protocol):
 
 class Curator(Protocol):
     async def curate(self, run_id: uuid.UUID, character: LoadedCharacter,
-                     weights: dict[str, float] | None = None) -> None: ...
+                     weights: dict[str, float] | None = None, min_score: float = 0.0) -> None: ...
 
 
 class Orchestrator:
@@ -269,7 +272,8 @@ class Orchestrator:
                 Direction.character_id == ch.character_id, (Direction.alpha + Direction.beta) > 0))).scalar_one()
         ratio = explore_ratio(await self._last_satisfaction(ch.character_id), rated)
         # copy: never mutate the caller's settings
-        settings = replace(settings, weights=settings.weights or self.weights or dict(DEFAULT_WEIGHTS))
+        default = LOOKALIKE_WEIGHTS if settings.mode == "lookalike" else DEFAULT_WEIGHTS
+        settings = replace(settings, weights=settings.weights or self.weights or dict(default))
         inputs = {"freshness": settings.freshness, "trend_urls": list(settings.trend_urls),
                   "targets": [{"url": u, "canonical_id": c, "character_id": str(cid)} for cid, u, c in targets]}
         async with self._sm() as s:
@@ -373,7 +377,8 @@ class Orchestrator:
                     stop_reason = await self._loop(run, settings, ch, analysis, clock)
                 await self._set_stop_decision(run_id, stop_reason)
             await self.queue.cancel_queued(run_id)
-            await self._curate(run_id, ch, weights)
+            # the second opinion sees what the analyst saw (the brief with the owner's references)
+            await self._curate(run_id, analysis.character, weights, settings.min_score)
             await self._finish(run_id, "review_ready", stop_reason)
         except asyncio.CancelledError:
             raise  # leave the run resumable
@@ -548,9 +553,10 @@ class Orchestrator:
             await s.commit()
         await self.blackboard.record_event(run_id, "run.state", {"state": "curating", "stop_reason": stop_reason})
 
-    async def _curate(self, run_id: uuid.UUID, ch: LoadedCharacter, weights: dict[str, float] | None) -> None:
+    async def _curate(self, run_id: uuid.UUID, ch: LoadedCharacter, weights: dict[str, float] | None,
+                      min_score: float = 0.0) -> None:
         if self.curator is not None:
-            await self.curator.curate(run_id, ch, weights=weights)
+            await self.curator.curate(run_id, ch, weights=weights, min_score=min_score)
         try:  # cross-check is done: the contact sheets aren't needed any more
             await cleanup_run_media(self._sm, run_id)
         except Exception as e:  # housekeeping never costs the run
@@ -578,7 +584,8 @@ class Orchestrator:
             await self.queue.cancel_queued(run_id)
             await self._set_stop_decision(run_id, STOPPED_BY_OWNER)
             try:
-                await self._curate(run_id, await self._character(run), (run.settings or {}).get("weights"))
+                await self._curate(run_id, await self._character(run), (run.settings or {}).get("weights"),
+                                   float((run.settings or {}).get("min_score") or 0.0))
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # resumable: a resume curates again (the stop decision is kept)
@@ -650,11 +657,12 @@ class Orchestrator:
         """Videos like the owner's references: deterministic discovery and a virality gate, then the analyst judges
         only the fastest-growing few (and keeps only scores at or above the owner's bar)."""
         from tf_agent.discovery.lookalike import Gate, Lookalike
+        from tf_agent.discovery.triage import Look, Triage
 
         run_id = run.id
         if await self.queue.outstanding(run_id) == 0 and not run.inputs.get("lookalike"):
             await self._set_state(run_id, "discovering")
-            seeds, exclude = await self._lookalike_seeds(ch)
+            seeds, exclude, covers = await self._lookalike_seeds(ch)
             studies = [s for s in (run.inputs.get("trend_studies") or {}).values() if "error" not in s]
             analysis.character = replace(ch, brief=ch.brief + "\n\n" + "\n".join(reference_lines(studies))) \
                 if studies else ch
@@ -665,7 +673,18 @@ class Orchestrator:
             sources = self.tools.platform_tools() if hasattr(self.tools, "platform_tools") else self.tools
             g = Gate(days=FRESHNESS_DAYS.get(settings.freshness) or 365, min_plays=settings.min_plays,
                      max_judged=settings.max_judged)
-            picks, stats = await Lookalike(sources, emit, g).discover(seeds, studies, exclude)
+            brief = analysis.character.brief
+
+            async def judge(ref_sheet: str, sheet: str, count: int) -> dict[int, Look]:
+                result = (await self.roles.look_check(brief, ref_sheet, sheet, count, run_id=run_id)).result
+                return {v.n: Look(v.score, v.why) for v in result.verdicts if 1 <= v.n <= count}
+
+            work = Path(tempfile.mkdtemp(prefix="look-check-"))
+            try:
+                picks, stats = await Lookalike(sources, emit, g, triage=Triage(judge, work),
+                                               reference_covers=covers).discover(seeds, studies, exclude)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
             await self.store.upsert_videos([p.item for p in picks])
             for p in picks:
                 async with self._sm() as s:
@@ -680,8 +699,10 @@ class Orchestrator:
             await self.blackboard.record_event(run_id, "round.finished", {
                 "round": 1, "lookalike": stats,
                 "notes": [f"Looked at {stats['seen']} videos from {stats['seed_creators']} reference creators, "
-                          f"{len(stats['queries'])} searches and {stats['second_degree']} hit creators; kept the "
-                          f"{stats['picked'] - stats['gems']} fastest-growing and {stats['gems']} hidden gems for judging."]})
+                          f"{len(stats['queries'])} searches and {stats['second_degree']} hit creators. "
+                          + (f"Compared {stats['checked']} covers with your references: {stats['look_alike']} look "
+                             f"alike. " if stats["checked"] else "")
+                          + f"Judging {stats['picked'] - stats['gems']} viral and {stats['gems']} hidden gems."]})
         else:
             analysis.character = ch
         await self._set_state(run_id, "running", round=1)
@@ -689,8 +710,9 @@ class Orchestrator:
             return "wall clock limit reached"
         return "lookalike search done"
 
-    async def _lookalike_seeds(self, ch: LoadedCharacter) -> tuple[list[Any], set[str]]:
-        """The owner's references and this character's targets; everything already chosen or found is excluded."""
+    async def _lookalike_seeds(self, ch: LoadedCharacter) -> tuple[list[Any], set[str], list[Path]]:
+        """The owner's references and this character's targets (and their covers, for the look check); everything
+        already chosen or found is excluded."""
         async with self._sm() as s:
             # every known reference seeds discovery, even one whose study failed: its creator is still worth following
             rows = (await s.execute(select(ManualVideo))).scalars().all()
@@ -703,7 +725,9 @@ class Orchestrator:
                 if item is not None:
                     seeds.append(item)
         exclude = {m.canonical_id for m in rows if m.canonical_id} | set(found)
-        return seeds, exclude
+        covers = [Path(m.thumbnail_path) for m in rows if m.thumbnail_path and m.status == "ready"
+                  and (m.is_reference or m.target_character_id == ch.character_id)]
+        return seeds, exclude, covers
 
     async def _round_has_plan(self, run_id: uuid.UUID, number: int) -> bool:
         async with self._sm() as s:

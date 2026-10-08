@@ -1,3 +1,4 @@
+import dataclasses
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -85,18 +86,30 @@ async def test_analysis_writes_scores(db_sessionmaker, tmp_path):
         f = (await s.execute(select(Finding))).scalar_one()
         sc = (await s.execute(select(FindingScore))).scalar_one()
     assert f.status == "analyzed" and out["overall"] == sc.overall
-    assert sc.fit == pytest.approx(76.0) and sc.feasibility == 80.0 and sc.freshness == 100.0
+    assert sc.fit == pytest.approx(72.0) and sc.feasibility == 80.0 and sc.freshness == 100.0
     assert sc.momentum is not None and sc.overall is not None and sc.analyst_provider == "a"
     assert [i.path for i in fa.requests[0].messages[0].images()][0].endswith("canon.png")
 
 
 async def test_filtered_video_skips_the_analyst(db_sessionmaker, tmp_path):
-    filtered = VideoAnalysisResult.filtered("tiktok:1", "multiple_people")
+    filtered = VideoAnalysisResult.filtered("tiktok:1", "too_long")
     run, task_id, q, stage, fa = await setup(db_sessionmaker, tmp_path, filtered, [])
     out = await run_one(db_sessionmaker, q, stage, run, task_id)
     async with db_sessionmaker() as s:
         f = (await s.execute(select(Finding))).scalar_one()
-    assert f.status == "filtered_feasibility" and out == {"filtered": "multiple_people"} and fa.requests == []
+    assert f.status == "filtered_feasibility" and out == {"filtered": "too_long"} and fa.requests == []
+
+
+async def test_several_people_or_a_close_up_cost_score_but_the_analyst_still_judges_it(db_sessionmaker, tmp_path):
+    flagged = dataclasses.replace(ok_analysis(tmp_path), filtered_reason="multiple_people", feasibility=45.0)
+    run, task_id, q, stage, fa = await setup(db_sessionmaker, tmp_path, flagged,
+                                             [text_response("a", structured=ANALYSIS)])
+    out = await run_one(db_sessionmaker, q, stage, run, task_id)
+    async with db_sessionmaker() as s:
+        f = (await s.execute(select(Finding))).scalar_one()
+        sc = (await s.execute(select(FindingScore))).scalar_one()
+    assert "overall" in out and f.status == "analyzed" and len(fa.requests) == 1
+    assert sc.feasibility == 45.0 and sc.feasibility_notes.startswith("Measured: multiple people.")
 
 
 async def test_invalid_analyst_output_fails_the_finding_not_the_run(db_sessionmaker, tmp_path):

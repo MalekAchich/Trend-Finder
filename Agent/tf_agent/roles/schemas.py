@@ -81,8 +81,9 @@ class AnalystResult(BaseModel):
 
     @property
     def fit(self) -> float:
+        """0-100. Closeness to the owner's references (`niche`) counts most: it's what the owner asks for."""
         b = self.fit_breakdown
-        return round((b.look + b.vibe + b.energy + b.niche + b.adaptability) / 5 * 10, 2)
+        return round((0.40 * b.niche + 0.15 * (b.look + b.vibe + b.energy + b.adaptability)) * 10, 2)
 
 
 class CrossCheck(BaseModel):
@@ -101,3 +102,13 @@ class SeedStudy(BaseModel):
     trend_type: str = Field("", max_length=60, description="dance, skit, lip-sync, POV, transition, …")
     audio_use: str = Field("", max_length=200, description="how the sound carries it: trending song, voiceover, …")
     fit_score: int = Field(5, ge=0, le=10, description="how well this direction suits the character")
+
+
+class LookVerdict(BaseModel):
+    n: int = Field(ge=1, le=100, description="the candidate's number on the sheet")
+    score: int = Field(ge=0, le=10)
+    why: str = Field("", max_length=160)
+
+
+class LookCheck(BaseModel):
+    verdicts: list[LookVerdict] = Field(max_length=100)
