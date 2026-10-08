@@ -92,6 +92,12 @@ def _round_note(stats: dict[str, Any], kept: int, settings: "RunSettings") -> st
                           else "Nothing new to judge.")
 
 
+def with_references(ch: LoadedCharacter, run: Run) -> LoadedCharacter:
+    """The character's brief plus the owner's reference videos: what every judge of a run sees."""
+    studies = [s for s in ((run.inputs or {}).get("trend_studies") or {}).values() if "error" not in s]
+    return replace(ch, brief=ch.brief + "\n\n" + "\n".join(reference_lines(studies))) if studies else ch
+
+
 def reference_lines(studies: list[dict[str, Any]]) -> list[str]:
     """The owner's reference videos for the planner: what they have in common, then the best fits in detail."""
     lines = [f"The owner's reference videos ({len(studies)} studied): hand-picked by the owner as exactly what they want "
@@ -599,7 +605,9 @@ class Orchestrator:
             await self.queue.cancel_queued(run_id)
             await self._set_stop_decision(run_id, STOPPED_BY_OWNER)
             try:
-                await self._curate(run_id, await self._character(run), (run.settings or {}).get("weights"),
+                # the second opinion must see the owner's references, whichever way the run ends
+                await self._curate(run_id, with_references(await self._character(run), run),
+                                   (run.settings or {}).get("weights"),
                                    float((run.settings or {}).get("min_score") or 0.0))
             except asyncio.CancelledError:
                 raise
@@ -681,8 +689,7 @@ class Orchestrator:
             await self._drain(run_id, ch, settings, analysis, clock)
         seeds, _, covers = await self._lookalike_seeds(ch)
         studies = [s for s in (run.inputs.get("trend_studies") or {}).values() if "error" not in s]
-        analysis.character = replace(ch, brief=ch.brief + "\n\n" + "\n".join(reference_lines(studies))) \
-            if studies else ch
+        analysis.character = with_references(ch, run)
         brief = analysis.character.brief
 
         async def emit(type_: str, **payload: Any) -> None:

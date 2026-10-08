@@ -82,7 +82,9 @@ class Curator:
         now = datetime.now(UTC)
         cards: list[dict[str, Any]] = []
         for cluster in clusters:
-            saturation = percentile(float(len(cluster)), sizes) if len(clusters) > 1 else 0.0
+            # only a repost cluster is crowded: a video nobody else posted isn't (a mid-rank percentile would put
+            # every one-off at 50 % and cut everyone's freshness by a quarter: run 5 lost 9 of 17 to it)
+            saturation = percentile(float(len(cluster)), sizes) if len(cluster) > 1 and len(clusters) > 1 else 0.0
             for m in cluster:
                 f, sc, v, _ = by_id[m.finding_id]
                 age = (now - v.posted_at).total_seconds() / 3600 if v.posted_at else None

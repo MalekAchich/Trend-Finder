@@ -76,3 +76,26 @@ async def test_a_run_ends_as_soon_as_enough_videos_pass_the_bar(db_sessionmaker,
     out = await orch.execute(run_id)
     assert out.stop_reason == "found 4 videos at or above your bar"
     assert not any(q == "ai deadpan professional" for _, q in src.calls)  # no second round needed
+
+
+async def test_stopping_a_run_still_shows_the_second_opinion_the_owners_references(db_sessionmaker, tmp_path):
+    from sqlalchemy import update
+
+    from tf_db.models import Run
+
+    orch, run_id, _, _ = await seeded(db_sessionmaker, tmp_path, min_score=75)
+    seen = []
+
+    class Curator:
+        async def curate(self, run_id, character, weights=None, min_score=0.0):
+            seen.append((character.brief, min_score))
+
+    orch.curator = Curator()
+    async with db_sessionmaker() as s:
+        await s.execute(update(Run).where(Run.id == run_id).values(
+            state="running", inputs={"trend_studies": {"https://www.instagram.com/reel/TESTREEL001/": {
+                "format": "AI muscleman dam stunt", "trend_type": "stunt", "niche": "ai spectacle", "tags": ["ai"]}}}))
+        await s.commit()
+    await orch.stop_and_curate(run_id)
+    (brief, bar), = seen
+    assert "The owner's reference videos (1 studied)" in brief and "AI muscleman dam stunt" in brief and bar == 75

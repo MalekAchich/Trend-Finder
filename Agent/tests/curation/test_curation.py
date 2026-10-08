@@ -155,3 +155,16 @@ async def test_the_owners_bar_applies_after_the_second_opinion(db_sessionmaker, 
                                 )).scalars().all()
         status = dict((await s.execute(select(Finding.canonical_id, Finding.status))).all())
     assert kept == ["tiktok:1"] and status["tiktok:2"] == "below_bar"
+
+
+async def test_one_off_videos_keep_their_full_freshness(db_sessionmaker, tmp_path):
+    sheet = tmp_path / "s.jpg"
+    sheet.write_bytes(b"x")
+    _, run_id, (task_id,) = await create_test_run(db_sessionmaker)
+    await add_finding(db_sessionmaker, run_id, task_id, "tiktok:1", A, 80, 75, sheet=str(sheet))
+    await add_finding(db_sessionmaker, run_id, task_id, "tiktok:2", B, 80, 75, sheet=str(sheet))
+    client, _, _ = make_client({"a": FakeAdapter("a")})
+    await Curator(db_sessionmaker, Roles(client), top_k=0).curate(run_id, SimpleNamespace(brief="b", canonical_image_path=""))
+    async with db_sessionmaker() as s:
+        fresh = (await s.execute(select(FindingScore.freshness))).scalars().all()
+    assert fresh == [100.0, 100.0]  # 10 hours old, and nobody else posted them: no crowding cut
