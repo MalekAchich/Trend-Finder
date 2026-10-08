@@ -141,6 +141,48 @@ class Credentials:
             return "not connected"
         return "expired" if self._read_json(self.session_dir(platform) / "meta.json").get("expired_at") else "connected"
 
+    # ---- our own channels' tokens (Plan 9): read-only API access, never a login ----
+    @property
+    def _socials_dir(self) -> Path:
+        return self.dir / "socials"
+
+    def _token_file(self, channel_id: str) -> Path:
+        if not channel_id or not all(ch.isalnum() or ch == "-" for ch in channel_id):
+            raise ValueError("bad channel id")
+        return self._socials_dir / f"{channel_id}.json"
+
+    def social_token(self, channel_id: str) -> dict[str, Any] | None:
+        data = self._read_json(self._token_file(channel_id))
+        return data if data.get("access_token") else None
+
+    def save_social_token(self, channel_id: str, data: dict[str, Any]) -> None:
+        if not data.get("access_token"):
+            raise ValueError("empty token")
+        self._write(self._token_file(channel_id), json.dumps({**data, "updated_at": _now()}))
+
+    def delete_social_token(self, channel_id: str) -> None:
+        self._token_file(channel_id).unlink(missing_ok=True)
+
+    def tiktok_app(self) -> dict[str, str] | None:
+        data = self._read_json(self._socials_dir / "tiktok_app.json")
+        return ({"client_key": data["client_key"], "client_secret": data["client_secret"]}
+                if data.get("client_key") and data.get("client_secret") else None)
+
+    def save_tiktok_app(self, client_key: str, client_secret: str) -> None:
+        client_key, client_secret = client_key.strip(), client_secret.strip()
+        if not client_key or not client_secret:
+            raise ValueError("empty client key or secret")
+        self._write(self._socials_dir / "tiktok_app.json", json.dumps(
+            {"client_key": client_key, "client_secret": client_secret, "updated_at": _now()}))
+
+    def describe_socials(self) -> dict[str, Any]:
+        """Never a secret: whether the TikTok app is set (with a masked hint of its key)."""
+        app = self._read_json(self._socials_dir / "tiktok_app.json")
+        key = str(app.get("client_key") or "")
+        return {"tiktok_app": {"set": bool(key and app.get("client_secret")),
+                               "hint": f"••••{key[-4:]}" if len(key) >= 8 else None,
+                               "updated_at": app.get("updated_at")}}
+
     # ---- both ----
     def delete(self, item: str) -> None:
         if item in KEYS:
