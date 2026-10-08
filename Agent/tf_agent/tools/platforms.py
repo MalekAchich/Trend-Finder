@@ -276,8 +276,48 @@ class PlatformTools:
         kept = await self._enrich("tiktok", kept, notes)  # the rankings carry no duration or likes
         return await self._finish("tiktok", kept, hidden, notes)
 
+    async def _creator_feed(self, platform: str, url: str, pattern: re.Pattern[str],
+                            parse: Callable[[list[Any]], list[VideoItem]], handle: str, max_results: int,
+                            notes: list[str]) -> DiscoveryResult | None:
+        """A creator's own recent videos, read through the logged-in account (their profile page's own data)."""
+        if self.browser is None or not self._has_session(platform):
+            return None
+        browser = self.browser
+
+        async def run() -> list[VideoItem]:
+            got = await browser.capture_json(platform, url, pattern, need_session=True, blocked=ss.is_captcha,
+                                             scrolls=2)
+            mine = norm_handle(handle)
+            return [i for i in parse(got) if i.creator.handle in (mine, None)]
+
+        try:
+            items = await self._guarded(platform, run)
+        except ToolFailure as e:
+            notes.append(f"creator page unavailable ({e.error.message}); used web search instead")
+            return None
+        for i in items:  # a profile grid doesn't repeat the owner on every video
+            if i.creator.handle is None:
+                i.creator.handle = norm_handle(handle)
+        items.sort(key=lambda i: i.posted_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+        kept, hidden = await self._filter_seen(items)
+        notes.append("from the creator's own page")
+        return await self._finish(platform, kept[:max_results], hidden, notes)
+
     async def tiktok_creator(self, handle: str, max_results: int = 15) -> DiscoveryResult:
-        return await self._site_search("tiktok", f"site:tiktok.com/@{norm_handle(handle)}", max_results, True)
+        notes: list[str] = []
+        if (res := await self._creator_feed("tiktok", ss.tiktok_creator_url(handle), ss.TIKTOK_CREATOR_PATTERN,
+                                            ss.tiktok_items, handle, max_results, notes)) is not None:
+            return res
+        res = await self._site_search("tiktok", f"site:tiktok.com/@{norm_handle(handle)}", max_results, True)
+        res.notes[:0] = notes
+        return res
+
+    async def instagram_creator(self, handle: str, max_results: int = 24) -> DiscoveryResult:
+        notes: list[str] = []
+        if (res := await self._creator_feed("instagram", ss.instagram_creator_url(handle), ss.INSTAGRAM_PATTERN,
+                                            ss.instagram_items, handle, max_results, notes)) is not None:
+            return res
+        raise ToolFailure("login_required", "a creator's Reels need the connected Instagram account")
 
     async def tiktok_hashtag(self, tag: str, max_results: int = 15) -> DiscoveryResult:
         return await self._site_search("tiktok", f'site:tiktok.com "#{norm_hashtag(tag)}"', max_results, True)

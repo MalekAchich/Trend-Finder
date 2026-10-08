@@ -152,7 +152,7 @@ async def build(sm, tmp_path, world, empty=False):
     return Orchestrator(sm, Roles(client), FakeStack(store, empty), FakeAnalyzer(sheet), store, idle_poll=0.02)
 
 
-SETTINGS = RunSettings(platforms=["tiktok"], rounds=3, tasks_per_round=2, target_findings=3, good_score=0,
+SETTINGS = RunSettings(platforms=["tiktok"], mode="rounds", min_score=0, rounds=3, tasks_per_round=2, target_findings=3, good_score=0,
                        workers=2, analysis_workers=2, wall_clock_s=60)
 
 

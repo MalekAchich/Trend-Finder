@@ -1,7 +1,7 @@
 export type Platform = "tiktok" | "instagram" | "youtube" | "x";
 
 export type RunState =
-  | "created" | "reading_character" | "studying_trends" | "planning" | "running" | "paused_usage" | "curating"
+  | "created" | "reading_character" | "studying_trends" | "discovering" | "planning" | "running" | "paused_usage" | "curating"
   | "review_ready" | "stopped" | "failed" | "interrupted";
 
 export interface Character {
@@ -45,6 +45,7 @@ export interface RunDetail {
   agents: RunAgent[];
   findings: Record<string, number>;
   satisfaction: number | null;
+  run_note: string | null;
 }
 
 export interface RunSummary {
@@ -55,6 +56,7 @@ export interface RunSummary {
   finished_at: string | null;
   videos: number;
   satisfaction: number | null;
+  run_note: string | null;
   active: boolean;
 }
 
@@ -158,6 +160,7 @@ export interface RunHistoryRow {
   finished_at: string | null;
   videos: number;
   satisfaction: number | null;
+  run_note: string | null;
   tokens: number;
   active: boolean;
 }

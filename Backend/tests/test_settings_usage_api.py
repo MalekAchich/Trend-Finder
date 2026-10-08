@@ -211,3 +211,11 @@ async def test_usage_asks_providers_that_can_report_live(http, app_parts):
     u = {p["provider"]: p for p in (await http.get("/api/usage")).json()["providers"]}
     assert [(w["name"], w["used_percent"]) for w in u["chatgpt"]["windows"]] == [("five_hour", 0.0), ("seven_day", 17.0)]
     assert u["chatgpt"]["used_percent"] == 17.0
+
+
+
+async def test_the_score_bar_defaults_to_75_and_can_be_changed(http):
+    assert (await http.get("/api/settings/bar")).json() == {"min_score": 75.0}
+    assert (await http.put("/api/settings/bar", json={"min_score": 80})).json() == {"min_score": 80.0}
+    assert (await http.get("/api/settings/bar")).json() == {"min_score": 80.0}
+    assert (await http.put("/api/settings/bar", json={"min_score": 140})).status_code == 422

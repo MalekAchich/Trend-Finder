@@ -41,6 +41,17 @@ export function useSaveModels() {
   });
 }
 
+export const useBar = () =>
+  useQuery({ queryKey: ["bar"], queryFn: () => api.get<{ min_score: number }>("/api/settings/bar") });
+
+export function useSaveBar() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (min_score: number) => api.put<{ min_score: number }>("/api/settings/bar", { min_score }),
+    onSuccess: (data) => qc.setQueryData(["bar"], data),
+  });
+}
+
 export const usePriority = () =>
   useQuery({ queryKey: ["priority"], queryFn: () => api.get<ProviderPriority>("/api/settings/priority") });
 

@@ -33,7 +33,7 @@ export default function RunPage() {
           <VideoGrid videos={videos.data ?? []} />
           {ended && (videos.data?.length ?? 0) > 0 && (
             <RunScore run={{ id: r.id, state: r.state, stop_reason: r.stop_reason, started_at: r.started_at,
-              finished_at: r.finished_at, videos: videos.data!.length, satisfaction: r.satisfaction, active: r.active }} slug={r.character.slug} />
+              finished_at: r.finished_at, videos: videos.data!.length, satisfaction: r.satisfaction, run_note: r.run_note, active: r.active }} slug={r.character.slug} />
           )}
         </div>
       </section>

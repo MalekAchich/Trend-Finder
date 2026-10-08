@@ -46,6 +46,7 @@ class VideoItem(BaseModel):
     thumbnail_url: str | None = None
     media_access: Literal["ok", "login_required", "unknown"] = "unknown"
     source: Literal["yt-dlp", "searxng", "api"] = "yt-dlp"
+    ai_generated: bool | None = None  # the platform's own "made with AI" label, when it gives one
 
     def age_hours(self, now: datetime) -> float | None:
         return None if self.posted_at is None else max((now - self.posted_at).total_seconds() / 3600, 0.0)

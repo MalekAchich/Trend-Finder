@@ -106,8 +106,9 @@ def candidate_facts(item: VideoItem, analysis: VideoAnalysisResult) -> dict[str,
 class AnalysisStage:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], analyzer: Analyzer, roles: Roles,
                  store: VideoStore, character: CharacterLike, weights: dict[str, float] | None = None,
-                 emit: Emit | None = None) -> None:
+                 emit: Emit | None = None, min_score: float = 0.0) -> None:
         self._sm = sessionmaker
+        self.min_score = min_score  # the owner's bar: a found video scoring under it isn't kept
         self.analyzer, self.roles, self.store, self.character = analyzer, roles, store, character
         self._emit_fn = emit
         self.weights = weights or DEFAULT_WEIGHTS
@@ -206,6 +207,11 @@ class AnalysisStage:
             "niche_guess": r.niche_guess, "tags": [t.strip().lstrip("#").lower() for t in r.tags if t.strip()][:10],
             "trend_type": r.trend_type or None, "audio_use": r.audio_use or None,
             "analyst_provider": judged.provider, "analyst_model": judged.model})
+        if not owner and score is not None and score < self.min_score:
+            await self._status(finding_id, "below_bar")
+            await self._finished(task, cid, "rejected", item.platform,
+                                 f"scored {score:.0f}, under your bar of {self.min_score:.0f}")
+            return {"overall": score, "below_bar": True}
         await self._status(finding_id, "analyzed")
         await self._saved(task, finding_id, item.platform)
         return {"overall": score, "fit": sub["fit"], "provider": judged.provider}

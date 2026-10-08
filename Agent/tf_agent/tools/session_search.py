@@ -19,7 +19,9 @@ _HASHTAG = re.compile(r"#(\w+)", re.UNICODE)
 CAPTCHA_RE = re.compile(r"drag the slider|verify to continue|captcha|unusual activity|/challenge/|suspicious", re.IGNORECASE)
 
 TIKTOK_PATTERN = re.compile(r"/api/search/(?:item|general|video)/full")
-INSTAGRAM_PATTERN = re.compile(r"/api/v1/fbsearch/|/api/v1/tags/|/graphql/query")
+TIKTOK_CREATOR_PATTERN = re.compile(r"/api/post/item_list|/api/creator/item_list")
+# Instagram's web search answers through /api/graphql (seen live, 2026-10-08); the older endpoints stay listed
+INSTAGRAM_PATTERN = re.compile(r"/api/graphql|/graphql/query|/api/v1/fbsearch/|/api/v1/tags/")
 X_PATTERN = re.compile(r"/SearchTimeline")
 
 
@@ -29,6 +31,14 @@ def tiktok_search_url(query: str) -> str:
 
 def instagram_search_url(query: str) -> str:
     return f"https://www.instagram.com/explore/search/keyword/?q={quote(query)}"
+
+
+def instagram_creator_url(handle: str) -> str:
+    return f"https://www.instagram.com/{quote(norm_handle(handle))}/reels/"
+
+
+def tiktok_creator_url(handle: str) -> str:
+    return f"https://www.tiktok.com/@{quote(norm_handle(handle))}"
 
 
 def x_search_url(query: str, since: str | None = None) -> str:
@@ -99,23 +109,36 @@ def tiktok_items(captured: list[Any]) -> list[VideoItem]:
 
 
 # ---- Instagram ----
+IG_EPOCH_MS = 1314220021721  # Instagram media ids: (id >> 23) is milliseconds after this
+
+
+def _ig_time(d: dict[str, Any]) -> datetime | None:
+    taken = _num(d.get("taken_at"))
+    if taken:
+        return datetime.fromtimestamp(taken, UTC)
+    pk = _num(str(d.get("pk") or d.get("id") or "").split("_")[0])
+    return datetime.fromtimestamp(((pk >> 23) + IG_EPOCH_MS) / 1000, UTC) if pk and pk > 1 << 40 else None
+
+
 def _instagram(d: dict[str, Any]) -> VideoItem | None:
     code = d.get("code")
     is_video = d.get("media_type") == 2 or d.get("product_type") == "clips" or d.get("video_duration")
-    if not isinstance(code, str) or not is_video or "taken_at" not in d:
+    # a media object: search results carry taken_at, a profile's Reels grid only an id and counts
+    if not isinstance(code, str) or not is_video or not ("taken_at" in d or "pk" in d or "play_count" in d):
         return None
     user, caption = d.get("user") or d.get("owner") or {}, (d.get("caption") or {})
     text = caption.get("text") if isinstance(caption, dict) else None
-    taken = _num(d.get("taken_at"))
     cands = ((d.get("image_versions2") or {}).get("candidates") or [{}])
+    label = d.get("ai_label_info")
     return VideoItem(
         canonical_id=f"instagram:{code}", platform="instagram", url=f"https://www.instagram.com/reel/{code}/",
-        creator=Creator(handle=norm_handle(user["username"]) if user.get("username") else None),
-        caption=text, hashtags=_tags(text), posted_at=datetime.fromtimestamp(taken, UTC) if taken else None,
+        creator=Creator(handle=norm_handle(user["username"]) if isinstance(user, dict) and user.get("username") else None),
+        caption=text, hashtags=_tags(text), posted_at=_ig_time(d),
         duration_s=float(d["video_duration"]) if d.get("video_duration") else None,
         metrics=Metrics(views=_num(d.get("play_count") or d.get("ig_play_count") or d.get("view_count")),
                         likes=_num(d.get("like_count")), comments=_num(d.get("comment_count"))),
-        thumbnail_url=cands[0].get("url"), media_access="ok", source="api")
+        thumbnail_url=cands[0].get("url"), media_access="ok", source="api",
+        ai_generated=bool(label.get("ai_label_type") or label.get("label")) if isinstance(label, dict) else None)
 
 
 def instagram_items(captured: list[Any]) -> list[VideoItem]:

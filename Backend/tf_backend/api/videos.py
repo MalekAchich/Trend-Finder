@@ -5,6 +5,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tf_agent.learning.learner import FeedbackError
@@ -25,9 +26,12 @@ def _uuid(raw: str, what: str) -> uuid.UUID:
 
 
 def _latest_analysis():
-    """The current pipeline version's analysis (one row per video: unique on canonical_id + version)."""
+    """One analysis per video: the current pipeline version's when there is one, else the newest older one,
+    so videos from runs before a version bump keep their thumbnail and clean segment."""
     return (select(VideoAnalysis.canonical_id, VideoAnalysis.thumbnail_path, VideoAnalysis.best_clean_segment)
-            .where(VideoAnalysis.pipeline_version == PIPELINE_VERSION).subquery())
+            .ext(distinct_on(VideoAnalysis.canonical_id))
+            .order_by(VideoAnalysis.canonical_id, (VideoAnalysis.pipeline_version == PIPELINE_VERSION).desc(),
+                      VideoAnalysis.created_at.desc()).subquery())
 
 
 async def videos_for_run(s: AsyncSession, rid: uuid.UUID) -> list[dict[str, Any]]:

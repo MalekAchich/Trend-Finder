@@ -8,7 +8,7 @@ import { Library, type LibraryTab } from "../components/Library";
 import { Seam, type SeamHandle } from "../components/Seam";
 import { useRunStream } from "../stream/useRunStream";
 
-const LIVE = ["created", "reading_character", "studying_trends", "planning", "running", "curating", "paused_usage"];
+const LIVE = ["created", "reading_character", "studying_trends", "discovering", "planning", "running", "curating", "paused_usage"];
 
 export default function Home() {
   const qc = useQueryClient();

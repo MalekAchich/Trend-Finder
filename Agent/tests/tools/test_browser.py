@@ -14,6 +14,9 @@ PAGE = """<html><body><h1>feed</h1><script>
 fetch('/api/feed.json').then(r => r.json()).then(d => document.body.dataset.n = d.items.length);
 fetch('/other.json');
 </script></body></html>"""
+LATE = """<html><body><script>
+setTimeout(() => fetch('/api/feed.json'), 2500);
+</script></body></html>"""
 WALL = """<html><body><script>location.replace('/accounts/login/?next=/feed');</script></body></html>"""
 
 
@@ -45,6 +48,8 @@ async def test_closing_the_window_or_waiting_too_long_ends_the_login():
 def site(tmp_path):
     (tmp_path / "feed").mkdir()
     (tmp_path / "feed" / "index.html").write_text(PAGE)
+    (tmp_path / "late").mkdir()
+    (tmp_path / "late" / "index.html").write_text(LATE)
     (tmp_path / "wall").mkdir()
     (tmp_path / "wall" / "index.html").write_text(WALL)
     (tmp_path / "accounts" / "login").mkdir(parents=True)
@@ -192,3 +197,14 @@ async def test_pages_on_one_platform_are_spaced_apart(tmp_path, monkeypatch):
     await b._pace("tiktok")
     await b._pace("instagram")  # other platforms aren't held back
     assert 0.28 <= _time.monotonic() - t0 < 0.5
+
+
+
+async def test_a_page_that_answers_late_is_still_captured(site, tmp_path):
+    """Run 2: TikTok's results came 8-12 s after the page, after the capture had already given up."""
+    b = BrowserSessions(Credentials(tmp_path / "secrets"))
+    try:
+        got = await b.capture_json("tiktok", f"{site}/late/", re.compile(r"/api/feed"), scrolls=0, settle_ms=200)
+    finally:
+        await b.close()
+    assert got == [{"items": [1, 2, 3]}]

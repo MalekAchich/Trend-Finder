@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from tf_backend.api.deps import ctx, require_client_header
 from tf_backend.app_context import AppContext
-from tf_backend.model_settings import ChoiceError, current, save_choice, save_priority, validate
+from tf_backend.model_settings import ChoiceError, current, load_bar, save_bar, save_choice, save_priority, validate
 from tf_backend.services import Services
 from tf_db.models import ModelCallRow, Run
 
@@ -66,6 +66,21 @@ async def put_priority(body: PriorityIn, request: Request, c: AppContext = Depen
     except ChoiceError as e:
         raise HTTPException(422, str(e)) from e
     return _priority(sv)
+
+
+class BarIn(BaseModel):
+    min_score: float = Field(ge=0, le=100)
+
+
+@router.get("/settings/bar")
+async def get_bar(c: AppContext = Depends(ctx)) -> dict[str, float]:
+    return {"min_score": await load_bar(c.sessionmaker)}
+
+
+@router.put("/settings/bar", dependencies=[Depends(require_client_header)])
+async def put_bar(body: BarIn, c: AppContext = Depends(ctx)) -> dict[str, float]:
+    await save_bar(c.sessionmaker, body.min_score)
+    return {"min_score": body.min_score}
 
 
 @router.get("/usage")

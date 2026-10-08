@@ -101,15 +101,15 @@ async def character_runs(slug: str, c: AppContext = Depends(ctx)) -> list[dict[s
         ch = (await s.execute(select(Character).where(Character.slug == slug))).scalar_one_or_none()
         if ch is None:
             raise HTTPException(404, f"unknown character {slug!r}")
-        runs = (await s.execute(select(Run, RunFeedback.satisfaction).outerjoin(RunFeedback, RunFeedback.run_id == Run.id)
+        runs = (await s.execute(select(Run, RunFeedback.satisfaction, RunFeedback.note).outerjoin(RunFeedback, RunFeedback.run_id == Run.id)
                                 .where(Run.character_id == ch.id).order_by(Run.started_at.desc()).limit(100))).all()
         out = []
-        for r, satisfaction in runs:
+        for r, satisfaction, note in runs:
             clusters = (await s.execute(select(func.count()).select_from(TrendCluster).where(
                 TrendCluster.run_id == r.id))).scalar_one()
             videos = clusters or (await s.execute(select(func.count()).select_from(Finding).where(
                 Finding.run_id == r.id, Finding.status == "analyzed", Finding.source != "owner"))).scalar_one()
             out.append({"id": str(r.id), "state": r.state, "stop_reason": r.stop_reason, "started_at": r.started_at,
-                        "finished_at": r.finished_at, "videos": videos, "satisfaction": satisfaction,
+                        "finished_at": r.finished_at, "videos": videos, "satisfaction": satisfaction, "run_note": note,
                         "active": c.runs.is_active(r.id)})
     return out

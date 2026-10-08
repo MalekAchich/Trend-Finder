@@ -90,3 +90,14 @@ def test_hashtags_ask_for_the_first_page_the_html_carried():
     assert first["method"] == "POST" and json.loads(first["body"]) == {"timeRange": 7, "countryCode": "US", "page": 1,
                                                                         "limit": 20}
     assert hashtag_first_page([{**page2, "body": '{"page": 1}'}]) == [] and hashtag_first_page([]) == []
+
+
+
+def test_instagram_profile_reels_get_their_date_from_the_media_id_and_the_ai_label():
+    items = instagram_items(samples.instagram_profile_reels())
+    assert [i.canonical_id for i in items] == ["instagram:TESTREEL101", "instagram:TESTREEL102"]
+    a = items[0]
+    assert (a.metrics.views, a.metrics.likes, a.creator.handle) == (2_414_000, 49_000, "creator_h")
+    # Instagram ids carry their creation time: (pk >> 23) ms after its 2011 epoch offset
+    assert a.posted_at is not None and a.posted_at.year == 2026
+    assert a.ai_generated is True and items[1].ai_generated is False

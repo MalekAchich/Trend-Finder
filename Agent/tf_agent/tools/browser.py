@@ -28,6 +28,7 @@ LOGIN_TIMEOUT_S = 600
 STEALTH_ARGS = ["--disable-blink-features=AutomationControlled"]  # no automation banner / navigator.webdriver
 HIDE_WEBDRIVER = "Object.defineProperty(Navigator.prototype, 'webdriver', {get: () => undefined})"
 PAGE_GAP_S, PAGE_JITTER_S = 4.0, 3.0
+RESULT_WAIT_S = 20.0  # longest wait for the first matching response
 LOGIN_URL_RE = re.compile(r"/login|/accounts/login|/i/flow/login|/signup", re.IGNORECASE)
 
 
@@ -324,6 +325,11 @@ class BrowserSessions:
                     await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
                 except Exception as e:
                     raise ToolFailure("platform_unavailable", f"{platform}: page didn't load ({type(e).__name__})") from e
+                # wait for the page's own answer: TikTok's search results land 8-12 s after the page (a fixed short
+                # wait returned nothing for every search in run 2), then give late responses a moment
+                deadline = time.monotonic() + RESULT_WAIT_S
+                while not matched and time.monotonic() < deadline:
+                    await page.wait_for_timeout(250)
                 await page.wait_for_timeout(settle_ms)
                 for _ in range(scrolls):
                     await page.mouse.wheel(0, 2400)

@@ -41,9 +41,11 @@ class RunIn(BaseModel):
 @router.post("", dependencies=[Depends(require_client_header)])
 async def start_run(body: RunIn, c: AppContext = Depends(ctx)) -> dict[str, str]:
     await sync_characters(c.characters_dir, c.sessionmaker)
+    from tf_backend.model_settings import load_bar
+
     settings = RunSettings(platforms=list(body.platforms), wall_clock_s=body.minutes * 60, freshness=body.freshness,
                            trend_urls=[u.strip() for u in body.trend_urls if u.strip()],
-                           targets=[t.model_dump() for t in body.targets])
+                           targets=[t.model_dump() for t in body.targets], min_score=await load_bar(c.sessionmaker))
     try:
         run_id = await c.runs.start(body.character, settings)
     except InputError as e:
@@ -66,8 +68,7 @@ async def _run_out(c: AppContext, run: Run, ch: Character) -> dict[str, Any]:
                                  .order_by(Task.created_at))).scalars().all()
         counts = dict((await s.execute(select(Finding.status, func.count()).where(Finding.run_id == run.id)
                                        .group_by(Finding.status))).all())
-        satisfaction = (await s.execute(select(RunFeedback.satisfaction).where(RunFeedback.run_id == run.id))
-                        ).scalar_one_or_none()
+        fb = await s.get(RunFeedback, run.id)
     return {
         "id": str(run.id), "state": run.state, "character": await character_card(c, ch),
         "stop_reason": run.stop_reason, "error": run.error, "started_at": run.started_at,
@@ -76,7 +77,7 @@ async def _run_out(c: AppContext, run: Run, ch: Character) -> dict[str, Any]:
         "minutes": round(float((run.settings or {}).get("wall_clock_s", 3600)) / 60),
         "agents": [{"id": str(t.id), "role": t.task_type, "platform": t.platform,
                     "status": TASK_STATUS.get(t.state, t.state), "goal": t.goal} for t in tasks],
-        "findings": counts, "satisfaction": satisfaction,
+        "findings": counts, "satisfaction": fb and fb.satisfaction, "run_note": fb and fb.note,
     }
 
 
@@ -85,7 +86,7 @@ async def list_runs(character: str | None = None, limit: int = Query(100, ge=1, 
                     c: AppContext = Depends(ctx)) -> list[dict[str, Any]]:
     total = func.coalesce(ModelCallRow.input_tokens, 0) + func.coalesce(ModelCallRow.output_tokens, 0)
     tokens = select(ModelCallRow.run_id, func.sum(total).label("t")).group_by(ModelCallRow.run_id).subquery()
-    q = (select(Run, Character, RunFeedback.satisfaction, tokens.c.t)
+    q = (select(Run, Character, RunFeedback.satisfaction, RunFeedback.note, tokens.c.t)
          .join(Character, Character.id == Run.character_id)
          .outerjoin(RunFeedback, RunFeedback.run_id == Run.id).outerjoin(tokens, tokens.c.run_id == Run.id)
          .order_by(Run.started_at.desc()).limit(limit))
@@ -94,14 +95,14 @@ async def list_runs(character: str | None = None, limit: int = Query(100, ge=1, 
     async with c.sessionmaker() as s:
         rows = (await s.execute(q)).all()
         out = []
-        for run, ch, satisfaction, t in rows:
+        for run, ch, satisfaction, note, t in rows:
             clusters = (await s.execute(select(func.count()).select_from(TrendCluster).where(
                 TrendCluster.run_id == run.id))).scalar_one()
             videos = clusters or (await s.execute(select(func.count()).select_from(Finding).where(
                 Finding.run_id == run.id, Finding.status == "analyzed", Finding.source != "owner"))).scalar_one()
             out.append({"id": str(run.id), "character": await character_card(c, ch), "state": run.state,
                         "stop_reason": run.stop_reason, "started_at": run.started_at, "finished_at": run.finished_at,
-                        "videos": videos, "satisfaction": satisfaction, "tokens": int(t or 0),
+                        "videos": videos, "satisfaction": satisfaction, "run_note": note, "tokens": int(t or 0),
                         "active": c.runs.is_active(run.id)})
     return out
 

@@ -84,3 +84,14 @@ def ytdlp_info() -> dict[str, dict]:
                     "timestamp": 1790165704, "track": None, "width": 720, "height": 1280,
                     "thumbnail": "https://cover.invalid/y.jpg"},
     }
+
+
+
+def instagram_profile_reels() -> list[dict]:
+    """A profile's Reels grid: no taken_at (the date is in the media id), with Instagram's AI label."""
+    return [{"data": {"xdt_api__v1__clips__user__connection_v2": {"edges": [
+        {"node": {"media": {"pk": "4002616216279166823", "code": "TESTREEL101", "product_type": "clips", "media_type": 2,
+                            "play_count": 2414000, "like_count": 49000, "comment_count": 30,
+                            "user": {"username": "Creator_H"}, "ai_label_info": {"ai_label_type": "AI_GENERATED"}}}},
+        {"node": {"media": {"pk": "4002616216279166824", "code": "TESTREEL102", "product_type": "clips", "media_type": 2,
+                            "play_count": 900, "like_count": 4, "user": {"username": "creator_h"}, "ai_label_info": {}}}}]}}}]

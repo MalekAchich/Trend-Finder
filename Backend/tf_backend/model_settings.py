@@ -13,6 +13,8 @@ from tf_db.models import Setting
 
 KEY = "models"
 PRIORITY_KEY = "provider_priority"
+BAR_KEY = "score_bar"
+DEFAULT_BAR = 75.0
 
 
 class ChoiceError(ValueError):
@@ -97,3 +99,17 @@ async def load_model_choices(sm: async_sessionmaker[AsyncSession], sv: Services)
             apply(sv, provider, choice)
     first = (priority or {}).get("first")
     sv.router.first = first if first in sv.adapters else None
+
+
+async def load_bar(sm: async_sessionmaker[AsyncSession]) -> float:
+    """The owner's bar: found videos scoring under it are dropped (Settings)."""
+    async with sm() as s:
+        value = (await s.execute(select(Setting.value).where(Setting.key == BAR_KEY))).scalar_one_or_none()
+    return float((value or {}).get("min_score", DEFAULT_BAR))
+
+
+async def save_bar(sm: async_sessionmaker[AsyncSession], min_score: float) -> None:
+    async with sm() as s:
+        stmt = pg_insert(Setting).values(key=BAR_KEY, value={"min_score": min_score})
+        await s.execute(stmt.on_conflict_do_update(index_elements=[Setting.key], set_={"value": {"min_score": min_score}}))
+        await s.commit()

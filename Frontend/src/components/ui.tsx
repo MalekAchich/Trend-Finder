@@ -20,6 +20,7 @@ export const ROLE_TINT: Record<string, string> = {
 
 export const STATE_TEXT: Record<string, string> = {
   created: "Starting", reading_character: "Reading the character", studying_trends: "Studying your trend videos",
+  discovering: "Finding videos like your references",
   planning: "Planning", running: "Searching", paused_usage: "Paused for usage limits", curating: "Ranking",
   review_ready: "Done", stopped: "Stopped", failed: "Failed", interrupted: "Interrupted",
 };

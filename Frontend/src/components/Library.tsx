@@ -118,7 +118,7 @@ function RunVideos({ run, slug, live, freshIds }: { run: RunSummary; slug: strin
 export function RunScore({ run, slug }: { run: RunSummary; slug: string }) {
   const score = useScoreRun(slug);
   const [value, setValue] = useState<number | null>(run.satisfaction);
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(run.run_note ?? "");
   return (
     <form className="mt-6 flex flex-wrap items-center gap-3 border-t border-rule pt-5"
       onSubmit={(e) => { e.preventDefault(); if (value) score.mutate({ runId: run.id, satisfaction: value, note: note.trim() || null }); }}>

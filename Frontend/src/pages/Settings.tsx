@@ -1,6 +1,6 @@
 import { ExternalLink, KeyRound } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useAccountAction, useAccounts, useModelSettings, usePriority, useSaveModels, useSavePriority, useUsage } from "../api/hooks";
+import { useAccountAction, useAccounts, useBar, useModelSettings, usePriority, useSaveBar, useSaveModels, useSavePriority, useUsage } from "../api/hooks";
 import type { AccountItem, ModelChoice, ProviderUsage } from "../api/types";
 import { BrandLogo } from "../components/brand";
 
@@ -24,6 +24,7 @@ export default function Settings() {
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         {(usage.data?.providers ?? []).map((u) => <UsageCard key={u.provider} u={u} />)}
       </div>
+      <ScoreBar />
       <Priority />
       <Accounts />
       <h2 className="mt-12 text-[15px] font-semibold">Models</h2>
@@ -32,6 +33,29 @@ export default function Settings() {
         {models.data && Object.entries(models.data).map(([p, m]) => <ModelCard key={p} provider={p} choice={m} />)}
       </div>
     </section>
+  );
+}
+
+function ScoreBar() {
+  const bar = useBar();
+  const save = useSaveBar();
+  const [value, setValue] = useState<string>("");
+  useEffect(() => { if (bar.data) setValue(String(bar.data.min_score)); }, [bar.data]);
+  const n = Number(value);
+  const valid = value.trim() !== "" && Number.isFinite(n) && n >= 0 && n <= 100;
+  const dirty = valid && bar.data && n !== bar.data.min_score;
+  return (
+    <>
+      <h2 className="mt-12 text-[15px] font-semibold">Score bar</h2>
+      <p className="mt-1 text-[13px] text-mist">Found videos scoring under this are dropped, never shown. Your own targets are always kept.</p>
+      <form className="mt-4 flex items-center gap-3" onSubmit={(e) => { e.preventDefault(); if (dirty) save.mutate(n); }}>
+        <label className="text-[13px] text-mist">Keep videos scoring at least
+          <input className="field num ml-3 !inline-block !w-20 text-center" inputMode="numeric" value={value}
+            aria-label="Minimum score" onChange={(e) => setValue(e.target.value)} /></label>
+        <button className="btn-lime !h-9" disabled={!dirty || save.isPending}>{save.isPending ? "Saving…" : "Save"}</button>
+        {save.isSuccess && !dirty && <span className="text-[12.5px] text-mist">Saved. The next run uses it.</span>}
+      </form>
+    </>
   );
 }
 

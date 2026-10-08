@@ -26,7 +26,7 @@ from tf_agent.characters.read import CharacterRead, render_brief
 from tf_agent.loop.agent import AgentEvent
 from tf_agent.loop.tools import Tool
 from tf_agent.models.errors import AllProvidersUnavailable, ContentRefused, InvalidRequest
-from tf_agent.orchestrator.analysis import AnalysisStage, CandidateSink
+from tf_agent.orchestrator.analysis import FRESHNESS_DAYS, AnalysisStage, CandidateSink
 from tf_agent.orchestrator.blackboard import Blackboard
 from tf_agent.orchestrator.queue import Requeue, TaskQueue, WorkerPool
 from tf_agent.pipeline.media import cleanup_run_media
@@ -44,6 +44,7 @@ from tf_db.models import (
     Direction,
     Finding,
     FindingScore,
+    ManualVideo,
     Round,
     Run,
     RunFeedback,
@@ -58,8 +59,8 @@ log = logging.getLogger(__name__)
 WORK_KINDS = ("scout", "radar", "deep_dive")
 TERMINAL_STATES = ("review_ready", "stopped", "failed")
 STOPPED_BY_OWNER = "stopped by the owner"
-RESUMABLE_STATES = ("created", "reading_character", "studying_trends", "planning", "running", "paused_usage",
-                    "curating", "interrupted")
+RESUMABLE_STATES = ("created", "reading_character", "studying_trends", "discovering", "planning", "running",
+                    "paused_usage", "curating", "interrupted")
 FRESHNESS = ("day", "week", "month", "any")
 OWNER = {"id": "owner", "role": "owner", "platform": None}
 
@@ -97,6 +98,10 @@ class InputError(ValueError):
 @dataclass
 class RunSettings:
     platforms: list[str] = field(default_factory=lambda: ["tiktok", "youtube", "instagram"])
+    mode: str = "lookalike"  # lookalike: videos like the owner's references (D-52); rounds: the agent-planned search
+    min_score: float = 75.0  # the owner's bar: found videos scoring under it are dropped
+    min_plays: int = 300_000  # lookalike: a candidate needs at least this reach to be judged
+    max_judged: int = 30  # lookalike: how many of the fastest-growing candidates the analyst looks at
     rounds: int = 10  # a safety cap only: the time limit, "nothing new twice" and the target end a run first
     tasks_per_round: int = 12
     target_findings: int = 40  # good videos that end a run early
@@ -354,7 +359,7 @@ class Orchestrator:
         clock = ActiveClock(settings.wall_clock_s - settings.used_s)
         weights = settings.weights or self.weights or dict(DEFAULT_WEIGHTS)
         analysis = AnalysisStage(self._sm, self.analyzer, self.roles, self.store, ch, weights,
-                                 emit=self.blackboard.record_event)
+                                 emit=self.blackboard.record_event, min_score=settings.min_score)
         try:
             if run.stop_reason and run.state in ("curating", "interrupted"):
                 stop_reason = run.stop_reason  # the stop decision was made before a crash: don't plan again
@@ -362,7 +367,10 @@ class Orchestrator:
                 ch = await self._prepare(run_id, settings, clock)
                 analysis.character = ch
                 run = await self._reload(run_id)
-                stop_reason = await self._loop(run, settings, ch, analysis, clock)
+                if settings.mode == "lookalike":
+                    stop_reason = await self._lookalike(run, settings, ch, analysis, clock)
+                else:
+                    stop_reason = await self._loop(run, settings, ch, analysis, clock)
                 await self._set_stop_decision(run_id, stop_reason)
             await self.queue.cancel_queued(run_id)
             await self._curate(run_id, ch, weights)
@@ -478,7 +486,7 @@ class Orchestrator:
                     agent["platform"] = item.platform
                     result = await self.analyzer.analyze(item)
                     if not result.contact_sheet_path:
-                        raise ToolFailure("media_unavailable", (result.filtered_reason or "no frames").replace("_", " "))
+                        raise ToolFailure("platform_unavailable", (result.filtered_reason or "no frames").replace("_", " "))
                     from tf_agent.orchestrator.analysis import candidate_facts
 
                     judged = await self._with_usage_wait(
@@ -636,6 +644,67 @@ class Orchestrator:
                 return "no new findings in 2 consecutive rounds"
 
     # ---------- rounds ----------
+    # ---------- lookalike mode ----------
+    async def _lookalike(self, run: Run, settings: RunSettings, ch: LoadedCharacter, analysis: AnalysisStage,
+                         clock: ActiveClock) -> str:
+        """Videos like the owner's references: deterministic discovery and a virality gate, then the analyst judges
+        only the fastest-growing few (and keeps only scores at or above the owner's bar)."""
+        from tf_agent.discovery.lookalike import Gate, Lookalike
+
+        run_id = run.id
+        if await self.queue.outstanding(run_id) == 0 and not run.inputs.get("lookalike"):
+            await self._set_state(run_id, "discovering")
+            seeds, exclude = await self._lookalike_seeds(ch)
+            studies = [s for s in (run.inputs.get("trend_studies") or {}).values() if "error" not in s]
+            analysis.character = replace(ch, brief=ch.brief + "\n\n" + "\n".join(reference_lines(studies))) \
+                if studies else ch
+
+            async def emit(type_: str, **payload: Any) -> None:
+                await self.blackboard.record_event(run_id, type_, payload)
+
+            sources = self.tools.platform_tools() if hasattr(self.tools, "platform_tools") else self.tools
+            g = Gate(days=FRESHNESS_DAYS.get(settings.freshness) or 365, min_plays=settings.min_plays,
+                     max_judged=settings.max_judged)
+            picks, stats = await Lookalike(sources, emit, g).discover(seeds, studies, exclude)
+            await self.store.upsert_videos([p.item for p in picks])
+            for p in picks:
+                async with self._sm() as s:
+                    stmt = pg_insert(Finding).values(run_id=run_id, canonical_id=p.item.canonical_id, source="agent",
+                                                     why=p.why).on_conflict_do_nothing()
+                    finding_id = (await s.execute(stmt.returning(Finding.id))).scalar_one_or_none()
+                    await s.commit()
+                if finding_id is not None:
+                    await self.queue.enqueue(run_id, None, "analyze", scope={"finding_id": str(finding_id),
+                                                                             "canonical_id": p.item.canonical_id})
+            await self._save_inputs(run_id, lookalike=stats)
+            await self.blackboard.record_event(run_id, "round.finished", {
+                "round": 1, "lookalike": stats,
+                "notes": [f"Looked at {stats['seen']} videos from {stats['seed_creators']} reference creators, "
+                          f"{len(stats['queries'])} searches and {stats['second_degree']} hit creators; kept the "
+                          f"{stats['picked']} fastest-growing for judging."]})
+        else:
+            analysis.character = ch
+        await self._set_state(run_id, "running", round=1)
+        if not await self._drain(run_id, ch, settings, analysis, clock):
+            return "wall clock limit reached"
+        return "lookalike search done"
+
+    async def _lookalike_seeds(self, ch: LoadedCharacter) -> tuple[list[Any], set[str]]:
+        """The owner's references and this character's targets; everything already chosen or found is excluded."""
+        async with self._sm() as s:
+            # every known reference seeds discovery, even one whose study failed: its creator is still worth following
+            rows = (await s.execute(select(ManualVideo))).scalars().all()
+            found = (await s.execute(select(Finding.canonical_id).join(Run, Run.id == Finding.run_id).where(
+                Run.character_id == ch.character_id))).scalars().all()
+        seeds = []
+        for m in rows:
+            if m.canonical_id and (m.is_reference or m.target_character_id == ch.character_id):
+                item = await self.store.get_video(m.canonical_id)
+                if item is not None:
+                    seeds.append(item)
+        exclude = {m.canonical_id for m in rows if m.canonical_id} | set(found)
+        return seeds, exclude
+
     async def _round_has_plan(self, run_id: uuid.UUID, number: int) -> bool:
         async with self._sm() as s:
             plan = (await s.execute(select(Round.plan).where(Round.run_id == run_id, Round.number == number))

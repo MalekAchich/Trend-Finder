@@ -285,3 +285,24 @@ async def test_unfinished_runs_resume_on_startup(http, ctx):
     assert ctx.orchestrator.executed == [run_id]
     async with ctx.sessionmaker() as s:
         assert (await s.execute(select(Task.state).where(Task.run_id == run_id))).scalar_one() == "queued"
+
+
+async def test_run_score_and_note_come_back_after_a_reload(http, ctx):
+    run_id, finding_id = await a_run(http, ctx)
+    await curate(ctx, run_id, finding_id)
+    r = await http.put(f"/api/runs/{run_id}/feedback", json={"satisfaction": 6, "note": "more AI influencers"})
+    assert r.status_code == 200
+    detail = (await http.get(f"/api/runs/{run_id}")).json()
+    listed = (await http.get("/api/characters/testy/runs")).json()[0]
+    history = (await http.get("/api/runs")).json()[0]
+    for row in (detail, listed, history):
+        assert (row["satisfaction"], row["run_note"]) == (6, "more AI influencers")
+
+
+async def test_videos_from_before_a_pipeline_bump_keep_their_thumbnail(http, ctx):
+    run_id, _ = await a_run(http, ctx)
+    async with ctx.sessionmaker() as s:
+        await s.execute(update(VideoAnalysis).values(pipeline_version="old"))
+        await s.commit()
+    card = (await http.get(f"/api/runs/{run_id}/videos")).json()[0]
+    assert card["thumbnail_url"] == "/api/media/thumbs/tiktok_1.jpg"

@@ -8,7 +8,7 @@ import { PlatformIcon, ROLE_LABEL, ROLE_TINT, STATE_TEXT, clock } from "./ui";
 const GROUP_LABEL: Record<Group, string> = {
   thinking: "Thinking", plans: "Plans", tools: "Tools", videos: "Videos", problems: "Problems", status: "Status",
 };
-const LIVE_STATES = ["created", "reading_character", "studying_trends", "planning", "running", "curating", "paused_usage"];
+const LIVE_STATES = ["created", "reading_character", "studying_trends", "discovering", "planning", "running", "curating", "paused_usage"];
 const MAX_ROWS = 400;
 
 interface Props {
