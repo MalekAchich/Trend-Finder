@@ -25,8 +25,10 @@ function readable(detail: Detail, status: number): string {
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers = new Headers();
   if (method !== "GET") headers.set("x-trendfinder-client", "web");
-  if (body !== undefined) headers.set("content-type", "application/json");
-  const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const form = body instanceof FormData;  // uploads: the browser sets the multipart boundary itself
+  if (body !== undefined && !form) headers.set("content-type", "application/json");
+  const res = await fetch(path, { method, headers,
+    body: body === undefined ? undefined : form ? (body as FormData) : JSON.stringify(body) });
   const data = res.headers.get("content-type")?.includes("json") ? await res.json() : undefined;
   if (!res.ok) throw new ApiError(readable(data?.detail, res.status), res.status);
   return data as T;

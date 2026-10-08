@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useCharacter, useCharacterVideos, useCharacters } from "../api/hooks";
+import { AddImagesTile, CharacterName, NewCharacterForm, NewCharacterTile } from "../components/CharacterEditor";
 import { LibraryTabs, type LibraryTab } from "../components/Library";
 import { ManualPanel } from "../components/ManualVideos";
 import { VideoGrid } from "../components/VideoGrid";
@@ -22,11 +24,12 @@ export default function Characters() {
     setParams(next, { replace: true });
   };
   const d = detail.data;
+  const [adding, setAdding] = useState(false);
   return (
     <>
       <section className="wrap pb-12 pt-10">
         <h1 className="text-[30px] font-semibold">Characters</h1>
-        <p className="mt-1 text-[13px] text-mist">A character is the images in its folder in AI Influencers Characters. Everything else, the agents work out.</p>
+        <p className="mt-1 text-[13px] text-mist">A character is the images in its folder in AI Influencers Characters: add, rename or add images here or in the folder. Everything else, the agents work out.</p>
         <div className="mt-7 flex flex-wrap gap-4" role="tablist" aria-label="Character">
           {list.map((c) => {
             const on = c.slug === slug;
@@ -41,17 +44,21 @@ export default function Characters() {
               </button>
             );
           })}
+          <NewCharacterTile open={adding} onToggle={() => setAdding((a) => !a)} />
         </div>
+        {adding && <NewCharacterForm onCancel={() => setAdding(false)} onDone={(s) => { setAdding(false); set("c", s); }} />}
         {d && (
           <div className="mt-10 grid gap-8 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
             <div>
-              <h2 className="text-[15px] font-semibold">Images</h2>
+              <CharacterName slug={d.slug} name={d.name} onRenamed={(s) => set("c", s)} />
+              <h2 className="mt-5 text-[15px] font-semibold">Images</h2>
               <ul className="mt-3 flex flex-wrap gap-3">
                 {d.images.map((src) => (
                   <li key={src} className="overflow-hidden rounded-lg border border-line bg-white">
                     <a href={src} target="_blank" rel="noreferrer"><img src={src} alt="" className="block h-40 w-auto object-contain" /></a>
                   </li>
                 ))}
+                <AddImagesTile slug={d.slug} />
               </ul>
               <dl className="num mt-5 flex gap-8 text-[13px]">
                 <div><dt className="text-mist">Runs</dt><dd className="text-[20px] font-semibold">{d.runs}</dd></div>

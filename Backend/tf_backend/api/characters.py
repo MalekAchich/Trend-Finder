@@ -1,15 +1,19 @@
-"""Characters are the image folders in CHARACTERS_DIR (synced on every read) and the runs made for them."""
+"""Characters are the image folders in CHARACTERS_DIR (synced on every read) and the runs made for them.
+Adding a character, renaming one or adding images edits those folders, then syncs."""
 from pathlib import Path
 from typing import Any
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import func, select
 
-from tf_agent.characters.folders import sync_characters
-from tf_backend.api.deps import ctx
+from tf_agent.characters.folders import (MAX_IMAGE_BYTES, CharacterError, add_images, create_character,
+                                         rename_character, sync_characters)
+from tf_backend.api.deps import ctx, require_client_header
 from tf_backend.app_context import AppContext
+from tf_backend.runs import TERMINAL
 from tf_db.models import Character, CharacterVersion, Finding, Run, RunFeedback, TasteProfile, TrendCluster
 
 router = APIRouter(prefix="/characters", tags=["characters"])
@@ -48,6 +52,52 @@ async def list_characters(c: AppContext = Depends(ctx)) -> list[dict[str, Any]]:
             out.append({"slug": ch.slug, "name": ch.name, "image_url": image_url(c, v.canonical_image_path),
                         "images": [u for u in (image_url(c, p) for p in v.images or []) if u], "runs": runs})
     return out
+
+
+async def _uploads(files: list[UploadFile]) -> list[tuple[str, bytes]]:
+    out = []
+    for f in files:
+        data = await f.read(MAX_IMAGE_BYTES + 1)  # one byte over: check_images reports it as too big
+        out.append((f.filename or "image", data))
+    return out
+
+
+@router.post("", dependencies=[Depends(require_client_header)])
+async def new_character(name: str = Form(...), images: list[UploadFile] = File(...),
+                        c: AppContext = Depends(ctx)) -> dict[str, Any]:
+    try:
+        slug = await create_character(c.characters_dir, c.sessionmaker, name, await _uploads(images))
+    except CharacterError as e:
+        raise HTTPException(409 if "already" in str(e) else 422, str(e)) from None
+    return {"slug": slug}
+
+
+@router.post("/{slug}/images", dependencies=[Depends(require_client_header)])
+async def more_images(slug: str, images: list[UploadFile] = File(...), c: AppContext = Depends(ctx)) -> dict[str, Any]:
+    try:
+        await add_images(c.characters_dir, c.sessionmaker, slug, await _uploads(images))
+    except CharacterError as e:
+        raise HTTPException(404 if "unknown" in str(e) else 422, str(e)) from None
+    return {"slug": slug}
+
+
+class RenameIn(BaseModel):
+    name: str
+
+
+@router.patch("/{slug}", dependencies=[Depends(require_client_header)])
+async def rename(slug: str, body: RenameIn, c: AppContext = Depends(ctx)) -> dict[str, Any]:
+    async with c.sessionmaker() as s:
+        busy = (await s.execute(select(Run.id).join(Character, Character.id == Run.character_id).where(
+            Character.slug == slug, Run.state.not_in(TERMINAL)))).scalars().all()
+    if any(c.runs.is_active(r) for r in busy):
+        raise HTTPException(409, "a run is going for this character; rename it once the run ends")
+    try:
+        new_slug = await rename_character(c.characters_dir, c.sessionmaker, slug, body.name)
+    except CharacterError as e:
+        code = 404 if "unknown" in str(e) else 409 if "already" in str(e) else 422
+        raise HTTPException(code, str(e)) from None
+    return {"slug": new_slug}
 
 
 @router.get("/{slug}")

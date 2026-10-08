@@ -162,3 +162,25 @@ export function useScoreRun(slug: string) {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["runs", slug] }); qc.invalidateQueries({ queryKey: ["runs-history"] }); },
   });
 }
+
+const imagesForm = (files: File[], name?: string) => {
+  const form = new FormData();
+  if (name !== undefined) form.append("name", name);
+  files.forEach((f) => form.append("images", f));
+  return form;
+};
+
+/** Adding, renaming or adding images edits the character's folder; every view of characters refreshes. */
+export const useCharacterEdits = () => {
+  const qc = useQueryClient();
+  const refresh = () => Promise.all(["characters", "character", "runs-history", "manual-videos"].map((k) =>
+    qc.invalidateQueries({ queryKey: [k] })));
+  return {
+    create: useMutation({ onSuccess: refresh, mutationFn: (v: { name: string; files: File[] }) =>
+      api.post<{ slug: string }>("/api/characters", imagesForm(v.files, v.name)) }),
+    rename: useMutation({ onSuccess: refresh, mutationFn: (v: { slug: string; name: string }) =>
+      api.patch<{ slug: string }>(`/api/characters/${v.slug}`, { name: v.name }) }),
+    addImages: useMutation({ onSuccess: refresh, mutationFn: (v: { slug: string; files: File[] }) =>
+      api.post<{ slug: string }>(`/api/characters/${v.slug}/images`, imagesForm(v.files)) }),
+  };
+};

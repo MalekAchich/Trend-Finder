@@ -330,3 +330,67 @@ async def test_download_a_found_video_or_its_sound(http, ctx, tmp_path):
     assert asked == [("https://www.tiktok.com/@u/video/1", "video"), ("https://www.tiktok.com/@u/video/1", "audio")]
     assert (await http.get("/api/download/tiktok:999")).status_code == 404  # only videos the app knows
     assert (await http.get("/api/download/tiktok:1?kind=gif")).status_code == 422
+
+
+def png(color="red", size=(8, 12), fmt="PNG"):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, fmt)
+    return buf.getvalue()
+
+
+async def test_add_a_character_from_the_app(http, ctx):
+    files = [("images", ("look.png", png("red"), "image/png")), ("images", ("face.jpg", png("blue", fmt="JPEG"), "image/jpeg"))]
+    r = await http.post("/api/characters", data={"name": "Made Up Mia"}, files=files)
+    assert r.status_code == 200 and r.json() == {"slug": "made-up-mia"}
+    folder = ctx.characters_dir / "Made Up Mia"
+    assert sorted(p.name for p in folder.iterdir()) == ["Made Up Mia.png", "face.jpg"]  # the first is the main one
+    mia = next(c for c in (await http.get("/api/characters")).json() if c["slug"] == "made-up-mia")
+    assert mia["image_url"].endswith("/Made%20Up%20Mia.png") or mia["image_url"].endswith("/Made Up Mia.png")
+    again = await http.post("/api/characters", data={"name": "made up mia"}, files=files[:1])
+    assert again.status_code == 409
+    assert (await http.post("/api/characters", data={"name": "../escape"}, files=files[:1])).status_code == 422
+    fake = [("images", ("x.png", b"not an image", "image/png"))]
+    bad = await http.post("/api/characters", data={"name": "Nope"}, files=fake)
+    assert bad.status_code == 422 and "isn't an image" in bad.json()["detail"]
+    assert not (ctx.characters_dir / "Nope").exists()
+
+
+async def test_add_images_to_a_character(http, ctx):
+    await http.get("/api/characters")
+    r = await http.post("/api/characters/testy/images", files=[("images", ("Testy face.png", png("green"), "image/png"))])
+    assert r.status_code == 200
+    names = sorted(p.name for p in (ctx.characters_dir / "Testy").iterdir())
+    assert names == ["Testy face 2.png", "Testy face.png", "Testy.png"]  # never overwrites
+    assert len((await http.get("/api/characters/testy")).json()["images"]) == 3
+    assert (await http.post("/api/characters/nobody/images", files=[("images", ("a.png", png(), "image/png"))])
+            ).status_code == 404
+
+
+async def test_renaming_keeps_the_runs_and_renames_the_folder(http, ctx):
+    run_id, _ = await a_run(http, ctx, state="review_ready")
+    r = await http.patch("/api/characters/testy", json={"name": "Testy Two"})
+    assert r.status_code == 200 and r.json() == {"slug": "testy-two"}
+    folder = ctx.characters_dir / "Testy Two"
+    assert sorted(p.name for p in folder.iterdir()) == ["Testy Two.png", "Testy face.png"]
+    chars = (await http.get("/api/characters")).json()
+    assert [(c["slug"], c["name"], c["runs"]) for c in chars] == [("testy-two", "Testy Two", 1)]
+    assert [x["id"] for x in (await http.get("/api/characters/testy-two/runs")).json()] == [str(run_id)]
+    assert (await http.get("/api/characters/testy")).status_code == 404
+
+
+async def test_a_folder_renamed_by_hand_keeps_its_character(http, ctx):
+    run_id, _ = await a_run(http, ctx, state="review_ready")
+    (ctx.characters_dir / "Testy").rename(ctx.characters_dir / "Testo")
+    chars = (await http.get("/api/characters")).json()
+    assert [(c["slug"], c["runs"]) for c in chars] == [("testo", 1)]
+
+
+async def test_no_rename_while_its_run_is_going(http, ctx, monkeypatch):
+    await a_run(http, ctx, state="running")
+    monkeypatch.setattr(ctx.runs, "is_active", lambda run_id: True)
+    r = await http.patch("/api/characters/testy", json={"name": "Later"})
+    assert r.status_code == 409 and "run is going" in r.json()["detail"]
