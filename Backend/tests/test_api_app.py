@@ -394,3 +394,15 @@ async def test_no_rename_while_its_run_is_going(http, ctx, monkeypatch):
     monkeypatch.setattr(ctx.runs, "is_active", lambda run_id: True)
     r = await http.patch("/api/characters/testy", json={"name": "Later"})
     assert r.status_code == 409 and "run is going" in r.json()["detail"]
+
+
+async def test_videos_under_the_bar_are_listed_closest_first(http, ctx):
+    run_id, finding_id = await a_run(http, ctx, state="review_ready")
+    assert (await http.get(f"/api/runs/{run_id}/below-bar")).json() == []
+    async with ctx.sessionmaker() as s:
+        await s.execute(update(Finding).where(Finding.id == finding_id).values(status="below_bar"))
+        await s.commit()
+    under = (await http.get(f"/api/runs/{run_id}/below-bar")).json()
+    assert [(v["canonical_id"], v["score"]) for v in under] == [("tiktok:1", 72)]
+    assert (await http.get(f"/api/runs/{run_id}/videos")).json() == []  # never among the kept videos
+    assert (await http.get(f"/api/runs/{uuid.uuid4()}/below-bar")).status_code == 404

@@ -1,6 +1,6 @@
 import { ChevronDown } from "lucide-react";
 import { useState } from "react";
-import { useCharacterRuns, useManualVideos, useRunVideos, useScoreRun } from "../api/hooks";
+import { useCharacterRuns, useManualVideos, useRunBelowBar, useRunVideos, useScoreRun } from "../api/hooks";
 import type { Character, RunSummary } from "../api/types";
 import { ManualPanel } from "./ManualVideos";
 import { STATE_TEXT } from "./ui";
@@ -110,6 +110,7 @@ function RunVideos({ run, slug, live, freshIds }: { run: RunSummary; slug: strin
           : "This run didn't save any videos. Try other platforms, a longer time limit or a few target videos."}</p>
       )}
       <VideoGrid videos={list} freshIds={freshIds} />
+      {ended && <BelowBar runId={run.id} />}
       {ended && list.length > 0 && <RunScore run={run} slug={slug} />}
     </div>
   );
@@ -135,5 +136,24 @@ export function RunScore({ run, slug }: { run: RunSummary; slug: string }) {
         {score.isSuccess ? "Saved" : score.isPending ? "Saving…" : "Save score"}</button>
       {score.isError && <p role="alert" className="w-full text-[12.5px] text-bad">{(score.error as Error).message}</p>}
     </form>
+  );
+}
+
+/** The videos a run judged but dropped under the owner's bar, closest first: to see what the bar cuts. */
+export function BelowBar({ runId }: { runId: string }) {
+  const [open, setOpen] = useState(false);
+  const under = useRunBelowBar(runId, true);
+  const list = under.data ?? [];
+  if (!list.length) return null;
+  const best = Math.round(list[0].score ?? 0);
+  return (
+    <div className="mt-6 border-t border-rule pt-4">
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open}
+        className="flex items-center gap-2 text-[13px] text-ink-2 hover:text-ink">
+        <ChevronDown size={15} className={`transition ${open ? "rotate-180" : ""}`} />
+        {list.length} {list.length === 1 ? "video" : "videos"} under your bar (closest first, best {best})
+      </button>
+      {open && <div className="mt-4"><VideoGrid videos={list} judgedOnly /></div>}
+    </div>
   );
 }

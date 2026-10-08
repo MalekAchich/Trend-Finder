@@ -67,6 +67,24 @@ async def run_videos(run_id: str, c: AppContext = Depends(ctx)) -> list[dict[str
         return await videos_for_run(s, rid)
 
 
+@router.get("/runs/{run_id}/below-bar")
+async def run_below_bar(run_id: str, c: AppContext = Depends(ctx)) -> list[dict[str, Any]]:
+    """The videos a run judged but dropped for scoring under the owner's bar, closest first: to see what it cuts."""
+    rid = _uuid(run_id, "run")
+    a = _latest_analysis()
+    async with c.sessionmaker() as s:
+        if await s.get(Run, rid) is None:
+            raise HTTPException(404, "unknown run")
+        rows = (await s.execute(
+            select(Finding, FindingScore, Video, a.c.thumbnail_path, a.c.best_clean_segment)
+            .join(FindingScore, FindingScore.finding_id == Finding.id)
+            .join(Video, Video.canonical_id == Finding.canonical_id)
+            .outerjoin(a, a.c.canonical_id == Finding.canonical_id)
+            .where(Finding.run_id == rid, Finding.status == "below_bar", Finding.source != "owner")
+            .order_by(FindingScore.overall.desc().nulls_last()).limit(60))).all()
+    return [found_video(f, sc, v, _Analysis(thumb, seg)) for f, sc, v, thumb, seg in rows]
+
+
 class _Analysis:
     """The two analysis fields a card needs (avoids loading the whole row)."""
 

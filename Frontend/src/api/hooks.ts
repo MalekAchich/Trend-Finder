@@ -138,6 +138,10 @@ export const useRunVideos = (runId: string, live: boolean) =>
   useQuery({ queryKey: ["videos", runId], queryFn: () => api.get<FoundVideo[]>(`/api/runs/${runId}/videos`),
     refetchInterval: live ? 15_000 : false });
 
+export const useRunBelowBar = (runId: string, enabled: boolean) =>
+  useQuery({ queryKey: ["below-bar", runId], enabled,
+    queryFn: () => api.get<FoundVideo[]>(`/api/runs/${runId}/below-bar`) });
+
 export function useStartRun() {
   const qc = useQueryClient();
   return useMutation({
