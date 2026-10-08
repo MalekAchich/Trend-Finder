@@ -31,7 +31,7 @@ export function Composer({ characters, selected, onSelect, running, starting, er
   const targets = saved.filter((v) => v.target);
   const [platforms, setPlatforms] = useState<Platform[]>(["tiktok", "instagram", "youtube"]);
   const [freshness, setFreshness] = useState<StartRun["freshness"]>("month");
-  const [minutes, setMinutes] = useState(60);
+  const [minVideos, setMinVideos] = useState(10);
   const [localError, setLocalError] = useState<string | null>(null);
   const name = characters.find((c) => c.slug === selected)?.name;
 
@@ -42,7 +42,7 @@ export function Composer({ characters, selected, onSelect, running, starting, er
     if (!selected) return;
     setLocalError(null);
     // reference videos and targets come from the saved list (Manually chosen videos)
-    onStart({ character: selected, platforms, freshness, minutes, trend_urls: [], targets: [] });
+    onStart({ character: selected, platforms, freshness, minutes: 60, min_videos: minVideos, trend_urls: [], targets: [] });
   };
 
   const shown = localError ?? error;
@@ -154,12 +154,12 @@ export function Composer({ characters, selected, onSelect, running, starting, er
                 {FRESHNESS.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
               </select>
             </label>
-            <Dropdown label={<><Settings2 size={13} /> Time limit {minutes} min</>} disabled={running}>
-              <p className="mb-2 text-[12.5px] text-mist">Stop the run after</p>
-              <div className="grid grid-cols-2 gap-1.5">
-                {[15, 30, 60, 120].map((m) => (
-                  <button key={m} className="chip justify-center" aria-pressed={minutes === m}
-                    onClick={() => setMinutes(m)}>{m} min</button>
+            <Dropdown label={<><Settings2 size={13} /> Until {minVideos} videos</>} disabled={running}>
+              <p className="mb-2 max-w-[220px] text-[12.5px] text-mist">Keep searching, with no time limit, until this many videos pass your score bar (or nothing new is left)</p>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[10, 20, 30].map((n) => (
+                  <button key={n} className="chip justify-center" aria-pressed={minVideos === n}
+                    onClick={() => setMinVideos(n)}>{n}</button>
                 ))}
               </div>
             </Dropdown>

@@ -18,7 +18,7 @@ import logging
 import math
 import re
 from collections import Counter
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -246,14 +246,23 @@ class Lookalike:
                  reference_covers: list[Path] | None = None) -> None:
         self.sources, self.emit, self.g, self._now = sources, emit, gate_settings or Gate(), clock
         self.triage, self.reference_covers = triage, reference_covers or []
+        # kept across rounds: everything seen, every cover's verdict, every creator followed and query searched
+        self.pool, self.looks = Pool(), {}
+        self.followed: set[tuple[str, str]] = set()
+        self.searched: set[str] = set()
+        self.round_no = 0
 
-    async def _look_check(self, pool: Pool, exclude: set[str]) -> dict[str, Look] | None:
-        """Compares the most promising covers with the references' (None when it can't run: no covers)."""
+    async def _look_check(self, pool: Pool, exclude: set[str]) -> int | None:
+        """Compares the covers not checked yet with the references' (merged into `self.looks`). Returns how many
+        were checked this round; None when the check can't run (no reference covers, or no model answered) and
+        nothing was ever checked."""
         if self.triage is None or not self.reference_covers:
             return None
         items, _ = eligible(pool, exclude, self.g, self._now())
-        check = to_check(items, self.g, self._now())
-        agent = {"id": "look-check", "role": "look_check", "platform": None}
+        check = to_check([i for i in items if i.canonical_id not in self.looks], self.g, self._now())
+        if not check:
+            return 0 if self.looks else None
+        agent = {"id": f"look-check-{self.round_no}", "role": "look_check", "platform": None}
         await self.emit("agent.started", agent=agent,
                         goal=f"compare {len(check)} covers with your {len(self.reference_covers)} references")
 
@@ -267,7 +276,10 @@ class Lookalike:
         alike = sum(1 for v in (looks or {}).values() if v.score >= self.g.min_look)
         await self.emit("agent.finished", agent=agent, accepted=alike, rejected=len(looks or {}) - alike, leads=0,
                         failed=None if looks is not None else "the look check couldn't run; ranked without it")
-        return looks
+        if looks is None:
+            return 0 if self.looks else None
+        self.looks.update(looks)
+        return len(looks)
 
     async def _step(self, agent: dict[str, Any], goal: str, calls: list[tuple[str, Callable[[], Awaitable[Any]]]],
                     pool: Pool, why: Callable[[str], str], kind: str = "search") -> list[VideoItem]:
@@ -295,60 +307,75 @@ class Lookalike:
         await self.emit("agent.finished", agent=agent, accepted=len(found), rejected=0, leads=0, failed=None)
         return found
 
-    async def discover(self, seeds: list[VideoItem], studies: list[dict[str, Any]],
-                       exclude: set[str]) -> tuple[list[Pick], dict[str, Any]]:
-        pool = Pool()
-        recent = "month" if self.g.days > 7 else "week"
-        creators = {"instagram": [], "tiktok": []}
-        for s in seeds:
-            h = s.creator.handle
-            if h and s.platform in creators and h not in creators[s.platform]:
-                creators[s.platform].append(h)
+    async def discover(self, seeds: list[VideoItem], studies: list[dict[str, Any]], exclude: set[str],
+                       more_creators: Sequence[tuple[str, str]] = (), more_queries: Sequence[str] = (),
+                       ) -> tuple[list[Pick], dict[str, Any]]:
+        """One round. The first follows the references' creators and themes; each later one keeps everything seen so
+        far (covers already checked aren't checked again) and adds the creators and themes of the run's closest
+        finds (`more_creators` as (platform, handle), `more_queries`). `exclude` holds everything already judged."""
+        self.round_no += 1
+        pool, recent = self.pool, "month" if self.g.days > 7 else "week"
+        creators: dict[str, list[str]] = {"instagram": [], "tiktok": []}
+        wanted = [(s.platform, s.creator.handle) for s in seeds] if self.round_no == 1 else []
+        for platform, h in [*wanted, *more_creators]:
+            if h and platform in creators and (platform, h) not in self.followed and h not in creators[platform] \
+                    and h not in PLATFORM_ACCOUNTS:
+                creators[platform].append(h)
+        self.followed |= {(p, h) for p, hs in creators.items() for h in hs}
+        first = theme_queries(studies, self.g.max_queries) if self.round_no == 1 else []
+        queries = [q for q in dict.fromkeys([*first, *map(_query, more_queries)])
+                   if q and q != "ai" and q not in self.searched][:self.g.max_queries]
+        self.searched |= set(queries)
 
-        # 1 and 2 run side by side: each platform's pages are paced on their own
+        # creators and searches run side by side: each platform's pages are paced on their own
         seed_calls = [(f"instagram_creator @{h}", lambda h=h: self.sources.instagram_creator(h)) for h in creators["instagram"]]
         seed_calls += [(f"tiktok_creator @{h}", lambda h=h: self.sources.tiktok_creator(h)) for h in creators["tiktok"]]
-        queries = theme_queries(studies, self.g.max_queries)
         search_calls: dict[str, list[tuple[str, Callable[[], Awaitable[Any]]]]] = {
             "instagram": [(f"instagram_search {q}", lambda q=q: self.sources.instagram_search(q, 15, recent)) for q in queries],
             "tiktok": [(f"tiktok_search {q}", lambda q=q: self.sources.tiktok_search(q, 15, recent)) for q in queries],
             "youtube": [(f"shorts_search {q}", lambda q=q: self.sources.shorts_search(q, 15, recent)) for q in queries],
         }
-        steps = [self._step({"id": "seed-creators", "role": "scout", "platform": None},
-                            f"recent videos from the creators of your {len(seeds)} reference videos", seed_calls, pool,
-                            lambda label: f"new from {label.split(' ', 1)[1]}, the creator of one of your references",
-                            "seed")]
-        steps += [self._step({"id": f"themes-{p}", "role": "radar", "platform": p},
-                             f"{p} searches for what your references have in common", calls, pool,
-                             lambda label: f"found searching \"{label.split(' ', 1)[1]}\"")
-                  for p, calls in search_calls.items()]
+        n = self.round_no
+        steps = []
+        if seed_calls:
+            goal = (f"recent videos from the creators of your {len(seeds)} reference videos" if n == 1
+                    else f"recent videos from {len(seed_calls)} creators of this run's closest finds")
+            why = ((lambda label: f"new from {label.split(' ', 1)[1]}, the creator of one of your references") if n == 1
+                   else (lambda label: f"new from {label.split(' ', 1)[1]}, who made one of this run's closest finds"))
+            steps.append(self._step({"id": f"creators-{n}", "role": "scout", "platform": None}, goal, seed_calls, pool,
+                                    why, "seed"))
+        if queries:
+            steps += [self._step({"id": f"themes-{p}-{n}", "role": "radar", "platform": p},
+                                 f"{p} searches for what your references have in common" if n == 1
+                                 else f"{p} searches for the themes of this run's closest finds", calls, pool,
+                                 lambda label: f"found searching \"{label.split(' ', 1)[1]}\"")
+                      for p, calls in search_calls.items()]
         results = await asyncio.gather(*steps)
+        searched = [i for found in results[1 if seed_calls else 0:] for i in found]
 
-        # 3: the creators behind the biggest hits of the theme searches
-        hits = [i for found in results[1:] for i in found
-                if reach(i) >= SECOND_DEGREE_MIN_PLAYS and i.creator.handle and i.platform in creators
-                and i.creator.handle not in PLATFORM_ACCOUNTS]
+        # the creators behind the biggest hits of the searches
+        hits = [i for i in searched if reach(i) >= SECOND_DEGREE_MIN_PLAYS and i.creator.handle
+                and i.platform in creators and i.creator.handle not in PLATFORM_ACCOUNTS]
         hits.sort(key=lambda i: velocity(i, self._now()), reverse=True)
         second: list[tuple[str, Callable[[], Awaitable[Any]]]] = []
-        known = {(p, h) for p, hs in creators.items() for h in hs}
         for i in hits:
             key = (i.platform, i.creator.handle)
-            if key in known or len(second) >= self.g.max_second_degree:
+            if key in self.followed or len(second) >= self.g.max_second_degree:
                 continue
-            known.add(key)
+            self.followed.add(key)
             tool = self.sources.instagram_creator if i.platform == "instagram" else self.sources.tiktok_creator
             second.append((f"{i.platform}_creator @{i.creator.handle}", lambda t=tool, h=i.creator.handle: t(h)))
         if second:
-            await self._step({"id": "hit-creators", "role": "deep_dive", "platform": None},
+            await self._step({"id": f"hit-creators-{n}", "role": "deep_dive", "platform": None},
                              "more from the creators behind the biggest hits", second, pool,
                              lambda label: f"new from {label.split(' ', 1)[1]}, who had one of the biggest hits",
                              "hit")
 
-        looks = await self._look_check(pool, exclude)
-        picks, dropped = gate(pool, exclude, self.g, self._now(), theme_terms(studies), looks)
-        return picks, {"seen": len(pool.items), "picked": len(picks), "gems": sum(p.lane == "gem" for p in picks),
-                       "checked": len(looks) if looks is not None else 0,
-                       "look_alike": sum(1 for v in (looks or {}).values() if v.score >= self.g.min_look),
-                       "dropped": dict(dropped),
-                       "queries": queries, "seed_creators": sum(len(v) for v in creators.values()),
-                       "second_degree": len(second)}
+        checked = await self._look_check(pool, exclude)
+        picks, dropped = gate(pool, exclude, self.g, self._now(), theme_terms(studies),
+                              self.looks if checked is not None else None)
+        return picks, {"round": n, "seen": len(pool.items), "picked": len(picks),
+                       "gems": sum(p.lane == "gem" for p in picks), "checked": checked or 0,
+                       "look_alike": sum(1 for v in self.looks.values() if v.score >= self.g.min_look),
+                       "dropped": dict(dropped), "queries": queries,
+                       "seed_creators": sum(len(v) for v in creators.values()), "second_degree": len(second)}

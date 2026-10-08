@@ -64,10 +64,6 @@ function ManualCard({ video, characters }: { video: ManualVideo; characters: Cha
         <span className="absolute left-2.5 top-2.5 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-1 text-[10.5px] font-semibold backdrop-blur">
           <PlatformIcon platform={video.platform} size={11} />{PLATFORM_LABEL[video.platform]}
         </span>
-        {st?.fit_score != null && (
-          <span className="num absolute right-2.5 top-2.5 rounded-md bg-white px-1.5 py-1 text-[11px] font-semibold text-ink"
-            title="How well it suits the character (0-10)">{st.fit_score}/10</span>
-        )}
         {video.status === "checking" && (
           <span className="absolute inset-0 grid place-items-center bg-black/45 text-[12px]">
             <span className="flex items-center gap-1.5"><Loader2 size={14} className="animate-spin" /> Checking the link…</span></span>
@@ -117,9 +113,10 @@ function ManualCard({ video, characters }: { video: ManualVideo; characters: Cha
         </div>
         {video.status === "ready" && video.canonical_id && <DownloadButtons canonicalId={video.canonical_id} />}
         {video.target && (
-          <p className="text-[11.5px] text-ink-2">{video.target.state === "analysed"
-            ? `Scored ${video.target.score != null ? Math.round(video.target.score) : "?"} for ${video.target.name}`
-            : `Waiting for ${video.target.name}'s next run`}</p>
+          <p className="line-clamp-3 text-[11.5px] text-ink-2" title={video.target.adaptation ?? undefined}>
+            {video.target.state === "analysed"
+              ? (video.target.adaptation ? `For ${video.target.name}: ${video.target.adaptation}` : `Studied for ${video.target.name}`)
+              : `Studied in ${video.target.name}'s next run`}</p>
         )}
         <div className="flex items-center justify-between">
           <a href={video.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11.5px] text-ink-2 hover:text-ink">

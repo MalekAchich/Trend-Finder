@@ -33,7 +33,8 @@ class RunIn(BaseModel):
     platforms: list[Literal["tiktok", "instagram", "youtube", "x"]] = Field(
         default_factory=lambda: ["tiktok", "youtube", "instagram"], min_length=1)
     freshness: Literal["day", "week", "month", "any"] = "month"
-    minutes: float = Field(60.0, ge=5, le=600)
+    minutes: float = Field(60.0, ge=5, le=600)  # the agent-planned mode only: lookalike runs have no time limit
+    min_videos: int = Field(10, ge=1, le=100)  # lookalike: keep going until this many pass the owner's bar
     trend_urls: list[str] = Field(default_factory=list, max_length=20)
     targets: list[TargetIn] = Field(default_factory=list, max_length=20)
 
@@ -43,7 +44,7 @@ async def start_run(body: RunIn, c: AppContext = Depends(ctx)) -> dict[str, str]
     await sync_characters(c.characters_dir, c.sessionmaker)
     from tf_backend.model_settings import load_bar
 
-    settings = RunSettings(platforms=list(body.platforms), wall_clock_s=body.minutes * 60, freshness=body.freshness,
+    settings = RunSettings(platforms=list(body.platforms), wall_clock_s=body.minutes * 60, min_kept=body.min_videos, freshness=body.freshness,
                            trend_urls=[u.strip() for u in body.trend_urls if u.strip()],
                            targets=[t.model_dump() for t in body.targets], min_score=await load_bar(c.sessionmaker))
     try:
@@ -75,6 +76,7 @@ async def _run_out(c: AppContext, run: Run, ch: Character) -> dict[str, Any]:
         "finished_at": run.finished_at, "active": c.runs.is_active(run.id), "inputs": run.inputs or {},
         "character_read": run.character_read, "round": run.current_round,
         "minutes": round(float((run.settings or {}).get("wall_clock_s", 3600)) / 60),
+        "mode": (run.settings or {}).get("mode", "rounds"), "min_videos": (run.settings or {}).get("min_kept"),
         "agents": [{"id": str(t.id), "role": t.task_type, "platform": t.platform,
                     "status": TASK_STATUS.get(t.state, t.state), "goal": t.goal} for t in tasks],
         "findings": counts, "satisfaction": fb and fb.satisfaction, "run_note": fb and fb.note,

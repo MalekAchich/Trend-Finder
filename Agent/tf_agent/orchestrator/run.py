@@ -56,6 +56,7 @@ from tf_db.models import (
     TasteProfile,
     Task,
     TrendCluster,
+    Video,
 )
 
 log = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ OWNER = {"id": "owner", "role": "owner", "platform": None}
 
 
 STUDY_PARALLEL = 2  # reference videos studied at once (each is downloaded and analysed)
+LEAD_CLOSENESS = 8.0  # a judged video this close to the references (of 10) leads the next lookalike round
 STUDY_DETAIL = 12  # how many reference studies the planner reads in full (the rest feed the summary)
 
 
@@ -80,17 +82,27 @@ def _top(values: list[str], n: int) -> str:
     return ", ".join(f"{k} ({c})" for k, c in sorted(counts.items(), key=lambda kv: -kv[1])[:n]) or "-"
 
 
+def _round_note(stats: dict[str, Any], kept: int, settings: "RunSettings") -> str:
+    head = (f"Round {stats['round']}: looked at {stats['seen']} videos so far ({stats['seed_creators']} creators and "
+            f"{len(stats['queries'])} searches this round, {stats['second_degree']} hit creators). ")
+    look = (f"Checked {stats['checked']} more covers: {stats['look_alike']} look like your references in all. "
+            if stats["checked"] else "")
+    return head + look + (f"Judging {stats['picked'] - stats['gems']} viral and {stats['gems']} hidden gems; "
+                          f"{kept} of {settings.min_kept} kept so far." if stats["picked"]
+                          else "Nothing new to judge.")
+
+
 def reference_lines(studies: list[dict[str, Any]]) -> list[str]:
     """The owner's reference videos for the planner: what they have in common, then the best fits in detail."""
-    lines = [f"The owner's reference videos ({len(studies)} studied; search for these formats for this character).",
+    lines = [f"The owner's reference videos ({len(studies)} studied): hand-picked by the owner as exactly what they want "
+             "for this character and viral now. Never question them; find more like them.",
              f"- trend types: {_top([str(s.get('trend_type') or '').lower() for s in studies], 8)}",
              f"- niches: {_top([str(s.get('niche') or '').lower() for s in studies], 8)}",
              f"- tags: {_top([t for s in studies for t in s.get('tags') or []], 15)}",
-             f"Best fits for this character (of {len(studies)}):"]
-    best = sorted(studies, key=lambda s: -int(s.get("fit_score") or 0))[:STUDY_DETAIL]
-    lines += [f"- [{s.get('fit_score', '?')}/10] {s.get('trend_type') or '?'} | {s.get('format')} | "
+             "Each reference:"]
+    lines += [f"- {s.get('trend_type') or '?'} | {s.get('format')} | "
               f"hook: {s.get('hook')} | why: {s.get('why_it_works')} | audio: {s.get('audio_use') or '-'} | "
-              f"angles: {', '.join(s.get('search_angles') or [])}" for s in best]
+              f"angles: {', '.join(s.get('search_angles') or [])}" for s in studies[:STUDY_DETAIL]]
     return lines
 
 
@@ -104,7 +116,9 @@ class RunSettings:
     mode: str = "lookalike"  # lookalike: videos like the owner's references (D-52); rounds: the agent-planned search
     min_score: float = 75.0  # the owner's bar: found videos scoring under it are dropped
     min_plays: int = 300_000  # lookalike: a candidate needs at least this reach to be judged
-    max_judged: int = 30  # lookalike: how many of the fastest-growing candidates the analyst looks at
+    max_judged: int = 30  # lookalike: how many candidates the analyst judges per round
+    min_kept: int = 10  # lookalike: keep going (no time limit) until this many videos pass the owner's bar
+    lookalike_rounds: int = 8  # lookalike: a safety cap only; running out of new candidates ends a run first
     rounds: int = 10  # a safety cap only: the time limit, "nothing new twice" and the target end a run first
     tasks_per_round: int = 12
     target_findings: int = 40  # good videos that end a run early
@@ -360,7 +374,8 @@ class Orchestrator:
             return await self._outcome(run_id)
         settings = RunSettings(**run.settings)
         ch = await self._character(run)
-        clock = ActiveClock(settings.wall_clock_s - settings.used_s)
+        # lookalike runs have no time limit: they end once enough videos pass the bar (or nothing new is left)
+        clock = ActiveClock(float("inf") if settings.mode == "lookalike" else settings.wall_clock_s - settings.used_s)
         weights = settings.weights or self.weights or dict(DEFAULT_WEIGHTS)
         analysis = AnalysisStage(self._sm, self.analyzer, self.roles, self.store, ch, weights,
                                  emit=self.blackboard.record_event, min_score=settings.min_score)
@@ -654,61 +669,96 @@ class Orchestrator:
     # ---------- lookalike mode ----------
     async def _lookalike(self, run: Run, settings: RunSettings, ch: LoadedCharacter, analysis: AnalysisStage,
                          clock: ActiveClock) -> str:
-        """Videos like the owner's references: deterministic discovery and a virality gate, then the analyst judges
-        only the fastest-growing few (and keeps only scores at or above the owner's bar)."""
+        """Videos like the owner's references, in rounds: discovery and the look check pick candidates, the analyst
+        judges them, and only scores at or above the owner's bar are kept. Each round goes deeper (the creators and
+        themes of the run's closest finds) until `min_kept` videos are kept or nothing new is left."""
         from tf_agent.discovery.lookalike import Gate, Lookalike
         from tf_agent.discovery.triage import Look, Triage
 
         run_id = run.id
-        if await self.queue.outstanding(run_id) == 0 and not run.inputs.get("lookalike"):
-            await self._set_state(run_id, "discovering")
-            seeds, exclude, covers = await self._lookalike_seeds(ch)
-            studies = [s for s in (run.inputs.get("trend_studies") or {}).values() if "error" not in s]
-            analysis.character = replace(ch, brief=ch.brief + "\n\n" + "\n".join(reference_lines(studies))) \
-                if studies else ch
+        if await self.queue.outstanding(run_id, ["analyze"]):  # resumed mid-judging: finish that first
+            await self._set_state(run_id, "running")
+            await self._drain(run_id, ch, settings, analysis, clock)
+        seeds, _, covers = await self._lookalike_seeds(ch)
+        studies = [s for s in (run.inputs.get("trend_studies") or {}).values() if "error" not in s]
+        analysis.character = replace(ch, brief=ch.brief + "\n\n" + "\n".join(reference_lines(studies))) \
+            if studies else ch
+        brief = analysis.character.brief
 
-            async def emit(type_: str, **payload: Any) -> None:
-                await self.blackboard.record_event(run_id, type_, payload)
+        async def emit(type_: str, **payload: Any) -> None:
+            await self.blackboard.record_event(run_id, type_, payload)
 
-            sources = self.tools.platform_tools() if hasattr(self.tools, "platform_tools") else self.tools
-            g = Gate(days=FRESHNESS_DAYS.get(settings.freshness) or 365, min_plays=settings.min_plays,
-                     max_judged=settings.max_judged)
-            brief = analysis.character.brief
+        async def judge(ref_sheet: str, sheet: str, count: int) -> dict[int, Look]:
+            result = (await self.roles.look_check(brief, ref_sheet, sheet, count, run_id=run_id)).result
+            return {v.n: Look(v.score, v.why) for v in result.verdicts if 1 <= v.n <= count}
 
-            async def judge(ref_sheet: str, sheet: str, count: int) -> dict[int, Look]:
-                result = (await self.roles.look_check(brief, ref_sheet, sheet, count, run_id=run_id)).result
-                return {v.n: Look(v.score, v.why) for v in result.verdicts if 1 <= v.n <= count}
-
-            work = Path(tempfile.mkdtemp(prefix="look-check-"))
-            try:
-                picks, stats = await Lookalike(sources, emit, g, triage=Triage(judge, work),
-                                               reference_covers=covers).discover(seeds, studies, exclude)
-            finally:
-                shutil.rmtree(work, ignore_errors=True)
-            await self.store.upsert_videos([p.item for p in picks])
-            for p in picks:
+        sources = self.tools.platform_tools() if hasattr(self.tools, "platform_tools") else self.tools
+        g = Gate(days=FRESHNESS_DAYS.get(settings.freshness) or 365, min_plays=settings.min_plays,
+                 max_judged=settings.max_judged)
+        work = Path(tempfile.mkdtemp(prefix="look-check-"))
+        rounds: list[dict[str, Any]] = list(run.inputs.get("lookalike_rounds") or [])
+        finder = Lookalike(sources, emit, g, triage=Triage(judge, work), reference_covers=covers)
+        try:
+            while True:
+                kept = await self._kept(run_id)
+                if kept >= settings.min_kept:
+                    return f"found {kept} videos at or above your bar"
+                if len(rounds) >= settings.lookalike_rounds:
+                    return f"kept {kept} after {len(rounds)} rounds (the safety cap)"
                 async with self._sm() as s:
-                    stmt = pg_insert(Finding).values(run_id=run_id, canonical_id=p.item.canonical_id, source="agent",
-                                                     why=p.why).on_conflict_do_nothing()
-                    finding_id = (await s.execute(stmt.returning(Finding.id))).scalar_one_or_none()
+                    await s.execute(update(Run).where(Run.id == run_id).values(current_round=len(rounds) + 1))
                     await s.commit()
-                if finding_id is not None:
-                    await self.queue.enqueue(run_id, None, "analyze", scope={"finding_id": str(finding_id),
-                                                                             "canonical_id": p.item.canonical_id})
-            await self._save_inputs(run_id, lookalike=stats)
-            await self.blackboard.record_event(run_id, "round.finished", {
-                "round": 1, "lookalike": stats,
-                "notes": [f"Looked at {stats['seen']} videos from {stats['seed_creators']} reference creators, "
-                          f"{len(stats['queries'])} searches and {stats['second_degree']} hit creators. "
-                          + (f"Compared {stats['checked']} covers with your references: {stats['look_alike']} look "
-                             f"alike. " if stats["checked"] else "")
-                          + f"Judging {stats['picked'] - stats['gems']} viral and {stats['gems']} hidden gems."]})
-        else:
-            analysis.character = ch
-        await self._set_state(run_id, "running", round=1)
-        if not await self._drain(run_id, ch, settings, analysis, clock):
-            return "wall clock limit reached"
-        return "lookalike search done"
+                await self._set_state(run_id, "discovering", round=len(rounds) + 1)
+                _, exclude, _ = await self._lookalike_seeds(ch)  # fresh: includes everything judged so far
+                more_creators, more_queries = await self._lookalike_leads(run_id)
+                picks, stats = await finder.discover(seeds, studies, exclude, more_creators, more_queries)
+                rounds.append(stats)
+                await self._save_inputs(run_id, lookalike=stats, lookalike_rounds=rounds)
+                await self._enqueue_picks(run_id, picks)
+                await self.blackboard.record_event(run_id, "round.finished", {
+                    "round": stats["round"], "lookalike": stats, "notes": [_round_note(stats, kept, settings)]})
+                if not picks:
+                    return (f"kept {kept}: nothing new left that looks like your references" if kept
+                            else "nothing new left that looks like your references")
+                await self._set_state(run_id, "running", round=stats["round"])
+                if not await self._drain(run_id, ch, settings, analysis, clock):
+                    return "wall clock limit reached"
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    async def _kept(self, run_id: uuid.UUID) -> int:
+        async with self._sm() as s:
+            return (await s.execute(select(func.count()).select_from(Finding).where(
+                Finding.run_id == run_id, Finding.status == "analyzed", Finding.source != "owner"))).scalar_one()
+
+    async def _enqueue_picks(self, run_id: uuid.UUID, picks: list[Any]) -> None:
+        await self.store.upsert_videos([p.item for p in picks])
+        for p in picks:
+            async with self._sm() as s:
+                stmt = pg_insert(Finding).values(run_id=run_id, canonical_id=p.item.canonical_id, source="agent",
+                                                 why=p.why).on_conflict_do_nothing()
+                finding_id = (await s.execute(stmt.returning(Finding.id))).scalar_one_or_none()
+                await s.commit()
+            if finding_id is not None:
+                await self.queue.enqueue(run_id, None, "analyze", scope={"finding_id": str(finding_id),
+                                                                         "canonical_id": p.item.canonical_id})
+
+    async def _lookalike_leads(self, run_id: uuid.UUID) -> tuple[list[tuple[str, str]], list[str]]:
+        """Where the next round digs: the creators and themes of this run's judged videos that came closest to the
+        references (closeness 8+ of 10), kept or not."""
+        async with self._sm() as s:
+            rows = (await s.execute(select(Video.platform, Video.creator_handle, FindingScore).join(
+                Finding, Finding.canonical_id == Video.canonical_id).join(
+                FindingScore, FindingScore.finding_id == Finding.id).where(
+                Finding.run_id == run_id, Finding.source != "owner", FindingScore.fit_breakdown.is_not(None)))).all()
+        close = [(p, h, sc) for p, h, sc in rows if float((sc.fit_breakdown or {}).get("niche") or 0) >= LEAD_CLOSENESS]
+        close.sort(key=lambda r: -(r[2].overall or 0))
+        creators = list(dict.fromkeys((p, h) for p, h, _ in close if h))
+        themes: list[str] = []
+        for _, _, sc in close:
+            themes += [x for x in (sc.trend_type, sc.niche_guess) if x]
+            themes += [f"ai {t}" for t in (sc.tags or [])[:3]]
+        return creators, list(dict.fromkeys(themes))[:12]
 
     async def _lookalike_seeds(self, ch: LoadedCharacter) -> tuple[list[Any], set[str], list[Path]]:
         """The owner's references and this character's targets (and their covers, for the look check); everything

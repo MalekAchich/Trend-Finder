@@ -30,7 +30,7 @@ READ = {"look": "Robot butler in a black tailcoat", "vibe": "calm and precise", 
         "possible_niches": ["household duty", "fine dining", "office life"], "kling_constraints": "full body",
         "avoid": "fast spins"}
 STUDY = {"format": "slow-motion walk-in to a beat drop", "hook": "freeze on the beat", "why_it_works": "contrast",
-         "search_angles": ["beat drop walk in"], "fit_for_character": "strong"}
+         "search_angles": ["beat drop walk in"], "adaptation": "in a bank lobby"}
 
 
 class World:

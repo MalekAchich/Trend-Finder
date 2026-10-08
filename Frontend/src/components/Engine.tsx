@@ -62,7 +62,9 @@ export function Engine({ run, stream, connected, onStop, stopping, savedStripRef
               {run.stop_reason && !live && <span className="text-mist/80">{run.stop_reason}</span>}
             </p>
           </div>
-          <span className="num text-[13px] text-mist">{clock(elapsed)} of {run.minutes} min</span>
+          <span className="num text-[13px] text-mist">{run.mode === "lookalike" && run.min_videos
+            ? `${clock(elapsed)} · ${run.findings?.analyzed ?? 0} of ${run.min_videos} videos kept`
+            : `${clock(elapsed)} of ${run.minutes} min`}</span>
           {live && !connected && <span className="text-[12px] text-warn">Reconnecting…</span>}
           <div className="ml-auto flex items-center gap-2">
             {live && state !== "curating" && (

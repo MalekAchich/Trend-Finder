@@ -1,5 +1,6 @@
 """The owner's manually chosen videos: a permanent list where each video is a reference (intel the agents study),
-a target for one character (analysed and scored in that character's next run), or both."""
+a target for one character (studied in that character's next run for how to make it), or both. The owner picked them,
+so they're never scored or judged."""
 from __future__ import annotations
 
 import io
@@ -239,20 +240,20 @@ class ManualVideos:
             cids = [m.canonical_id for m, _, _ in rows if m.canonical_id and m.target_character_id]
             scored = {}
             if cids:
-                q2 = (select(Target, FindingScore.overall).outerjoin(
+                q2 = (select(Target, FindingScore.adaptation_idea).outerjoin(
                     Finding, (Finding.run_id == Target.run_id) & (Finding.canonical_id == Target.canonical_id))
                     .outerjoin(FindingScore, FindingScore.finding_id == Finding.id)
                     .where(Target.canonical_id.in_(cids)))
-                for t, overall in (await s.execute(q2)).all():
-                    scored[(t.character_id, t.canonical_id)] = (t, overall)
+                for t, idea in (await s.execute(q2)).all():
+                    scored[(t.character_id, t.canonical_id)] = (t, idea)
         out = []
         for m, v, ch in rows:
             target = None
             if ch is not None:
-                t, overall = scored.get((ch.id, m.canonical_id), (None, None))
+                t, idea = scored.get((ch.id, m.canonical_id), (None, None))
                 target = {"slug": ch.slug, "name": ch.name,
                           "state": "analysed" if t is not None and t.status == "used" else "waiting",
-                          "run_id": str(t.run_id) if t is not None and t.run_id else None, "score": overall}
+                          "run_id": str(t.run_id) if t is not None and t.run_id else None, "adaptation": idea}
             out.append({
                 "id": str(m.id), "url": m.url, "canonical_id": m.canonical_id, "platform": m.platform,
                 "platform_id": m.canonical_id.split(":", 1)[1] if m.canonical_id else None,
@@ -261,7 +262,14 @@ class ManualVideos:
                 "views": (v.metrics or {}).get("views") if v else None,
                 "likes": (v.metrics or {}).get("likes") if v else None, "duration_s": v.duration_s if v else None,
                 "posted_at": v.posted_at.isoformat() if v and v.posted_at else None,
-                "is_reference": m.is_reference, "target": target, "study": studies.get(m.id),
+                "is_reference": m.is_reference, "target": target, "study": _no_verdict(studies.get(m.id)),
                 "added_at": m.created_at.isoformat() if m.created_at else None,
             })
         return out
+
+
+def _no_verdict(study: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Studies made before the owner's picks stopped being judged still hold a rating: never shown."""
+    if study is None:
+        return None
+    return {k: v for k, v in study.items() if k not in ("fit_score", "fit_for_character")}

@@ -155,12 +155,13 @@ async def test_references_are_studied_once_and_reused_by_later_runs(db_sessionma
     assert "The owner's reference videos (1 studied" in world.master_prompts[-1]
 
 
-def test_the_planner_gets_a_summary_and_the_best_fits():
+def test_the_planner_gets_a_summary_and_every_reference_unjudged():
     from tf_agent.orchestrator.run import STUDY_DETAIL, reference_lines
 
     studies = [{"format": f"f{i}", "trend_type": "dance" if i % 2 else "skit", "niche": "office", "tags": ["desk"],
                 "fit_score": i % 11} for i in range(30)]
     lines = reference_lines(studies)
     assert "dance (15)" in lines[1] and "skit (15)" in lines[1] and "office (30)" in lines[2]
-    detail = [ln for ln in lines if ln.startswith("- [")]
-    assert len(detail) == STUDY_DETAIL and detail[0].startswith("- [10/10]")
+    detail = lines[lines.index("Each reference:") + 1:]
+    assert len(detail) == STUDY_DETAIL and detail[0].startswith("- skit | f0")
+    assert not any("/10" in ln for ln in lines) and "Never question them" in lines[0]

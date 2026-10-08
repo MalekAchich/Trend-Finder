@@ -47,3 +47,32 @@ async def test_finds_under_the_owners_bar_are_dropped(db_sessionmaker, tmp_path)
     async with db_sessionmaker() as s:
         statuses = {f.status for f in (await s.execute(select(Finding).where(Finding.run_id == run_id))).scalars()}
     assert statuses and statuses <= {"below_bar", "filtered_feasibility", "failed"}
+
+
+async def test_a_run_keeps_digging_with_the_closest_finds_until_nothing_new_is_left(db_sessionmaker, tmp_path):
+    from tf_db.models import Run
+
+    orch, run_id, src, _ = await seeded(db_sessionmaker, tmp_path, min_score=0)  # min_kept 10, only 4 exist
+    out = await orch.execute(run_id)
+    assert out.stop_reason == "kept 4: nothing new left that looks like your references"
+    assert ("instagram_search", "ai deadpan professional") in src.calls  # round 2: the theme of the closest finds
+    assert src.calls.count(("instagram_creator", "creator_a")) == 1  # a creator is followed once per run
+    async with db_sessionmaker() as s:
+        run = await s.get(Run, run_id)
+    assert [r["round"] for r in run.inputs["lookalike_rounds"]] == [1, 2]
+
+
+async def test_a_run_ends_as_soon_as_enough_videos_pass_the_bar(db_sessionmaker, tmp_path):
+    world = World()
+    orch = await build(db_sessionmaker, tmp_path, world)
+    seed = vid(1, handle="creator_a", plays=2_000_000)
+    await orch.store.upsert_videos([seed])
+    async with db_sessionmaker() as s:
+        s.add(ManualVideo(url=seed.url, canonical_id=seed.canonical_id, platform="instagram", status="ready"))
+        await s.commit()
+    src = FakeSources()
+    orch.tools.platform_tools = lambda seen_filter=None: src
+    run_id = await orch.create_run("testy", lookalike(min_score=0, min_kept=2))
+    out = await orch.execute(run_id)
+    assert out.stop_reason == "found 4 videos at or above your bar"
+    assert not any(q == "ai deadpan professional" for _, q in src.calls)  # no second round needed

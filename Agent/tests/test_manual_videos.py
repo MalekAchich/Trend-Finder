@@ -104,14 +104,16 @@ async def test_a_used_target_shows_its_score_and_studies_show_per_character(db_s
         f = Finding(run_id=run_id, canonical_id="youtube:TestShort01", source="owner", status="analyzed")
         s.add(f)
         await s.flush()
-        s.add(FindingScore(finding_id=f.id, overall=81.4))
+        s.add(FindingScore(finding_id=f.id, adaptation_idea="walk in through a bank lobby"))
         s.add(ReferenceStudy(manual_video_id=vid, character_id=char_id,
                              study={"format": "slow walk-in", "niche": "office comedy", "tags": ["office", "deadpan"],
                                     "trend_type": "skit", "fit_score": 8}))
         await s.commit()
     (card,) = await mv.list("nicolaiz")
-    assert card["target"]["state"] == "analysed" and card["target"]["score"] == 81.4
+    assert card["target"]["state"] == "analysed" and card["target"]["adaptation"] == "walk in through a bank lobby"
+    assert "score" not in card["target"]  # the owner's picks are never scored
     assert card["study"]["niche"] == "office comedy" and card["study"]["tags"] == ["office", "deadpan"]
+    assert "fit_score" not in card["study"]  # an old study's rating is never shown
     (plain,) = await mv.list()
     assert plain["study"]["niche"] == "office comedy"  # without a character: the latest study
 

@@ -96,12 +96,11 @@ class SeedStudy(BaseModel):
     hook: str = Field(max_length=300)
     why_it_works: str = Field(max_length=500)
     search_angles: list[str] = Field(default_factory=list, max_length=8)
-    fit_for_character: str = Field(max_length=400)
+    adaptation: str = Field("", max_length=400, description="how the character would make their own version")
     niche: str = Field("", max_length=80)
     tags: list[str] = Field(default_factory=list, max_length=10, description="3-10 topic tags, lowercase, no #")
     trend_type: str = Field("", max_length=60, description="dance, skit, lip-sync, POV, transition, …")
     audio_use: str = Field("", max_length=200, description="how the sound carries it: trending song, voiceover, …")
-    fit_score: int = Field(5, ge=0, le=10, description="how well this direction suits the character")
 
 
 class LookVerdict(BaseModel):

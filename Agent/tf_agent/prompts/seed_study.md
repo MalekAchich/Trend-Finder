@@ -1,5 +1,5 @@
-<!-- version: 2 -->
-You are studying a **seed video**: an example the owner picked to show the direction they want for the character below.
+<!-- version: 3 -->
+You are studying a **reference video** the owner hand-picked for the character below. The owner chose it because it's exactly the kind of video they want and it's viral now: don't judge or rate it, learn from it.
 
 $brief
 
@@ -8,8 +8,7 @@ You receive the video's contact sheet (12 frames with timestamps) plus its metad
 - `hook`: what grabs attention in the first seconds.
 - `why_it_works`: the mechanism behind its appeal.
 - `search_angles`: 3–8 concrete search queries that would find more videos like it.
-- `fit_for_character`: how this direction fits or strains the character.
-- `fit_score`: 0–10, how well this direction suits the character (5 is average, 9–10 is rare).
+- `adaptation`: how the character would make their own version (setting, framing, twist).
 - `niche`: the content niche it belongs to, as a short label.
 - `tags`: 3–10 topic tags of your own (lowercase, no #), describing what the video is about, beyond the creator's hashtags.
 - `trend_type`: the kind of trend (for example dance, skit, lip-sync, POV, transition, reaction, challenge).

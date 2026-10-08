@@ -222,3 +222,22 @@ async def test_the_sink_refuses_old_videos_and_the_owners_own_picks(db_sessionma
     reasons = dict(rejected)
     assert accepted == ["tiktok:1", "tiktok:3"]  # fresh, and no post date known: kept
     assert "posted 40 days ago" in reasons["tiktok:2"] and "manually chosen" in reasons["tiktok:4"]
+
+
+async def test_a_repost_of_the_owners_own_pick_is_never_shown(db_sessionmaker, tmp_path):
+    from tf_db.models import ManualVideo, VideoAnalysis
+
+    frames = {"frame_hashes": ["00ff00ff00ff00ff"] * 12}
+    repost = dataclasses.replace(ok_analysis(tmp_path), fingerprint=frames)
+    run, task_id, q, stage, fa = await setup(db_sessionmaker, tmp_path, repost, [text_response("a", structured=ANALYSIS)])
+    await VideoStore(db_sessionmaker).upsert_videos([VideoItem(canonical_id="instagram:TESTREEL001", platform="instagram",
+                                                               url="https://www.instagram.com/reel/TESTREEL001/")])
+    async with db_sessionmaker() as s:
+        s.add(ManualVideo(url="https://www.instagram.com/reel/TESTREEL001/", canonical_id="instagram:TESTREEL001",
+                          platform="instagram", status="ready", is_reference=True))
+        s.add(VideoAnalysis(canonical_id="instagram:TESTREEL001", pipeline_version="1", fingerprint=frames))
+        await s.commit()
+    out = await run_one(db_sessionmaker, q, stage, run, task_id)
+    async with db_sessionmaker() as s:
+        f = (await s.execute(select(Finding))).scalar_one()
+    assert out == {"duplicate": "instagram:TESTREEL001"} and f.status == "duplicate" and fa.requests == []

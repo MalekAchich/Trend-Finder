@@ -42,6 +42,8 @@ export interface RunDetail {
   character_read: CharacterRead | null;
   round: number;
   minutes: number;
+  mode: "lookalike" | "rounds";
+  min_videos: number | null;
   agents: RunAgent[];
   findings: Record<string, number>;
   satisfaction: number | null;
@@ -97,12 +99,11 @@ export interface ReferenceStudy {
   hook?: string;
   why_it_works?: string;
   search_angles?: string[];
-  fit_for_character?: string;
+  adaptation?: string;
   niche?: string;
   tags?: string[];
   trend_type?: string;
   audio_use?: string;
-  fit_score?: number;
 }
 
 /** A video the owner chose by hand: a reference (intel), a target for one character, or both. */
@@ -122,7 +123,7 @@ export interface ManualVideo {
   duration_s: number | null;
   posted_at: string | null;
   is_reference: boolean;
-  target: { slug: string; name: string; state: "waiting" | "analysed"; run_id: string | null; score: number | null } | null;
+  target: { slug: string; name: string; state: "waiting" | "analysed"; run_id: string | null; adaptation: string | null } | null;
   study: ReferenceStudy | null;
   added_at: string | null;
 }
@@ -140,6 +141,7 @@ export interface StartRun {
   platforms: Platform[];
   freshness: "day" | "week" | "month" | "any";
   minutes: number;
+  min_videos: number;
   trend_urls: string[];
   targets: { url: string; character: string }[];
 }

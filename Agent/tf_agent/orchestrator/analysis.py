@@ -19,7 +19,9 @@ from tf_agent.orchestrator.queue import Requeue, TaskQueue
 from tf_agent.pipeline.result import VideoAnalysisResult
 from tf_agent.roles.runners import RoleOutputError, Roles
 from tf_agent.roles.schemas import Candidate
+from tf_agent.curation.cluster import HASH_ONLY_THRESHOLD
 from tf_agent.pipeline.feasibility import SOFT_REASONS
+from tf_agent.pipeline.fingerprint import hash_distance
 from tf_agent.scoring.subscores import DEFAULT_WEIGHTS, freshness, momentum, overall, peer_stats
 from tf_agent.tools.store import VideoStore
 from tf_agent.tools.types import CANONICAL_ID_PATTERN, VideoItem
@@ -116,6 +118,7 @@ class AnalysisStage:
         self._peers: dict[str, tuple[float, list[float], list[float]]] = {}
         # one scoring model per run, so every score in it is on the same scale; it may move once, at a usage limit
         self.analyst_provider: str | None = None
+        self._known: list[tuple[str, list[str]]] | None = None  # fingerprints of what the owner has already seen
         self._analyst_moved = False
 
     async def _peer(self, platform: str) -> tuple[list[float], list[float]]:
@@ -172,6 +175,10 @@ class AnalysisStage:
             return {"error": f"analysis crashed: {type(e).__name__}: {e}"[:300]}
         async with self._sm() as s:
             owner = (await s.get(Finding, finding_id)).source == "owner"
+        if not owner and (copy := await self._repost_of(task.run_id, cid, analysis)) is not None:
+            await self._status(finding_id, "duplicate")
+            await self._finished(task, cid, "filtered", item.platform, f"already seen: a repost of {copy}")
+            return {"duplicate": copy}
         # a pose measurement never throws a video out (the analyst sees it, and it costs feasibility); the owner's own
         # targets are never thrown out by any measurement
         hard = analysis.filtered_reason and analysis.filtered_reason not in SOFT_REASONS
@@ -200,10 +207,13 @@ class AnalysisStage:
         sub = {"fit": judged.result.fit, "feasibility": analysis.feasibility,
                "momentum": momentum(item.views_per_hour(now), item.engagement_rate(), vph_peers, eng_peers),
                "freshness": freshness(item.age_hours(now))}
-        score = overall(sub, self.weights)
         r = judged.result
+        if owner:  # the owner's own pick is never scored or judged: only how to make it with the character is kept
+            sub = {k: None for k in sub}
+        score = overall(sub, self.weights)
         await self._save_score(finding_id, {
-            **sub, "overall": score, "fit_breakdown": r.fit_breakdown.model_dump(), "fit_justification": r.justification,
+            **sub, "overall": score, "fit_breakdown": None if owner else r.fit_breakdown.model_dump(),
+            "fit_justification": None if owner else r.justification,
             "adaptation_idea": r.adaptation_idea,
             "feasibility_notes": (f"Measured: {analysis.filtered_reason.replace('_', ' ')}. " if analysis.filtered_reason
                                   else "") + r.feasibility_notes,
@@ -218,6 +228,24 @@ class AnalysisStage:
         await self._status(finding_id, "analyzed")
         await self._saved(task, finding_id, item.platform)
         return {"overall": score, "fit": sub["fit"], "provider": judged.provider}
+
+    async def _repost_of(self, run_id: uuid.UUID, cid: str, analysis: VideoAnalysisResult) -> str | None:
+        """A repost (another upload of the same frames) of one of the owner's picks or of a video an earlier run
+        already found or judged for this character: never shown twice."""
+        hashes = (analysis.fingerprint or {}).get("frame_hashes") or []
+        if not hashes:
+            return None
+        if self._known is None:
+            async with self._sm() as s:
+                earlier = select(Finding.canonical_id).join(Run, Run.id == Finding.run_id).where(
+                    Run.character_id == self.character.character_id, Finding.run_id != run_id,
+                    Finding.status.in_(["analyzed", "below_bar"]))
+                mine = select(ManualVideo.canonical_id).where(ManualVideo.canonical_id.is_not(None))
+                rows = (await s.execute(select(VideoAnalysis.canonical_id, VideoAnalysis.fingerprint).where(
+                    VideoAnalysis.canonical_id.in_(earlier.union(mine)), VideoAnalysis.canonical_id != cid))).all()
+            self._known = [(c, (fp or {}).get("frame_hashes") or []) for c, fp in rows]
+        return next((c for c, h in self._known if h and c != cid and hash_distance(hashes, h) < HASH_ONLY_THRESHOLD),
+                    None)
 
     async def _judge(self, task: Task, item: VideoItem, analysis: VideoAnalysisResult) -> Any:
         async def ask() -> Any:
