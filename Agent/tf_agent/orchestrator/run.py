@@ -97,16 +97,16 @@ class InputError(ValueError):
 @dataclass
 class RunSettings:
     platforms: list[str] = field(default_factory=lambda: ["tiktok", "youtube", "instagram"])
-    rounds: int = 3
+    rounds: int = 10  # a safety cap only: the time limit, "nothing new twice" and the target end a run first
     tasks_per_round: int = 12
-    target_findings: int = 20
+    target_findings: int = 40  # good videos that end a run early
     good_score: float = 60.0
     wall_clock_s: float = 3600.0
     workers: int = 8
     analysis_workers: int = 3
     max_candidates: int = 6
     weights: dict[str, float] | None = None  # fixed at creation so a resumed run never mixes weights
-    freshness: str = "week"  # how recent searched videos must be: day | week | month | any
+    freshness: str = "month"  # when found videos must be posted: day | week | month | any (enforced on post dates)
     trend_urls: list[str] = field(default_factory=list)  # trending AI-influencer videos to study first
     targets: list[dict[str, str]] = field(default_factory=list)  # [{url, character}] videos the owner found
     used_s: float = 0.0  # active seconds already spent (downtime and usage pauses don't count)
@@ -197,6 +197,7 @@ class Orchestrator:
         self.queue = TaskQueue(sessionmaker)
         self.sink = CandidateSink(sessionmaker, self.queue)
         self._providers = itertools.cycle(list(roles.client.adapters) or [None])
+        self._switches_shown: set[tuple[Any, str, str]] = set()
         if getattr(roles.client, "on_switch", "absent") is None:
             roles.client.on_switch = self._on_switch
         if getattr(roles.client, "on_refused", "absent") is None:
@@ -213,6 +214,10 @@ class Orchestrator:
     async def _on_switch(self, ctx: Any, from_provider: str, to_provider: str, reason: str) -> None:
         if ctx.run_id is None:
             return
+        key = (ctx.run_id, from_provider, to_provider)
+        if key in self._switches_shown:  # once per run and pair: the stream says it, it doesn't repeat it
+            return
+        self._switches_shown.add(key)
         agent = {"id": str(ctx.task_id) if ctx.task_id else ctx.role, "role": ctx.role, "platform": None}
         await self.blackboard.record_event(ctx.run_id, "provider.switched", {
             "agent": agent, "from": from_provider, "to": to_provider, "reason": (reason or "")[:200]})

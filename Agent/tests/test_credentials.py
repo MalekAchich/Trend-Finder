@@ -65,3 +65,9 @@ def test_every_session_platform_has_a_login_cookie():
 
 def test_netscape_http_only_cookies_keep_their_prefix_free_format():
     assert netscape_cookies([]) == "# Netscape HTTP Cookie File\n"
+
+
+def test_platforms_without_an_account_simply_have_no_cookies(tmp_path):
+    """yt-dlp asks for every platform's cookies before a download: YouTube has no scraping account (run 1 bug)."""
+    c = Credentials(tmp_path / "secrets")
+    assert c.cookies_file("youtube") is None and c.cookies_file("web") is None and not c.has_session("youtube")

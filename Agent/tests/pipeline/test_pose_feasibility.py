@@ -21,10 +21,15 @@ def test_feasibility_formula():
     (stats(spr=0.0, people=[0] * 6), (0.0, 4.0), "no_person"),
     (stats(spr=0.3, people=[2] * 6), (0.0, 4.0), "multiple_people"),
     (stats(bv=0.3), (0.0, 4.0), "body_not_visible"),
-    (stats(), None, "no_clean_segment"),
 ])
 def test_hard_filters(st, segment, reason):
     assert feasibility(st, camera_motion=0.0, cut_rate=0.0, best_segment=segment)[1] == reason
+
+
+def test_no_clean_segment_costs_score_but_keeps_the_video():
+    clean, _ = feasibility(stats(), camera_motion=0.0, cut_rate=0.0, best_segment=(0.0, 4.0))
+    score, reason = feasibility(stats(), camera_motion=0.0, cut_rate=0.0, best_segment=None)
+    assert reason is None and score == pytest.approx(clean * 0.75)
 
 
 def test_clean_segments_break_on_cuts_and_unclean_frames():

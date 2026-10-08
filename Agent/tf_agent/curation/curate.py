@@ -52,7 +52,8 @@ class Curator:
                 .join(Video, Video.canonical_id == Finding.canonical_id)
                 .outerjoin(VideoAnalysis, (VideoAnalysis.canonical_id == Finding.canonical_id)
                            & (VideoAnalysis.pipeline_version == PIPELINE_VERSION))
-                .where(Finding.run_id == run_id, Finding.status == "analyzed"))).all())
+                .where(Finding.run_id == run_id, Finding.status == "analyzed",
+                       Finding.source != "owner"))).all())  # the owner's targets show on their own cards
 
     async def _save_score(self, finding_id: uuid.UUID, **values: Any) -> None:
         async with self._sm() as s:

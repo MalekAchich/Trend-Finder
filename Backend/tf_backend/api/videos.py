@@ -40,7 +40,7 @@ async def videos_for_run(s: AsyncSession, rid: uuid.UUID) -> list[dict[str, Any]
         .outerjoin(FindingScore, FindingScore.finding_id == Finding.id)
         .outerjoin(a, a.c.canonical_id == Finding.canonical_id)
         .outerjoin(CardFeedback, CardFeedback.cluster_id == TrendCluster.id)
-        .where(TrendCluster.run_id == rid).order_by(TrendCluster.rank))).all()
+        .where(TrendCluster.run_id == rid, Finding.source != "owner").order_by(TrendCluster.rank))).all()
     if curated:
         return [found_video(f, sc, v, _Analysis(thumb, seg), cluster_id=cl.id, feedback=fb)
                 for cl, f, sc, v, thumb, seg, fb in curated]
@@ -49,7 +49,7 @@ async def videos_for_run(s: AsyncSession, rid: uuid.UUID) -> list[dict[str, Any]
         .join(FindingScore, FindingScore.finding_id == Finding.id)
         .join(Video, Video.canonical_id == Finding.canonical_id)
         .outerjoin(a, a.c.canonical_id == Finding.canonical_id)
-        .where(Finding.run_id == rid, Finding.status == "analyzed")
+        .where(Finding.run_id == rid, Finding.status == "analyzed", Finding.source != "owner")
         .order_by(FindingScore.overall.desc().nulls_last()))).all()
     return [found_video(f, sc, v, _Analysis(thumb, seg)) for f, sc, v, thumb, seg in live]
 

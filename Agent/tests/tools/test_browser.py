@@ -177,3 +177,18 @@ async def test_the_login_is_saved_while_firefox_is_still_open(tmp_path, monkeypa
     assert creds.has_session("tiktok_one") and not task.done()  # saved before Firefox closed
     assert "close Firefox" in b.connecting["tiktok_one"]["message"]
     await task
+
+
+async def test_pages_on_one_platform_are_spaced_apart(tmp_path, monkeypatch):
+    import time as _time
+
+    from tf_agent.tools import browser as br
+
+    monkeypatch.setattr(br, "PAGE_GAP_S", 0.3)
+    monkeypatch.setattr(br, "PAGE_JITTER_S", 0.0)
+    b = BrowserSessions(Credentials(tmp_path / "secrets"))
+    t0 = _time.monotonic()
+    await b._pace("tiktok")
+    await b._pace("tiktok")
+    await b._pace("instagram")  # other platforms aren't held back
+    assert 0.28 <= _time.monotonic() - t0 < 0.5

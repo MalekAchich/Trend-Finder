@@ -30,7 +30,7 @@ export function Composer({ characters, selected, onSelect, running, starting, er
   const refs = saved.filter((v) => v.is_reference);
   const targets = saved.filter((v) => v.target);
   const [platforms, setPlatforms] = useState<Platform[]>(["tiktok", "instagram", "youtube"]);
-  const [freshness, setFreshness] = useState<StartRun["freshness"]>("week");
+  const [freshness, setFreshness] = useState<StartRun["freshness"]>("month");
   const [minutes, setMinutes] = useState(60);
   const [localError, setLocalError] = useState<string | null>(null);
   const name = characters.find((c) => c.slug === selected)?.name;

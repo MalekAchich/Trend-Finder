@@ -264,16 +264,21 @@ async def _execute(runtime, run_id) -> None:
     await _print_trends(runtime.services.sessionmaker, run_id, 10)
 
 
+from tf_agent.orchestrator.run import RunSettings as _RunSettings  # noqa: E402
+
+_DEFAULT = _RunSettings()
+
+
 @app.command()
 def run(
     slug: str = typer.Argument(..., help="character slug (folder name, lower-case), e.g. nicolaiz"),
-    rounds: int = typer.Option(3, min=1, max=10),
-    tasks: int = typer.Option(12, min=1, max=16, help="tasks per round"),
-    target: int = typer.Option(20, min=1, help="stop once this many findings score ≥ --good"),
-    good: float = typer.Option(60.0, help="score that counts toward the target"),
-    platforms: str = typer.Option("tiktok,youtube,instagram"),
-    freshness: str = typer.Option("week", help="how recent videos must be: day, week, month or any"),
-    minutes: float = typer.Option(60.0, help="wall-clock limit"),
+    rounds: int = typer.Option(_DEFAULT.rounds, min=1, max=20, help="safety cap on rounds"),
+    tasks: int = typer.Option(_DEFAULT.tasks_per_round, min=1, max=16, help="tasks per round"),
+    target: int = typer.Option(_DEFAULT.target_findings, min=1, help="stop once this many findings score ≥ --good"),
+    good: float = typer.Option(_DEFAULT.good_score, help="score that counts toward the target"),
+    platforms: str = typer.Option(",".join(_DEFAULT.platforms)),
+    freshness: str = typer.Option(_DEFAULT.freshness, help="when videos must be posted: day, week, month or any"),
+    minutes: float = typer.Option(_DEFAULT.wall_clock_s / 60, help="wall-clock limit"),
     workers: int = typer.Option(8, min=1, max=16),
     trend_url: list[str] = typer.Option([], "--trend-url", help="a trending AI-influencer video to study (repeat)"),
     target_url: list[str] = typer.Option([], "--target", help="a video you found: URL or URL=character (repeat)"),

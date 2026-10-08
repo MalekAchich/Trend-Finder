@@ -161,7 +161,10 @@ async def test_switch_hook_reports_fallback():
     client.on_switch = on_switch
     assert (await client.complete(req(), CTX)).text == "from b"
     assert switches == [("scout", "a", "b", "5-hour limit reached")]
-    assert (await client.complete(req(), CTX)).provider == "b" and len(switches) == 1  # a is cooling: no switch
+    # a is cooling: it's skipped before being called, and that is reported too (run 1 switched silently);
+    # the orchestrator shows each pair once per run
+    assert (await client.complete(req(), CTX)).provider == "b"
+    assert switches[1][:3] == ("scout", "a", "b") and "usage limit" in switches[1][3]
 
 
 async def test_refusal_is_reported_and_logged_not_handed_to_another_provider(tmp_path):

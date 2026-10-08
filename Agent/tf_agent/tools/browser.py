@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import re
 import shutil
 import sqlite3
@@ -24,6 +25,9 @@ from tf_agent.tools.types import ToolFailure
 
 log = logging.getLogger(__name__)
 LOGIN_TIMEOUT_S = 600
+STEALTH_ARGS = ["--disable-blink-features=AutomationControlled"]  # no automation banner / navigator.webdriver
+HIDE_WEBDRIVER = "Object.defineProperty(Navigator.prototype, 'webdriver', {get: () => undefined})"
+PAGE_GAP_S, PAGE_JITTER_S = 4.0, 3.0
 LOGIN_URL_RE = re.compile(r"/login|/accounts/login|/i/flow/login|/signup", re.IGNORECASE)
 
 
@@ -118,6 +122,10 @@ class BrowserSessions:
         self._ua: str | None = None
         self._start = asyncio.Lock()
         self._pages = asyncio.Semaphore(max_pages)
+        self._platform_locks: dict[str, asyncio.Lock] = {}
+        self._last_page: dict[str, float] = {}
+        self._xvfb: Any = None
+        self._display: str | None = None
         self.connecting: dict[str, dict[str, str]] = {}  # platform -> {state: waiting|connected|failed, message}
 
     async def _playwright(self) -> Any:
@@ -129,23 +137,63 @@ class BrowserSessions:
             return self._pw
 
     async def _headless(self) -> Any:
+        """The browser for searches: a real (headed) Chromium on an invisible virtual screen when Xvfb is installed
+        (sites tell headless browsers apart and answer with bot checks), otherwise Chromium's new headless mode."""
         pw = await self._playwright()
         async with self._start:
             if self._browser is None or not self._browser.is_connected():
-                # the full Chromium in its new headless mode: closer to a real browser than the headless shell
-                self._browser = await pw.chromium.launch(headless=True, channel="chromium")
+                display = await self._virtual_display()
+                if display is not None:
+                    self._browser = await pw.chromium.launch(headless=False, channel="chromium", args=STEALTH_ARGS,
+                                                             env={**os.environ, "DISPLAY": display})
+                else:
+                    self._browser = await pw.chromium.launch(headless=True, channel="chromium", args=STEALTH_ARGS)
                 # its own identity, minus the "Headless" marker that sites answer with 403 (version stays real)
                 probe = await self._browser.new_page()
                 self._ua = (await probe.evaluate("navigator.userAgent")).replace("HeadlessChrome", "Chrome")
                 await probe.close()
             return self._browser
 
+    async def _virtual_display(self) -> str | None:
+        """Starts Xvfb on a free display number (an X screen nobody sees). None when Xvfb isn't installed."""
+        if self._xvfb is not None and self._xvfb.returncode is None:
+            return self._display
+        xvfb = shutil.which("Xvfb")
+        if xvfb is None:
+            return None
+        for n in range(99, 140):
+            if Path(f"/tmp/.X11-unix/X{n}").exists() or Path(f"/tmp/.X{n}-lock").exists():
+                continue
+            proc = await asyncio.create_subprocess_exec(xvfb, f":{n}", "-screen", "0", "1366x900x24", "-nolisten", "tcp",
+                                                        stdout=asyncio.subprocess.DEVNULL,
+                                                        stderr=asyncio.subprocess.DEVNULL)
+            for _ in range(30):  # wait for its socket
+                if Path(f"/tmp/.X11-unix/X{n}").exists():
+                    self._xvfb, self._display = proc, f":{n}"
+                    return self._display
+                if proc.returncode is not None:
+                    break
+                await asyncio.sleep(0.1)
+            if proc.returncode is None:
+                proc.terminate()
+        return None
+
+    async def _pace(self, platform: str) -> None:
+        """One page at a time per platform, a few seconds apart: a burst of searches from one account is a bot."""
+        gap = PAGE_GAP_S + random.uniform(0, PAGE_JITTER_S)
+        wait = self._last_page.get(platform, 0.0) + gap - time.monotonic()
+        if wait > 0:
+            await asyncio.sleep(wait)
+        self._last_page[platform] = time.monotonic()
+
     async def close(self) -> None:
         if self._browser is not None:
             await self._browser.close()
         if self._pw is not None:
             await self._pw.stop()
-        self._browser = self._pw = None
+        if self._xvfb is not None and self._xvfb.returncode is None:
+            self._xvfb.terminate()
+        self._browser = self._pw = self._xvfb = None
 
     # ---- logins ----
     async def _connect_firefox(self, platform: str, spec: SessionSpec, timeout_s: float, poll_s: float = 3.0) -> None:
@@ -247,10 +295,13 @@ class BrowserSessions:
             raise ToolFailure("login_required", f"{platform}: no scraping account connected "
                                                 "(Settings, Accounts & keys)")
         state = str(self.creds.state_file(platform)) if has else None
-        async with self._pages:
+        lock = self._platform_locks.setdefault(platform, asyncio.Lock())
+        async with lock, self._pages:
+            await self._pace(platform)
             browser = await self._headless()
             ctx = await browser.new_context(storage_state=state, locale="en-US", user_agent=self._ua,
                                             viewport={"width": 1280, "height": 900})
+            await ctx.add_init_script(HIDE_WEBDRIVER)
             try:
                 page = await ctx.new_page()
                 found: list[Any] = []

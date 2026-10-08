@@ -11,6 +11,7 @@ from tf_agent.learning.learner import Learner
 from tf_agent.models.fake import FakeAdapter
 from tf_agent.orchestrator.blackboard import Blackboard
 from tf_agent.orchestrator.run import InputError, RunSettings
+from tf_agent.pipeline import PIPELINE_VERSION
 from tf_agent.roles.runners import Roles
 from tf_agent.testing import make_client
 from tf_backend.app_context import AppContext
@@ -114,7 +115,7 @@ async def a_run(http, ctx, state="running"):
         s.add(Video(canonical_id="tiktok:1", platform="tiktok", url="https://www.tiktok.com/@u/video/1",
                     creator_handle="u", metrics={"views": 1000}))
         await s.flush()
-        s.add(VideoAnalysis(canonical_id="tiktok:1", pipeline_version="1",
+        s.add(VideoAnalysis(canonical_id="tiktok:1", pipeline_version=PIPELINE_VERSION,
                             thumbnail_path=str(ctx.media_dir / "thumbs" / "tiktok_1.jpg"),
                             best_clean_segment={"start_s": 0, "end_s": 9}, feasibility=80))
         f = Finding(run_id=run_id, canonical_id="tiktok:1", status="analyzed", why="fits")
@@ -214,7 +215,7 @@ async def test_videos_live_then_curated_and_rated(http, ctx):
     assert (await http.get(f"/api/runs/{run_id}/videos")).json()[0]["feedback"] is None
     assert (await http.put(f"/api/videos/{uuid.uuid4()}/feedback", json={"rating": "up"})).status_code == 404
     assert (await http.put(f"/api/videos/{cluster_id}/feedback", json={"rating": "skip"})).status_code == 422
-    assert (await http.get(f"/api/media/thumbs/tiktok_1.jpg")).status_code == 200
+    assert (await http.get("/api/media/thumbs/tiktok_1.jpg")).status_code == 200
 
 
 async def test_run_score_only_after_it_ended(http, ctx):

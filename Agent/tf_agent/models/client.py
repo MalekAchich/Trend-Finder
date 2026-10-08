@@ -136,9 +136,22 @@ class ModelClient:
                        prefer: str | None = None) -> CompletionResponse:
         last_error: Exception | None = None
         failed_from: str | None = None
+        skipped: str | None = None  # a provider passed over because it's at its usage limit (no call made)
         for cand in self.router.candidates(ctx.role, only=only, prefer=prefer):
-            if cand.provider not in self.adapters or not self.governor.available(cand.provider):
+            if cand.provider not in self.adapters:
                 continue
+            if not self.governor.available(cand.provider):
+                if skipped is None and failed_from is None:
+                    skipped = cand.provider
+                continue
+            if skipped is not None and failed_from is None and self.on_switch is not None:
+                st = self.governor.status(skipped)
+                try:
+                    await self.on_switch(ctx, skipped, cand.provider,
+                                         f"{skipped} is at its usage limit ({st.last_error or st.status})")
+                except Exception as e:  # narration must never break a model call
+                    log.warning("switch hook failed: %s", e)
+                skipped = None
             if failed_from is not None and failed_from != cand.provider and self.on_switch is not None:
                 try:
                     await self.on_switch(ctx, failed_from, cand.provider, getattr(last_error, "message", None)

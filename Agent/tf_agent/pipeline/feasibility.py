@@ -6,6 +6,10 @@ from tf_agent.pipeline.pose import PoseStats
 MIN_SINGLE_PERSON = 0.5
 MIN_BODY_VISIBILITY = 0.4
 MAX_CLEAN_MOTION = 0.5
+# No clean stretch (cuts, handheld camera): harder for motion transfer, but edited memes and handheld vlogs are often
+# exactly the trend, so it costs score instead of rejecting the video (run 1 lost 17 videos to it, 5 of them the
+# owner's own targets).
+NO_CLEAN_SEGMENT_FACTOR = 0.75
 
 
 def clean_segments(times: list[float], single: list[bool], cuts: list[float], motion: list[float],
@@ -46,6 +50,6 @@ def feasibility(stats: PoseStats, camera_motion: float, cut_rate: float,
         reason = "no_person" if max(stats.per_frame_people, default=0) == 0 else "multiple_people"
     elif stats.body_visibility < MIN_BODY_VISIBILITY:
         reason = "body_not_visible"
-    elif best_segment is None:
-        reason = "no_clean_segment"
+    if best_segment is None:
+        score *= NO_CLEAN_SEGMENT_FACTOR
     return round(score, 2), reason

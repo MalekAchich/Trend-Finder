@@ -108,7 +108,7 @@ async def character_runs(slug: str, c: AppContext = Depends(ctx)) -> list[dict[s
             clusters = (await s.execute(select(func.count()).select_from(TrendCluster).where(
                 TrendCluster.run_id == r.id))).scalar_one()
             videos = clusters or (await s.execute(select(func.count()).select_from(Finding).where(
-                Finding.run_id == r.id, Finding.status == "analyzed"))).scalar_one()
+                Finding.run_id == r.id, Finding.status == "analyzed", Finding.source != "owner"))).scalar_one()
             out.append({"id": str(r.id), "state": r.state, "stop_reason": r.stop_reason, "started_at": r.started_at,
                         "finished_at": r.finished_at, "videos": videos, "satisfaction": satisfaction,
                         "active": c.runs.is_active(r.id)})

@@ -32,7 +32,7 @@ class RunIn(BaseModel):
     character: str = Field(min_length=1, max_length=64)
     platforms: list[Literal["tiktok", "instagram", "youtube", "x"]] = Field(
         default_factory=lambda: ["tiktok", "youtube", "instagram"], min_length=1)
-    freshness: Literal["day", "week", "month", "any"] = "week"
+    freshness: Literal["day", "week", "month", "any"] = "month"
     minutes: float = Field(60.0, ge=5, le=600)
     trend_urls: list[str] = Field(default_factory=list, max_length=20)
     targets: list[TargetIn] = Field(default_factory=list, max_length=20)
@@ -98,7 +98,7 @@ async def list_runs(character: str | None = None, limit: int = Query(100, ge=1, 
             clusters = (await s.execute(select(func.count()).select_from(TrendCluster).where(
                 TrendCluster.run_id == run.id))).scalar_one()
             videos = clusters or (await s.execute(select(func.count()).select_from(Finding).where(
-                Finding.run_id == run.id, Finding.status == "analyzed"))).scalar_one()
+                Finding.run_id == run.id, Finding.status == "analyzed", Finding.source != "owner"))).scalar_one()
             out.append({"id": str(run.id), "character": await character_card(c, ch), "state": run.state,
                         "stop_reason": run.stop_reason, "started_at": run.started_at, "finished_at": run.finished_at,
                         "videos": videos, "satisfaction": satisfaction, "tokens": int(t or 0),

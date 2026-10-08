@@ -1,12 +1,12 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-import pytest
 from sqlalchemy import select
 
 from tf_agent.curation.cluster import Member, best_source, cluster_members
 from tf_agent.curation.curate import Curator
 from tf_agent.models.fake import FakeAdapter, text_response
+from tf_agent.pipeline import PIPELINE_VERSION
 from tf_agent.roles.runners import Roles
 from tf_agent.testing import create_test_run, make_client
 from tf_db.models import Finding, FindingScore, TrendCluster, TrendMember, Video, VideoAnalysis
@@ -42,7 +42,7 @@ async def add_finding(sm, run_id, task_id, cid, hashes, fit, overall, sound=None
         s.add(Video(canonical_id=cid, platform="tiktok", url=f"https://www.tiktok.com/@u/video/{cid[7:]}",
                     sound_id=sound, posted_at=now - timedelta(hours=10), metrics={"views": 1000}, metrics_at=now))
         await s.flush()
-        s.add(VideoAnalysis(canonical_id=cid, pipeline_version="1", feasibility=feas, probe={"height": 1280},
+        s.add(VideoAnalysis(canonical_id=cid, pipeline_version=PIPELINE_VERSION, feasibility=feas, probe={"height": 1280},
                             fingerprint={"frame_hashes": hashes}, contact_sheet_path=sheet))
         f = Finding(run_id=run_id, task_id=task_id, canonical_id=cid, status="analyzed")
         s.add(f)

@@ -48,6 +48,7 @@ async def test_search_returns_shorts_with_full_stats():
     assert set(it.hashtags) == {"dance", "office", "deadpan"} and it.creator.handle == "some guy"
     q = seen[0].params
     assert q["videoDuration"] == "short" and q["type"] == "video" and q["publishedAfter"] == "2026-10-01T00:00:00Z"
+    assert q["order"] == "relevance"  # viewCount + publishedAfter returns nothing on the real API
     assert quota.used == 101
 
 

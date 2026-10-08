@@ -115,9 +115,13 @@ class Credentials:
         return self.session_dir(platform) / "state.json"
 
     def has_session(self, platform: str) -> bool:
-        return self.state_file(platform).is_file()
+        return platform in SESSIONS and self.state_file(platform).is_file()
 
     def cookies_file(self, platform: str) -> Path | None:
+        """The account's cookies.txt; None for a platform without one (never an error: yt-dlp asks for every
+        platform, YouTube included)."""
+        if platform not in SESSIONS:
+            return None
         f = self.session_dir(platform) / "cookies.txt"
         return f if f.is_file() else None
 

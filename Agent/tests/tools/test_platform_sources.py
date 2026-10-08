@@ -126,3 +126,13 @@ async def test_trend_failures_never_pause_tiktok_search(tmp_path):
         with pytest.raises(ToolFailure):
             await pt.tiktok_trends("hashtags")
     assert pt.registry.health("tiktok_trends") == "unavailable" and pt.registry.health("tiktok") == "ok"
+
+
+
+async def test_an_empty_api_answer_falls_back_to_the_search_page(tmp_path):
+    from .test_platforms import item as mk
+
+    pt, _ = make(tmp_path, yt_api=FakeYouTubeApi([]))
+    pt.ytdlp.yt = [mk("youtube:BBBBBBBBBB1", platform="youtube")]
+    res = await pt.shorts_search("rare words", 5)
+    assert [i.canonical_id for i in res.items] == ["youtube:BBBBBBBBBB1"] and "found nothing" in res.notes[0]

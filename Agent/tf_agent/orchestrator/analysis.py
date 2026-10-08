@@ -5,7 +5,7 @@ import logging
 import re
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
@@ -22,13 +22,16 @@ from tf_agent.roles.schemas import Candidate
 from tf_agent.scoring.subscores import DEFAULT_WEIGHTS, freshness, momentum, overall, peer_stats
 from tf_agent.tools.store import VideoStore
 from tf_agent.tools.types import CANONICAL_ID_PATTERN, VideoItem
-from tf_db.models import Finding, FindingScore, Task, Video, VideoAnalysis
+from tf_db.models import Finding, FindingScore, ManualVideo, Run, Task, Video, VideoAnalysis
 
 Emit = Callable[[uuid.UUID, str, dict[str, Any]], Awaitable[Any]]
 
 log = logging.getLogger(__name__)
 _CID_RE = re.compile(CANONICAL_ID_PATTERN)
 PEERS_TTL_S = 600
+
+
+FRESHNESS_DAYS = {"day": 1, "week": 7, "month": 31, "any": None}  # the run's "posted within" window
 
 
 class CandidateSink:
@@ -42,14 +45,27 @@ class CandidateSink:
                      candidates: list[Candidate]) -> tuple[list[str], list[tuple[str, str]]]:
         accepted: list[str] = []
         rejected: list[tuple[str, str]] = []
+        async with self._sm() as s:
+            run = await s.get(Run, run_id)
+            window = FRESHNESS_DAYS.get(((run.settings or {}) if run else {}).get("freshness") or "any")
+        oldest = datetime.now(UTC) - timedelta(days=window) if window else None
         for c in candidates:
             cid = c.canonical_id.strip()
             if not _CID_RE.match(cid):
                 rejected.append((cid, "not a canonical id"))
                 continue
             async with self._sm() as s:
-                if await s.get(Video, cid) is None:
+                video = await s.get(Video, cid)
+                if video is None:
                     rejected.append((cid, "unknown video: not returned by any tool"))
+                    continue
+                if (await s.execute(select(ManualVideo.id).where(ManualVideo.canonical_id == cid))).first():
+                    rejected.append((cid, "already in the owner's manually chosen videos: find new ones"))
+                    continue
+                if oldest is not None and video.posted_at is not None and video.posted_at < oldest:
+                    age = (datetime.now(UTC) - video.posted_at).days
+                    rejected.append((cid, f"posted {age} days ago: this run only wants videos from the last "
+                                          f"{window} days"))
                     continue
                 stmt = pg_insert(Finding).values(run_id=run_id, task_id=task_id, canonical_id=cid,
                                                  direction_id=direction_id, why=c.why,
@@ -152,7 +168,10 @@ class AnalysisStage:
             await self._status(finding_id, "failed")
             await self._finished(task, cid, "failed", item.platform, f"analysis crashed: {type(e).__name__}")
             return {"error": f"analysis crashed: {type(e).__name__}: {e}"[:300]}
-        if analysis.filtered_reason or not analysis.contact_sheet_path:
+        async with self._sm() as s:
+            owner = (await s.get(Finding, finding_id)).source == "owner"
+        # the owner's own targets are never thrown out by a measurement: they're judged, with the issue as a warning
+        if not analysis.contact_sheet_path or (analysis.filtered_reason and not owner):
             await self._save_score(finding_id, {"feasibility": analysis.feasibility})
             await self._status(finding_id, "filtered_feasibility")
             reason = analysis.filtered_reason or "no_contact_sheet"
@@ -181,7 +200,9 @@ class AnalysisStage:
         r = judged.result
         await self._save_score(finding_id, {
             **sub, "overall": score, "fit_breakdown": r.fit_breakdown.model_dump(), "fit_justification": r.justification,
-            "adaptation_idea": r.adaptation_idea, "feasibility_notes": r.feasibility_notes,
+            "adaptation_idea": r.adaptation_idea,
+            "feasibility_notes": (f"Measured: {analysis.filtered_reason.replace('_', ' ')}. " if analysis.filtered_reason
+                                  else "") + r.feasibility_notes,
             "niche_guess": r.niche_guess, "tags": [t.strip().lstrip("#").lower() for t in r.tags if t.strip()][:10],
             "trend_type": r.trend_type or None, "audio_use": r.audio_use or None,
             "analyst_provider": judged.provider, "analyst_model": judged.model})

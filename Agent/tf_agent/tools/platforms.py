@@ -309,9 +309,11 @@ class PlatformTools:
             except ToolFailure as e:
                 notes.append(f"YouTube API unavailable ({e.error.message}); used the search page instead")
             else:
-                kept, hidden = await self._filter_seen(found)
-                notes.append("from the YouTube Data API")
-                return await self._finish("youtube", kept[:max_results], hidden, notes)
+                if found:
+                    kept, hidden = await self._filter_seen(found)
+                    notes.append("from the YouTube Data API")
+                    return await self._finish("youtube", kept[:max_results], hidden, notes)
+                notes.append("the YouTube Data API found nothing for this; tried the search page too")
         merged: dict[str, VideoItem] = {}
         failures: list[ToolFailure] = []
         try:

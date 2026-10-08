@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from tf_agent.models.errors import UsageLimited
 from tf_agent.models.fake import FakeAdapter, text_response
@@ -163,3 +163,49 @@ async def test_the_scoring_model_moves_once_when_it_hits_its_limit(db_sessionmak
     switched = [p for t, p in events if t == "provider.switched"]
     assert len(switched) == 1 and (switched[0]["from"], switched[0]["to"]) == ("a", "b")
     assert stage.analyst_provider == "b"
+
+
+async def test_the_owners_target_is_judged_even_when_a_measurement_flags_it(db_sessionmaker, tmp_path):
+    import dataclasses
+
+    from sqlalchemy import update as sql_update
+
+    flagged = dataclasses.replace(ok_analysis(tmp_path), filtered_reason="multiple_people") \
+        if dataclasses.is_dataclass(ok_analysis(tmp_path)) else ok_analysis(tmp_path).model_copy(
+            update={"filtered_reason": "multiple_people"})
+    run, task_id, q, stage, fa = await setup(db_sessionmaker, tmp_path, flagged,
+                                             [text_response("a", structured=ANALYSIS)] * 2)
+    await CandidateSink(db_sessionmaker, q).submit(run, task_id, None,
+                                                   [Candidate(canonical_id="tiktok:1", why="mine", preliminary_fit=7)])
+    async with db_sessionmaker() as s:
+        await s.execute(sql_update(Finding).values(source="owner"))
+        await s.commit()
+    out = await stage.handle(await q.claim_next(run, ["analyze"]))
+    async with db_sessionmaker() as s:
+        f = (await s.execute(select(Finding))).scalar_one()
+        sc = (await s.execute(select(FindingScore))).scalar_one()
+    assert "overall" in out and f.status == "analyzed"
+    assert sc.feasibility_notes.startswith("Measured: multiple people.")
+
+
+
+async def test_the_sink_refuses_old_videos_and_the_owners_own_picks(db_sessionmaker, tmp_path):
+    from tf_db.models import ManualVideo, Run
+
+    run, task_id, q, stage, _ = await setup(db_sessionmaker, tmp_path, ok_analysis(tmp_path), [])
+    store = VideoStore(db_sessionmaker)
+    await store.upsert_videos([
+        VideoItem(canonical_id="tiktok:2", platform="tiktok", url="https://www.tiktok.com/@u/video/2",
+                  posted_at=NOW - timedelta(days=40)),
+        VideoItem(canonical_id="tiktok:3", platform="tiktok", url="https://www.tiktok.com/@u/video/3"),
+        VideoItem(canonical_id="tiktok:4", platform="tiktok", url="https://www.tiktok.com/@u/video/4",
+                  posted_at=NOW - timedelta(days=3))])
+    async with db_sessionmaker() as s:
+        await s.execute(update(Run).values(settings={"freshness": "week"}))
+        s.add(ManualVideo(url="https://www.tiktok.com/@u/video/4", canonical_id="tiktok:4", platform="tiktok"))
+        await s.commit()
+    accepted, rejected = await CandidateSink(db_sessionmaker, q).submit(run, task_id, None, [
+        Candidate(canonical_id=c, why="fit", preliminary_fit=7) for c in ("tiktok:1", "tiktok:2", "tiktok:3", "tiktok:4")])
+    reasons = dict(rejected)
+    assert accepted == ["tiktok:1", "tiktok:3"]  # fresh, and no post date known: kept
+    assert "posted 40 days ago" in reasons["tiktok:2"] and "manually chosen" in reasons["tiktok:4"]

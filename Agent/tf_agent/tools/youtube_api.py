@@ -149,7 +149,9 @@ class YouTubeApi:
             raise _error(r)
 
     async def shorts_search(self, query: str, n: int = 15, published_after: datetime | None = None,
-                            order: str = "viewCount", region: str | None = None) -> list[VideoItem]:
+                            order: str = "relevance", region: str | None = None) -> list[VideoItem]:
+        # `relevance`, then sorted by views here: the API's own viewCount order combined with publishedAfter often
+        # returns nothing at all (seen live: 0 results of 72,543 matches; relevance gave all of them)
         key = self.key()
         if not key:
             raise ToolFailure("login_required", "no YouTube API key set (Settings, Accounts & keys)")
@@ -178,4 +180,5 @@ class YouTubeApi:
         except httpx.HTTPError as e:  # never echo the request URL: it carries the key
             raise ToolFailure("platform_unavailable", f"YouTube API unreachable ({type(e).__name__})") from None
         items = [it for v in r.json().get("items") or [] if (it := _item(v)) is not None]
+        items.sort(key=lambda it: it.metrics.views or 0, reverse=True)
         return items[:n]
