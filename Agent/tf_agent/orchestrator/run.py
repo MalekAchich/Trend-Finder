@@ -681,7 +681,7 @@ class Orchestrator:
                 "round": 1, "lookalike": stats,
                 "notes": [f"Looked at {stats['seen']} videos from {stats['seed_creators']} reference creators, "
                           f"{len(stats['queries'])} searches and {stats['second_degree']} hit creators; kept the "
-                          f"{stats['picked']} fastest-growing for judging."]})
+                          f"{stats['picked'] - stats['gems']} fastest-growing and {stats['gems']} hidden gems for judging."]})
         else:
             analysis.character = ch
         await self._set_state(run_id, "running", round=1)

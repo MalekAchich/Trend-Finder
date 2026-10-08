@@ -2,6 +2,7 @@ import { MessageSquareText, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FoundVideo, Rating } from "../api/types";
 import { createHoverIntent } from "../lib/hover";
+import { DownloadButtons } from "./DownloadButtons";
 import { HoverPreview } from "./HoverPreview";
 import { PLATFORM_LABEL, PlatformIcon, age, formatViews } from "./ui";
 
@@ -46,6 +47,7 @@ export function VideoCard({ video, fresh, onOpen, onRate }: Props) {
         {video.source === "owner" && <span className="absolute bottom-2.5 left-2.5 rounded bg-lime px-1.5 py-0.5 text-[10px] font-semibold text-night">Your pick</span>}
       </button>
       <Feedback rated={rated} note={video.feedback?.note ?? null} rateable={rateable} onRate={onRate} />
+      <div className="mt-1.5"><DownloadButtons canonicalId={video.canonical_id} /></div>
     </article>
   );
 }

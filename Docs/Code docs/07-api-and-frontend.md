@@ -33,6 +33,7 @@ Guards:
 | `GET /settings/priority` · `PUT /settings/priority` | `{first, providers}` (`first` is a provider or null). PUT `{first}` sets which subscription every agent tries first (null = Balanced); 422 for an unknown provider. Stored in `settings.provider_priority`, loaded at start (D-47) |
 | `GET /manual-videos?character=` · `POST /manual-videos` | The owner's manually chosen videos (D-51), as cards: status (checking/ready/problem), creator, views/likes, length, roles (`is_reference`, `target`) and the study for the character. POST `{urls (≤ 100), reference, target}` saves them and checks each in the background |
 | `PATCH /manual-videos/{id}` · `POST /manual-videos/{id}/check` · `DELETE /manual-videos/{id}` | Change roles (`is_reference`, `target`; a video must keep one), look it up again (fresh, skipping the cache), remove it |
+| `GET /download/{canonical_id}?kind=video\|audio` | The owner's copy of a found or manually chosen video (D-53): the video with its sound as an H.264 mp4 up to 1080p, or the sound alone as an mp3, sent as an attachment. Only videos the app knows; 502 with the reason when the platform refuses |
 | `GET /settings/accounts` | Accounts & keys: per item `{id, label, kind: key\|session, set, hint, updated_at, status, connecting}`; never a secret (D-49) |
 | `PUT /settings/accounts/{id}` · `DELETE /settings/accounts/{id}` | PUT `{value}` saves a key after checking it with the provider (422 if rejected, value never echoed); DELETE removes a key or disconnects an account |
 | `POST /settings/accounts/{platform}/connect` | 202: opens a visible login window for `tiktok`, `instagram` or `x`; progress in `connecting` (409 if one is already open) |
@@ -70,7 +71,7 @@ The fixed hybrid theme is kept on every page: dark on top, the seam, and a grey-
 
 | Page | Content |
 |---|---|
-| **Home** | Composer ("What should *Name* post next?", whole-image character cards, both optional inputs openable together with an animated reveal, platforms, freshness, time limit, Start / Stop). The **Engine** (roster, live stream, filters, saved strip). The **seam**, whose lights drift while running and which a yellow pulse sweeps top to bottom when a video is saved. **Found videos** by character and run, with hover previews, 👍/👎 + note, and the run score |
+| **Home** | Composer ("What should *Name* post next?", whole-image character cards, both optional inputs openable together with an animated reveal, platforms, freshness, time limit, Start / Stop). The **Engine** (roster, live stream, filters, saved strip). The **seam**, whose lights drift while running and which a yellow pulse sweeps top to bottom when a video is saved. **Found videos** by character and run, with hover previews, 👍/👎 + note, Video / Sound downloads, and the run score (with its note) |
 | **Characters** | Character switcher, the images, "What the agents see" (latest read), "What they learned from your ratings" (taste profile), runs and videos found, then the character's found videos filtered by found date (Today, 7 days, 30 days, All) |
 | **Runs** | History table (filter by character). `/runs/:id` replays the run's stream (agents end as done or failed), with its videos and score |
 | **Settings** | Usage per subscription (ChatGPT window % and reset; Claude status), tokens in the last 24 h, average per run. Models per provider: main, fast, effort, Save |

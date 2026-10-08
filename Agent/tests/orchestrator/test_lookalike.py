@@ -2,20 +2,21 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from tf_agent.discovery.lookalike import Gate, Lookalike, Pool, gate, theme_queries, velocity
+from tf_agent.discovery.lookalike import Gate, Lookalike, Pool, gate, relevance, theme_queries, theme_terms, velocity
 from tf_agent.tools.types import Creator, Metrics, VideoItem
 
 NOW = datetime(2026, 10, 8, 12, tzinfo=UTC)
 
 
-def vid(n, platform="instagram", handle="creator_a", plays=None, likes=None, days=2):
+def vid(n, platform="instagram", handle="creator_a", plays=None, likes=None, days=2, caption=None, ai=None):
     url = {"instagram": f"https://www.instagram.com/reel/TESTREEL{n:03d}/",
            "tiktok": f"https://www.tiktok.com/@{handle}/video/{1000000000000000000 + n}",
            "youtube": f"https://www.youtube.com/shorts/TestShort{n:02d}"}[platform]
     cid = {"instagram": f"instagram:TESTREEL{n:03d}", "tiktok": f"tiktok:{1000000000000000000 + n}",
            "youtube": f"youtube:TestShort{n:02d}"}[platform]
     return VideoItem(canonical_id=cid, platform=platform, url=url, creator=Creator(handle=handle),
-                     metrics=Metrics(views=plays, likes=likes), posted_at=NOW - timedelta(days=days))
+                     metrics=Metrics(views=plays, likes=likes), posted_at=NOW - timedelta(days=days),
+                     caption=caption, ai_generated=ai)
 
 
 def test_gate_keeps_recent_big_and_exploding_videos_fastest_first():
@@ -25,7 +26,8 @@ def test_gate_keeps_recent_big_and_exploding_videos_fastest_first():
     picks, dropped = gate(pool, exclude={"instagram:TESTREEL006"}, g=Gate(days=31, min_plays=300_000), now=NOW)
     assert [p.item.canonical_id for p in picks] == ["instagram:TESTREEL001", "instagram:TESTREEL005",
                                                     "instagram:TESTREEL002"]  # likes x 25 counts when plays are hidden
-    assert dropped == {"under 300,000 plays": 1, "older than 31 days": 1, "already yours or already found": 1}
+    assert dropped == {"small and not close enough to your references": 1, "older than 31 days": 1,
+                       "already yours or already found": 1}
     assert velocity(vid(7, plays=600_000, days=0), NOW) == 600_000 / 6  # very new videos aren't over-rewarded
 
 
@@ -53,6 +55,33 @@ def test_one_creator_cannot_fill_the_run_and_other_platforms_get_room():
     picks, _ = gate(pool, set(), Gate(max_judged=5, max_per_creator=3, max_platform_share=0.6), NOW)
     assert sum(p.item.creator.handle == "busy" for p in picks) == 3
     assert sum(p.item.platform == "tiktok" for p in picks) == 2
+
+
+def test_small_videos_close_to_the_references_get_judged_as_hidden_gems():
+    terms = theme_terms([{"niche": "AI astronaut comedy", "tags": ["astronaut", "space"]}])
+    assert {"astronaut", "space", "comedy"} <= terms and "viral" not in terms
+    pool = Pool()
+    pool.add([vid(1, handle="big", plays=3_000_000)], "search")
+    pool.add([vid(2, handle="gem", plays=40_000, caption="astronaut space comedy skit", ai=True)], "search")
+    pool.add([vid(3, handle="off", plays=40_000, caption="my breakfast today")], "search")
+    pool.add([vid(4, handle="ref", plays=20_000, caption="astronaut again")], "from a reference creator", "seed")
+    pool.add([vid(5, handle="tiny", plays=300, caption="astronaut space comedy", ai=True)], "search")
+    picks, dropped = gate(pool, set(), Gate(min_plays=300_000, max_judged=5), NOW, terms)
+    assert [(p.item.creator.handle, p.lane) for p in picks] == [("big", "viral"), ("gem", "gem"), ("ref", "gem")]
+    assert "hidden gem" in picks[1].why and picks[1].relevance > picks[2].relevance
+    assert dropped == {"small and not close enough to your references": 1, "under 1,000 plays": 1}
+    assert relevance(vid(6, plays=1000, likes=100), set(), None) == 1  # an unusually engaged audience
+
+
+def test_gems_have_a_share_of_the_slots_and_give_unused_room_back():
+    pool = Pool()
+    pool.add([vid(n, handle=f"v{n}", plays=1_000_000) for n in range(1, 9)], "search")
+    pool.add([vid(20 + n, handle=f"g{n}", plays=5_000, ai=True, caption="space space") for n in range(5)], "s", "seed")
+    picks, _ = gate(pool, set(), Gate(max_judged=6, max_gems=2, max_platform_share=1), NOW, {"space"})
+    assert [p.lane for p in picks].count("gem") == 2 and len(picks) == 6
+    picks, _ = gate(Pool(items=dict(list(pool.items.items())[:8]), why=pool.why, kind=pool.kind), set(),
+                    Gate(max_judged=6, max_gems=2, max_platform_share=1), NOW)
+    assert [p.lane for p in picks].count("viral") == 6
 
 
 class FakeSources:
@@ -99,6 +128,6 @@ async def test_discovery_follows_seeds_themes_and_the_creators_of_the_biggest_hi
     ids = [p.item.canonical_id for p in picks]
     assert ids == ["instagram:TESTREEL020", "instagram:TESTREEL030", "instagram:TESTREEL010", "youtube:TestShort40"]
     assert "creator of one of your references" in next(p.why for p in picks if p.item.canonical_id.endswith("010"))
-    assert stats["second_degree"] == 1 and stats["dropped"] == {"under 300,000 plays": 1}
+    assert stats["second_degree"] == 1 and stats["dropped"] == {"small and not close enough to your references": 1}
     kinds = [t for t, _ in events]
     assert kinds.count("agent.started") == kinds.count("agent.finished") == 5  # seeds, 3 platforms, hit creators

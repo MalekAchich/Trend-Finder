@@ -122,3 +122,53 @@ def test_instagram_creator_is_the_username_not_the_display_name():
     info = {"id": "TESTREEL002", "extractor_key": "Instagram", "webpage_url": "https://www.instagram.com/p/TESTREEL002/",
             "uploader": "Creator G Display", "channel": "creator_g", "duration": 10}
     assert info_to_video_item(info).creator.handle == "creator_g"
+
+
+async def test_save_gives_the_video_with_sound_or_the_sound_alone(tmp_path):
+    seen = []
+
+    def extract(url, opts, download):
+        seen.append(opts)
+        out = Path(opts["outtmpl"].replace("%(id)s", "TestShort01").replace(".%(ext)s", ""))
+        if opts.get("postprocessors"):
+            out.with_suffix(".mp3").write_bytes(b"ID3")
+        else:
+            out.with_suffix(".mp4").write_bytes(b"\x00\x00\x00\x18ftyp")
+        return {"id": "TestShort01"}
+
+    converted = []
+
+    async def convert(path):
+        converted.append(path.name)
+        return path
+
+    y = YtDlp(extractor=extract, convert_video=convert)
+    video = await y.save("https://youtu.be/TestShort01", tmp_path / "v", "video")
+    sound = await y.save("https://youtu.be/TestShort01", tmp_path / "a", "audio")
+    assert (video.name, sound.name) == ("TestShort01.mp4", "TestShort01.mp3")
+    assert "+ba" in seen[0]["format"] and seen[0]["merge_output_format"] == "mp4"
+    assert seen[1]["format"] == "ba/b" and seen[1]["postprocessors"][0]["preferredcodec"] == "mp3"
+    assert converted == ["TestShort01.mp4"]  # only the video is made H.264
+
+
+async def test_a_non_h264_video_is_re_encoded_once_and_h264_is_left_alone(tmp_path):
+    import subprocess
+
+    from tf_agent.tools.ytdlp import to_h264
+
+    def clip(name, codec):
+        out = tmp_path / name
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=64x112:rate=10:duration=1",
+                        "-f", "lavfi", "-i", "sine=duration=1", "-c:v", codec, "-c:a", "aac", "-shortest", str(out)],
+                       check=True)
+        return out
+
+    def codecs(path):
+        return subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_name", "-of", "csv=p=0",
+                               str(path)], capture_output=True, text=True).stdout.split()
+
+    old = await to_h264(clip("other.mkv", "mpeg4"))
+    assert old.name == "other.mp4" and set(codecs(old)) == {"h264", "aac"} and not (tmp_path / "other.mkv").exists()
+    fine = clip("fine.mp4", "libx264")
+    before = fine.stat().st_mtime_ns
+    assert await to_h264(fine) == fine and fine.stat().st_mtime_ns == before

@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import re
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,8 +18,31 @@ _HASHTAG_RE = re.compile(r"#(\w+)", re.UNICODE)
 # Only the platforms we support: never the generic extractor (which would fetch arbitrary URLs).
 ALLOWED_EXTRACTORS = ["tiktok.*", "vm\\.tiktok", "instagram.*", "youtube.*", "twitter.*"]
 PREVIEW_FORMAT = "b[height<=720][ext=mp4]/bv*[height<=720][ext=mp4]/b[height<=720]/b"
+SAVE_FORMATS = {  # the owner's downloads: best quality with its sound, or the sound alone
+    "video": "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+    "audio": "ba/b",
+}
 DOWNLOAD_FORMAT = ("bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/bv*[height<=720]+ba/"
                    "b[height<=720]/b")
+
+
+async def to_h264(path: Path) -> Path:
+    """An H.264 + AAC mp4 that every player, editor and upload form takes. The platforms' best copies are often
+    VP9 (Instagram), HEVC (TikTok) or AV1: those are re-encoded once at visually lossless quality."""
+    from tf_agent.pipeline import ffmpeg  # here: the pipeline package imports the tools
+
+    out, _ = await ffmpeg.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name",
+                               "-of", "csv=p=0", str(path)], 60)
+    codecs = dict(reversed(line.split(",")) for line in out.split() if "," in line)  # {"video": "h264", ...}
+    if codecs.get("video") == "h264" and codecs.get("audio") in (None, "aac") and path.suffix == ".mp4":
+        return path
+    tmp = path.with_name(path.stem + ".h264.mp4")
+    audio = ["-c:a", "copy"] if codecs.get("audio") == "aac" else ["-c:a", "aac", "-b:a", "192k"]
+    await ffmpeg.run(["ffmpeg", "-y", "-v", "error", "-i", str(path), "-map", "0:v:0", "-map", "0:a:0?",
+                      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", *audio,
+                      "-movflags", "+faststart", str(tmp)], 600)
+    path.unlink()
+    return tmp.rename(path.with_suffix(".mp4"))
 
 
 def _default_extract(url: str, opts: dict[str, Any], download: bool) -> dict[str, Any]:
@@ -99,11 +122,13 @@ def info_to_video_item(info: dict[str, Any]) -> VideoItem:
 
 class YtDlp:
     def __init__(self, timeout_s: float = 45.0, max_parallel: int = 2, cookies_file: Path | None = None,
-                 extractor: Extractor | None = None, cookies_for: CookiesFor | None = None) -> None:
+                 extractor: Extractor | None = None, cookies_for: CookiesFor | None = None,
+                 convert_video: Callable[[Path], Awaitable[Path]] = to_h264) -> None:
         self.timeout_s = timeout_s
         self.cookies_file = cookies_file
         self.cookies_for = cookies_for
         self._extract = extractor or _default_extract
+        self._convert_video = convert_video
         # a dedicated pool: timed-out calls keep their thread until they finish, so the bound really holds
         self._pool = ThreadPoolExecutor(max_workers=max_parallel, thread_name_prefix="yt-dlp")
 
@@ -169,3 +194,20 @@ class YtDlp:
         if not files or not Path(files[0]).is_file():
             raise ToolFailure("platform_unavailable", "download produced no file")
         return Path(files[0])
+
+    async def save(self, url: str, dest_dir: Path, kind: str) -> Path:
+        """The owner's copy of a video: best quality with sound (mp4), or the sound alone (mp3)."""
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        extra: dict[str, Any] = {"format": SAVE_FORMATS[kind], "outtmpl": str(dest_dir / "%(id)s.%(ext)s")}
+        if kind == "audio":
+            extra["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}]
+        else:  # the highest resolution; at that resolution, H.264 + AAC, which every editor and upload form takes
+            extra["merge_output_format"] = "mp4"
+            extra["format_sort"] = ["res:1080", "vcodec:h264", "acodec:aac"]  # 1080p (res = the short side): no 4K giants
+        await self._run(url, self._opts(url, **extra), True, self.timeout_s * 4)
+        want = ".mp3" if kind == "audio" else ".mp4"
+        files = [f for f in dest_dir.iterdir() if f.is_file() and f.suffix not in (".part", ".ytdl", ".temp")]
+        files.sort(key=lambda f: (f.suffix == want, f.stat().st_size), reverse=True)
+        if not files:
+            raise ToolFailure("platform_unavailable", "download produced no file")
+        return files[0] if kind == "audio" else await self._convert_video(files[0])

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useManualActions, useManualVideos } from "../api/hooks";
 import type { Character, ManualVideo } from "../api/types";
 import { createHoverIntent } from "../lib/hover";
+import { DownloadButtons } from "./DownloadButtons";
 import { HoverPreview } from "./HoverPreview";
 import { PLATFORM_LABEL, PlatformIcon, formatViews } from "./ui";
 
@@ -114,6 +115,7 @@ function ManualCard({ video, characters }: { video: ManualVideo; characters: Cha
             {characters.map((c) => <option key={c.slug} value={c.slug}>Target: {c.name}</option>)}
           </select>
         </div>
+        {video.status === "ready" && video.canonical_id && <DownloadButtons canonicalId={video.canonical_id} />}
         {video.target && (
           <p className="text-[11.5px] text-ink-2">{video.target.state === "analysed"
             ? `Scored ${video.target.score != null ? Math.round(video.target.score) : "?"} for ${video.target.name}`

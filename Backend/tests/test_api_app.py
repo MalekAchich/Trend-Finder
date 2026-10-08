@@ -306,3 +306,27 @@ async def test_videos_from_before_a_pipeline_bump_keep_their_thumbnail(http, ctx
         await s.commit()
     card = (await http.get(f"/api/runs/{run_id}/videos")).json()[0]
     assert card["thumbnail_url"] == "/api/media/thumbs/tiktok_1.jpg"
+
+
+async def test_download_a_found_video_or_its_sound(http, ctx, tmp_path):
+    from tf_backend.downloads import Downloads
+
+    await a_run(http, ctx)
+    asked = []
+
+    async def save(url, folder, kind):
+        asked.append((url, kind))
+        folder.mkdir(parents=True)
+        f = folder / ("1.mp3" if kind == "audio" else "1.mp4")
+        f.write_bytes(b"media")
+        return f
+
+    ctx.downloads = Downloads(save, tmp_path / "downloads")
+    video = await http.get("/api/download/tiktok:1")
+    sound = await http.get("/api/download/tiktok:1?kind=audio")
+    assert video.status_code == 200 and video.content == b"media" and video.headers["content-type"] == "video/mp4"
+    assert 'filename="tiktok-u-1.mp4"' in video.headers["content-disposition"]
+    assert sound.headers["content-type"] == "audio/mpeg" and "tiktok-u-1-sound.mp3" in sound.headers["content-disposition"]
+    assert asked == [("https://www.tiktok.com/@u/video/1", "video"), ("https://www.tiktok.com/@u/video/1", "audio")]
+    assert (await http.get("/api/download/tiktok:999")).status_code == 404  # only videos the app knows
+    assert (await http.get("/api/download/tiktok:1?kind=gif")).status_code == 422

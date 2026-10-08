@@ -24,4 +24,5 @@ class AppContext:
     youtube_api: Any = None  # YouTubeApi: checks a key before it's saved
     manual: Any = None  # ManualVideos: the owner's manually chosen videos
     previews: Any = None  # Previews: hover playback for Instagram and X
+    downloads: Any = None  # Downloads: the owner's copies of a video or its sound
     extras: dict[str, Any] = field(default_factory=dict)

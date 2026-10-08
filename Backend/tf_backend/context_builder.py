@@ -12,6 +12,7 @@ from tf_agent.pipeline.analyze import process_pool_runner
 from tf_agent.roles.runners import Roles
 from tf_agent.tools.factory import build_analyzer, build_tool_stack
 from tf_backend.app_context import AppContext
+from tf_backend.downloads import Downloads
 from tf_backend.previews import Previews
 from tf_backend.runs import RunManager
 from tf_backend.services import Services, build_services, close_services
@@ -38,7 +39,8 @@ async def build_context(settings: AppSettings | None = None) -> tuple[AppContext
                          media_dir=s.media_dir, characters_dir=s.characters_dir,
                          sse_poll_s=1.0, browser=stack.browser, youtube_api=stack.youtube_api,
                          manual=ManualVideos(sm, get_video=stack.get_video, thumbs_dir=s.media_dir / "thumbs"),
-                         previews=Previews(stack.ytdlp.stream_url))
+                         previews=Previews(stack.ytdlp.stream_url),
+                         downloads=Downloads(stack.ytdlp.save, s.media_dir / "downloads"))
 
     async def cleanup() -> None:
         await runs.shutdown()
