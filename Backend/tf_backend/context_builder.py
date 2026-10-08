@@ -12,7 +12,14 @@ from tf_agent.pipeline.analyze import process_pool_runner
 from tf_agent.roles.runners import Roles
 from tf_agent.tools.factory import build_analyzer, build_tool_stack
 from tf_backend.app_context import AppContext
+from tf_agent.credentials import Credentials
+from tf_agent.manual import _http_image
+from tf_agent.socials.instagram_api import InstagramApi
+from tf_agent.socials.public import PublicReader
+from tf_agent.socials.sync import SocialSync
+from tf_agent.socials.tiktok_api import TikTokApi
 from tf_backend.downloads import Downloads
+from tf_backend.socials import Socials
 from tf_backend.previews import Previews
 from tf_backend.runs import RunManager
 from tf_backend.services import Services, build_services, close_services
@@ -41,8 +48,13 @@ async def build_context(settings: AppSettings | None = None) -> tuple[AppContext
                          manual=ManualVideos(sm, get_video=stack.get_video, thumbs_dir=s.media_dir / "thumbs"),
                          previews=Previews(stack.ytdlp.stream_url),
                          downloads=Downloads(stack.ytdlp.save, s.media_dir / "downloads"))
+    creds, instagram, tiktok = Credentials(s.secrets_dir), InstagramApi(), TikTokApi()
+    context.socials = Socials(sm, SocialSync(sm, creds, instagram, tiktok, PublicReader(stack.browser)), creds,
+                              instagram, tiktok, thumbs_dir=s.media_dir / "thumbs", fetch_image=_http_image)
+    context.socials.start()  # every 3 hours, the first a minute after start
 
     async def cleanup() -> None:
+        await context.socials.stop()
         await runs.shutdown()
         for pool in pools:
             pool.close()

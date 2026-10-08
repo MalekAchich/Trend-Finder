@@ -25,4 +25,5 @@ class AppContext:
     manual: Any = None  # ManualVideos: the owner's manually chosen videos
     previews: Any = None  # Previews: hover playback for Instagram and X
     downloads: Any = None  # Downloads: the owner's copies of a video or its sound
+    socials: Any = None  # Socials: our own channels (sync loop, numbers, the TikTok login hand-off)
     extras: dict[str, Any] = field(default_factory=dict)

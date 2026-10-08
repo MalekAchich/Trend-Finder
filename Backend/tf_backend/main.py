@@ -7,7 +7,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
 
 from tf_backend.api import (accounts, characters, download, health, manual, media, preview, providers, runs, settings,
-                            videos)
+                            socials, videos)
 from tf_backend.app_context import AppContext
 from tf_backend.services import Services
 
@@ -48,7 +48,7 @@ def create_app(services: Services | None = None, context: AppContext | None = No
     if context is not None:
         app.state.context = context
     for module in (health, providers, characters, runs, videos, manual, preview, download, settings, accounts,
-                   media):
+                   socials, media):
         app.include_router(module.router, prefix="/api")
     if frontend_dist is not None and frontend_dist.is_dir():
         _serve_web_app(app, frontend_dist.resolve())
