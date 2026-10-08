@@ -53,6 +53,8 @@ from tf_db.models import (
     Run,
     RunFeedback,
     ScopeClaim,
+    SocialChannel,
+    SocialPost,
     Target,
     TasteProfile,
     Task,
@@ -71,6 +73,7 @@ OWNER = {"id": "owner", "role": "owner", "platform": None}
 
 
 STUDY_PARALLEL = 2  # reference videos studied at once (each is downloaded and analysed)
+OWN_POSTS_PER_RUN = 6  # our own channels' new posts described per run (once each)
 LEAD_CLOSENESS = 8.0  # a judged video this close to the references (of 10) leads the next lookalike round
 STUDY_DETAIL = 12  # how many reference studies the planner reads in full (the rest feed the summary)
 
@@ -471,6 +474,7 @@ class Orchestrator:
             await self._read_character(run, clock)
         ch = await self._character(await self._reload(run_id))
         await self._study_trends(run_id, settings, ch, clock)
+        await self._study_own_posts(run_id, ch, clock)
         await self._take_targets(run_id, ch)
         return ch
 
@@ -493,6 +497,41 @@ class Orchestrator:
         await self.blackboard.record_event(run.id, "character.read", {
             "agent": {"id": "reader", "role": "reader", "platform": None}, "read": read,
             "images": len(ch.images), "provider": judged.provider})
+
+    async def _study_own_posts(self, run_id: uuid.UUID, ch: LoadedCharacter, clock: ActiveClock) -> None:
+        """Our own channels' new posts, described once (format, tags), so the channel report can say what each one
+        is. A description, never a verdict; a post that can't be read is simply left for next time."""
+        from tf_agent.orchestrator.analysis import candidate_facts
+
+        async with self._sm() as s:
+            todo = (await s.execute(select(SocialPost).join(SocialChannel, SocialChannel.id == SocialPost.channel_id)
+                                    .where(SocialChannel.character_id == ch.character_id, SocialPost.study.is_(None))
+                                    .order_by(SocialPost.posted_at.desc().nulls_last()).limit(OWN_POSTS_PER_RUN))
+                    ).scalars().all()
+        for post in todo:
+            agent = {"id": f"own-{post.platform_post_id}", "role": "seed_study", "platform": None}
+            await self.blackboard.record_event(run_id, "agent.started", {"agent": agent,
+                                                                         "goal": f"describe your post {post.url}"})
+            failed = None
+            try:
+                item = await self.tools.get_video(post.url)
+                agent["platform"] = item.platform
+                result = await self.analyzer.analyze(item)
+                if not result.contact_sheet_path:
+                    raise ToolFailure("platform_unavailable", (result.filtered_reason or "no frames").replace("_", " "))
+                judged = await self._with_usage_wait(
+                    run_id, clock, "studying_trends", lambda item=item, result=result: self.roles.study_seed(
+                        ch.brief + "\n\nThis is one of the owner's own posts: describe it, don't judge it.",
+                        result.contact_sheet_path, candidate_facts(item, result), run_id=run_id))
+                study = judged.result.model_dump()
+                study["tags"] = [t.strip().lstrip("#").lower() for t in study.get("tags") or [] if t.strip()]
+                async with self._sm() as s:
+                    await s.execute(update(SocialPost).where(SocialPost.id == post.id).values(study=study))
+                    await s.commit()
+            except (ToolFailure, RoleOutputError, InvalidRequest) as e:
+                failed = (e.error.message if isinstance(e, ToolFailure) else str(e))[:200]
+            await self.blackboard.record_event(run_id, "agent.finished", {"agent": agent, "accepted": 0, "rejected": 0,
+                                                                          "leads": 0, "failed": failed})
 
     async def _study_trends(self, run_id: uuid.UUID, settings: RunSettings, ch: LoadedCharacter,
                             clock: ActiveClock) -> None:

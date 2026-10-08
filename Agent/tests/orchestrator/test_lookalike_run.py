@@ -116,3 +116,23 @@ async def test_every_judge_sees_how_our_own_channels_did(db_sessionmaker, tmp_pa
         await s.commit()
     brief = (await orch._judge_brief(await orch._character(run), run)).brief
     assert "Your own channels (facts" in brief and "TikTok @made_up_channel: 12 followers" in brief
+
+
+async def test_a_run_describes_our_own_new_posts_once(db_sessionmaker, tmp_path):
+    from tf_db.models import Run, SocialChannel, SocialPost
+
+    orch, run_id, _, world = await seeded(db_sessionmaker, tmp_path, min_score=0)
+    async with db_sessionmaker() as s:
+        run = await s.get(Run, run_id)
+        ch = SocialChannel(character_id=run.character_id, platform="tiktok", handle="made_up_channel")
+        s.add(ch)
+        await s.flush()
+        s.add(SocialPost(channel_id=ch.id, platform_post_id="1000000000000000010",
+                         url="https://www.tiktok.com/@made_up_channel/video/1000000000000000010"))
+        await s.commit()
+    studies = getattr(world, "studies", 0)
+    await orch.execute(run_id)
+    async with db_sessionmaker() as s:
+        post = (await s.execute(select(SocialPost))).scalar_one()
+    assert post.study and post.study.get("format") and world.studies >= studies + 1
+    assert "fit_score" not in post.study  # a description, never a verdict
