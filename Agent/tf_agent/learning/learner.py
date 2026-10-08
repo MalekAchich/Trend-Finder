@@ -5,6 +5,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -14,7 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tf_agent.models.errors import AllProvidersUnavailable, InvalidRequest
 from tf_agent.roles.runners import RoleOutputError, Roles
+from tf_agent.socials.report import channel_report
 from tf_db.models import (
+    SocialChannel,
+    SocialChannelSnapshot,
     CardFeedback,
     Direction,
     Finding,
@@ -127,7 +131,8 @@ class Learner:
     # ---------- taste profile ----------
     async def refresh_taste(self, character_id: uuid.UUID, run_id: uuid.UUID | None = None,
                             brief: str | None = None) -> TasteUpdate | None:
-        """Rewrite the taste profile when ratings or notes changed since the last version; None when unchanged."""
+        """Rewrite the taste profile when ratings, notes or our own channels' numbers changed since the last version;
+        None when unchanged."""
         async with self._sm() as s:
             prev = (await s.execute(select(TasteProfile).where(TasteProfile.character_id == character_id)
                                     .order_by(TasteProfile.version.desc()).limit(1))).scalar_one_or_none()
@@ -137,7 +142,10 @@ class Learner:
                                            .where(Run.character_id == character_id))).scalar_one()
             run_change = (await s.execute(select(func.max(RunFeedback.updated_at)).join(Run, Run.id == RunFeedback.run_id)
                                           .where(Run.character_id == character_id))).scalar_one()
-            changes = [t for t in (card_change, run_change) if t is not None]
+            channel_change = (await s.execute(select(func.max(SocialChannelSnapshot.taken_at)).join(
+                SocialChannel, SocialChannel.id == SocialChannelSnapshot.channel_id).where(
+                SocialChannel.character_id == character_id))).scalar_one()
+            changes = [t for t in (card_change, run_change, channel_change) if t is not None]
             if not changes or (prev is not None and prev.created_at >= max(changes)):
                 return None
             cards = (await s.execute(select(CardFeedback, TrendCluster, FindingScore, Direction.key)
@@ -165,6 +173,9 @@ class Learner:
         text = (f"Previous taste profile:\n{(prev.body_md.split('## Owner notes')[0] if prev else 'none yet')}\n\n"
                 f"Rated videos (newest first):\n{json.dumps(evidence, default=str)}\n\n"
                 f"Recent run scores: {json.dumps([{'satisfaction': a, 'note': b} for a, b in runs])}")
+        report = await channel_report(self._sm, character_id, datetime.now(UTC))
+        if report:  # what our own audience rewarded: evidence next to the owner's thumbs
+            text += f"\n\n{report}"
         try:
             judged = await self.roles._structured("learner", self.roles.prompts.render(
                 "learner", brief=brief or "(character known only from images)"), text, (), LearnerResult,

@@ -99,3 +99,20 @@ async def test_stopping_a_run_still_shows_the_second_opinion_the_owners_referenc
     await orch.stop_and_curate(run_id)
     (brief, bar), = seen
     assert "The owner's reference videos (1 studied)" in brief and "AI muscleman dam stunt" in brief and bar == 75
+
+
+async def test_every_judge_sees_how_our_own_channels_did(db_sessionmaker, tmp_path):
+    from datetime import UTC, datetime
+
+    from tf_db.models import Run, SocialChannel, SocialChannelSnapshot
+
+    orch, run_id, _, _ = await seeded(db_sessionmaker, tmp_path, min_score=75)
+    async with db_sessionmaker() as s:
+        run = await s.get(Run, run_id)
+        ch = SocialChannel(character_id=run.character_id, platform="tiktok", handle="made_up_channel")
+        s.add(ch)
+        await s.flush()
+        s.add(SocialChannelSnapshot(channel_id=ch.id, taken_at=datetime.now(UTC), followers=12, posts=1))
+        await s.commit()
+    brief = (await orch._judge_brief(await orch._character(run), run)).brief
+    assert "Your own channels (facts" in brief and "TikTok @made_up_channel: 12 followers" in brief

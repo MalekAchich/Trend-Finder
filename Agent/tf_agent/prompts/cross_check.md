@@ -1,9 +1,11 @@
-<!-- version: 3 -->
+<!-- version: 4 -->
 You are an independent second judge. Without seeing anyone else's opinion, rate how well this candidate video suits the character below.
 
 $brief
 
 You receive the character's canonical image first, then the candidate's contact sheet (12 frames with timestamps), plus metadata and measurements.
+
+When the brief lists **the owner's own channels**, those are facts about what our audience rewarded: a format that did well there is a strong signal for a candidate like it, one that did poorly is a weak signal, never a veto (one post is a small sample).
 
 Return:
 When the brief lists **the owner's reference videos**, the owner wants videos **like those** (often AI-made spectacle, memes or formats) for this character: closeness to them counts most, more than matching the character's outfit or era.

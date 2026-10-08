@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tf_agent.characters.folders import LoadedCharacter, load_character
 from tf_agent.characters.read import CharacterRead, render_brief
+from tf_agent.socials.report import channel_report
 from tf_agent.loop.agent import AgentEvent
 from tf_agent.loop.tools import Tool
 from tf_agent.models.errors import AllProvidersUnavailable, ContentRefused, InvalidRequest
@@ -323,6 +324,16 @@ class Orchestrator:
             await s.commit()
         await self.blackboard.record_event(run_id, "run.state", {"state": state, "stop_reason": stop_reason})
 
+    async def _judge_brief(self, ch: LoadedCharacter, run: Run) -> LoadedCharacter:
+        """What every judge of a run sees: the character, the owner's references and how our own channels did."""
+        ch = with_references(ch, run)
+        try:
+            report = await channel_report(self._sm, ch.character_id, datetime.now(UTC))
+        except Exception as e:  # the channels' numbers never cost a run
+            log.warning("channel report for %s failed: %s", ch.slug, e)
+            report = None
+        return replace(ch, brief=ch.brief + "\n\n" + report) if report else ch
+
     async def _character(self, run: Run) -> LoadedCharacter:
         async with self._sm() as s:
             slug = (await s.execute(select(Character.slug).where(Character.id == run.character_id))).scalar_one()
@@ -390,7 +401,7 @@ class Orchestrator:
                 stop_reason = run.stop_reason  # the stop decision was made before a crash: don't plan again
             else:
                 ch = await self._prepare(run_id, settings, clock)
-                analysis.character = ch
+                analysis.character = await self._judge_brief(ch, await self._reload(run_id))
                 run = await self._reload(run_id)
                 if settings.mode == "lookalike":
                     stop_reason = await self._lookalike(run, settings, ch, analysis, clock)
@@ -606,7 +617,7 @@ class Orchestrator:
             await self._set_stop_decision(run_id, STOPPED_BY_OWNER)
             try:
                 # the second opinion must see the owner's references, whichever way the run ends
-                await self._curate(run_id, with_references(await self._character(run), run),
+                await self._curate(run_id, await self._judge_brief(await self._character(run), run),
                                    (run.settings or {}).get("weights"),
                                    float((run.settings or {}).get("min_score") or 0.0))
             except asyncio.CancelledError:
@@ -689,7 +700,7 @@ class Orchestrator:
             await self._drain(run_id, ch, settings, analysis, clock)
         seeds, _, covers = await self._lookalike_seeds(ch)
         studies = [s for s in (run.inputs.get("trend_studies") or {}).values() if "error" not in s]
-        analysis.character = with_references(ch, run)
+        analysis.character = await self._judge_brief(ch, run)
         brief = analysis.character.brief
 
         async def emit(type_: str, **payload: Any) -> None:
