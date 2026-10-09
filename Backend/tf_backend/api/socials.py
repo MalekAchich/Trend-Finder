@@ -199,6 +199,17 @@ async def tiktok_callback(state: str = "", code: str = "", error: str = "", erro
     except ReadError as e:
         return _back(error=f"TikTok didn't connect: {e.message}")
     scopes = [x for x in str(tok.get("scope") or "").split(",") if x]
+    async with c.sessionmaker() as s:
+        row = await s.get(SocialChannel, pending.channel_id)
+    if row is None:
+        return _back(error="That channel was removed while connecting.")
+    try:  # a browser logged in to another TikTok account would connect that one: never file its numbers here
+        who = str((await svc.tiktok.me(tok["access_token"])).get("username") or "").lower()
+    except ReadError:
+        who = ""
+    if who and who != row.handle:
+        return _back(error=f"TikTok connected @{who}, not @{row.handle}. On tiktok.com, log out (or switch to "
+                           f"@{row.handle}), then press Connect again.")
     now = time.time()
     svc.creds.save_social_token(str(pending.channel_id), {
         "access_token": tok["access_token"], "refresh_token": tok.get("refresh_token"), "open_id": tok.get("open_id"),

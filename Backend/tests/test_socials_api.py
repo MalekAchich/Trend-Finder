@@ -47,6 +47,11 @@ class FakeTikTok(TikTokApi):
         return {"access_token": SECRETS[2], "refresh_token": SECRETS[3], "expires_in": 86400,
                 "refresh_expires_in": 31536000, "scope": "user.info.basic,video.list"}
 
+    who = "made_up_tiktok"
+
+    async def me(self, token):
+        return {"username": self.who}
+
     async def read(self, token, since):
         return ChannelRead(handle="made_up_tiktok", followers=12, posts_count=0, posts=[])
 
@@ -166,3 +171,19 @@ async def test_the_channel_over_time_and_each_post_s_life_start_at_zero(setup):
     (post,) = (await http.get(f"/api/socials/channels/{ch['id']}/posts?window=all")).json()
     assert post["spark"][0] == [0.0, 0] and post["spark"][-1][1] == 300  # one reading still draws a line
     assert ch["audience"] is None  # public pages don't say who the audience is
+
+
+
+async def test_tiktok_refuses_a_login_to_another_account(setup):
+    http, socials, _ = setup
+    ch = (await http.post("/api/socials/channels", json={"platform": "tiktok", "handle": "made_up_tiktok",
+                                                          "character": "testy"})).json()
+    await http.put("/api/socials/tiktok-app", json={"client_key": "made-up-client-key-1234", "client_secret": SECRETS[1]})
+    socials.tiktok.who = "made_up_developer"  # the browser was logged in to the developer's own account
+    state = parse_qs(urlparse((await http.get(f"/api/socials/tiktok/connect?channel={ch['id']}")).headers["location"]
+                              ).query)["state"][0]
+    back = await http.get(f"/api/socials/tiktok/callback?state={state}&code=made-up-code")
+    msg = parse_qs(urlparse(back.headers["location"]).query)["error"][0]
+    assert "connected @made_up_developer, not @made_up_tiktok" in msg
+    assert socials.creds.social_token(ch["id"]) is None
+    assert (await http.get("/api/socials")).json()["characters"][0]["channels"][0]["mode"] == "public"

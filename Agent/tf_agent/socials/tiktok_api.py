@@ -77,6 +77,11 @@ class TikTokApi:
             raise _error(str(err.get("code")), str(err.get("message") or ""))
         return body.get("data") or {}
 
+    async def me(self, token: str) -> dict[str, Any]:
+        """Who this token belongs to (username needs user.info.profile)."""
+        return (await self._call("GET", "/v2/user/info/", token, params={"fields": "open_id,username,display_name"})
+                ).get("user") or {}
+
     async def read(self, token: str, since: datetime) -> ChannelRead:
         user = (await self._call("GET", "/v2/user/info/", token, params={"fields": USER_FIELDS})).get("user") or {}
         out = ChannelRead(handle=str(user.get("username") or ""), followers=user.get("follower_count"),
