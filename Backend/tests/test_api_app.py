@@ -406,3 +406,13 @@ async def test_videos_under_the_bar_are_listed_closest_first(http, ctx):
     assert [(v["canonical_id"], v["score"]) for v in under] == [("tiktok:1", 72)]
     assert (await http.get(f"/api/runs/{run_id}/videos")).json() == []  # never among the kept videos
     assert (await http.get(f"/api/runs/{uuid.uuid4()}/below-bar")).status_code == 404
+
+
+async def test_the_live_counts_leave_out_the_owners_own_targets(http, ctx):
+    run_id, _ = await a_run(http, ctx)
+    async with ctx.sessionmaker() as s:
+        s.add(Video(canonical_id="tiktok:2", platform="tiktok", url="https://www.tiktok.com/@u/video/2"))
+        await s.flush()
+        s.add(Finding(run_id=run_id, canonical_id="tiktok:2", status="analyzed", source="owner", why="your target"))
+        await s.commit()
+    assert (await http.get(f"/api/runs/{run_id}")).json()["findings"] == {"analyzed": 1}  # the run's own find only

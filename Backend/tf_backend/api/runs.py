@@ -67,8 +67,9 @@ async def _run_out(c: AppContext, run: Run, ch: Character) -> dict[str, Any]:
     async with c.sessionmaker() as s:
         tasks = (await s.execute(select(Task).where(Task.run_id == run.id, Task.task_type != "analyze")
                                  .order_by(Task.created_at))).scalars().all()
-        counts = dict((await s.execute(select(Finding.status, func.count()).where(Finding.run_id == run.id)
-                                       .group_by(Finding.status))).all())
+        # the run's own finds only: the owner's targets it prepares aren't "kept videos"
+        counts = dict((await s.execute(select(Finding.status, func.count()).where(
+            Finding.run_id == run.id, Finding.source != "owner").group_by(Finding.status))).all())
         fb = await s.get(RunFeedback, run.id)
     return {
         "id": str(run.id), "state": run.state, "character": await character_card(c, ch),
