@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { niceScale } from "../components/socials/ViewsChart";
+import { niceTop } from "../components/socials/MiniChart";
 import { ago, compact, engagementRate, formatDelta, percent, watchThrough } from "./socials";
 
 describe("socials numbers", () => {
@@ -28,8 +28,6 @@ describe("socials numbers", () => {
 
 describe("chart scale", () => {
   it("puts gridlines on round numbers", () => {
-    expect(niceScale(3400)).toEqual({ max: 4000, step: 1000 });
-    expect(niceScale(5400)).toEqual({ max: 6000, step: 2000 });
-    expect(niceScale(380)).toEqual({ max: 400, step: 100 });
+    expect([niceTop(176), niceTop(638), niceTop(3400), niceTop(1)]).toEqual([200, 1000, 5000, 1]);
   });
 });

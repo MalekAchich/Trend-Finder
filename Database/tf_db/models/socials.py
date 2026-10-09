@@ -24,6 +24,9 @@ class SocialChannel(Base):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     scopes: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    # as the platform last gave them (Instagram's official API only): {country|age|gender: [[label, count]], ...}
+    audience: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    account_insights: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # last 28 days: reach, views, …
     created_at: Mapped[datetime] = _created()
 
 

@@ -155,3 +155,14 @@ async def test_a_post_can_be_linked_to_the_video_it_recreates_and_has_history(se
     assert [h["views"] for h in hist] == [300]
     assert (await http.delete(f"/api/socials/channels/{ch['id']}")).json() == {"ok": True}
     assert (await http.get("/api/socials")).json()["characters"][0]["channels"] == []
+
+
+async def test_the_channel_over_time_and_each_post_s_life_start_at_zero(setup):
+    http, socials, _ = setup
+    ch = (await http.post("/api/socials/channels", json={"platform": "instagram", "handle": "made_up_channel",
+                                                          "character": "testy"})).json()
+    line = (await http.get(f"/api/socials/channels/{ch['id']}/timeline")).json()
+    assert [(p["views"], p["followers"]) for p in line] == [(300, 140)]
+    (post,) = (await http.get(f"/api/socials/channels/{ch['id']}/posts?window=all")).json()
+    assert post["spark"][0] == [0.0, 0] and post["spark"][-1][1] == 300  # one reading still draws a line
+    assert ch["audience"] is None  # public pages don't say who the audience is

@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tf_agent.manual import small_jpeg
@@ -21,7 +21,7 @@ from tf_agent.socials.sync import SocialSync, SyncResult
 from tf_db.models import SocialChannel, SocialChannelSnapshot, SocialPost, SocialSnapshot
 
 log = logging.getLogger(__name__)
-SYNC_EVERY_S = 3 * 3600
+SYNC_EVERY_S = 3600  # hourly: new posts change fast
 FIRST_SYNC_AFTER_S = 60  # a fresh start lets the app settle first
 PENDING_TTL_S = 600
 WINDOWS = {"7d": timedelta(days=7), "30d": timedelta(days=30), "all": None}
@@ -124,7 +124,8 @@ class Socials:
                 "followers_7d": (latest.followers - week.followers) if latest and week and latest is not week
                 and latest.followers is not None and week.followers is not None else None,
                 "total_likes": latest.total_likes if latest else None, "posts": latest.posts if latest else None,
-                "views_7d": sum(p["views_gained"] or 0 for p in posts) if posts else None}
+                "views_7d": sum(p["views_gained"] or 0 for p in posts) if posts else None,
+                "audience": ch.audience, "account_insights": ch.account_insights}
 
     async def posts_out(self, s: AsyncSession, ch: SocialChannel, window: str, now: datetime) -> list[dict[str, Any]]:
         span = WINDOWS[window]
@@ -147,6 +148,10 @@ class Socials:
                        else None))
             day = next((x for x in snaps if x.taken_at <= now - timedelta(hours=24)), None)
             eng = engagement(last)
+            # the post's life so far, oldest first: it starts at 0 views when posted
+            spark = ([[0.0, 0]] if p.posted_at else []) + [
+                [round((x.taken_at - p.posted_at).total_seconds() / 3600, 2) if p.posted_at else i, x.views]
+                for i, x in enumerate(reversed(snaps)) if x.views is not None]
             out.append({
                 "id": str(p.id), "platform": ch.platform, "platform_id": p.platform_post_id, "url": p.url,
                 "canonical_id": p.canonical_id, "caption": p.caption, "posted_at": p.posted_at,
@@ -159,8 +164,20 @@ class Socials:
                 "watch_through": (last.avg_watch_s / p.duration_s) if last.avg_watch_s and p.duration_s else None,
                 "engagement": eng, "views_gained": gained,
                 "views_24h": (last.views - day.views) if day and last.views is not None and day.views is not None
-                else None, "taken_at": last.taken_at})
+                else None, "taken_at": last.taken_at, "spark": spark})
         return out
+
+    async def timeline(self, s: AsyncSession, ch: SocialChannel) -> list[dict[str, Any]]:
+        """The channel over time: total views of its posts and followers, one point per sync."""
+        views = dict((await s.execute(
+            select(SocialSnapshot.taken_at, func.sum(SocialSnapshot.views))
+            .join(SocialPost, SocialPost.id == SocialSnapshot.post_id).where(SocialPost.channel_id == ch.id)
+            .group_by(SocialSnapshot.taken_at))).all())
+        followers = dict((await s.execute(select(SocialChannelSnapshot.taken_at, SocialChannelSnapshot.followers)
+                                          .where(SocialChannelSnapshot.channel_id == ch.id))).all())
+        times = sorted(set(views) | set(followers))
+        return [{"t": t, "views": int(views[t]) if views.get(t) is not None else None,  # SUM comes back as Decimal
+                 "followers": followers.get(t)} for t in times]
 
     async def history(self, s: AsyncSession, post_id: uuid.UUID) -> list[dict[str, Any]]:
         snaps = (await s.execute(select(SocialSnapshot).where(SocialSnapshot.post_id == post_id)

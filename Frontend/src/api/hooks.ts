@@ -195,7 +195,11 @@ export const useSocials = () =>
 
 export const useSocialPosts = (channelId: string, window: "7d" | "30d" | "all") =>
   useQuery({ queryKey: ["social-posts", channelId, window],
-    queryFn: () => api.get<SocialPost[]>(`/api/socials/channels/${channelId}/posts?window=${window}`) });
+    queryFn: () => api.get<SocialPost[]>(`/api/socials/channels/${channelId}/posts?window=${window}`), refetchInterval: 60_000 });
+
+export const useChannelTimeline = (channelId: string) =>
+  useQuery({ queryKey: ["social-timeline", channelId], refetchInterval: 60_000,
+    queryFn: () => api.get<{ t: string; views: number | null; followers: number | null }[]>(`/api/socials/channels/${channelId}/timeline`) });
 
 export const usePostHistory = (postId: string | null) =>
   useQuery({ queryKey: ["social-history", postId], enabled: !!postId,
@@ -208,7 +212,7 @@ export const useSocialReport = (slug: string | null) =>
 /** Adding, connecting, syncing or linking: every Socials view refreshes. */
 export const useSocialActions = () => {
   const qc = useQueryClient();
-  const done = () => Promise.all(["socials", "social-posts", "social-history", "social-report"].map((k) =>
+  const done = () => Promise.all(["socials", "social-posts", "social-history", "social-report", "social-timeline"].map((k) =>
     qc.invalidateQueries({ queryKey: [k] })));
   return {
     add: useMutation({ onSuccess: done, mutationFn: (v: { platform: string; handle: string; character: string }) =>

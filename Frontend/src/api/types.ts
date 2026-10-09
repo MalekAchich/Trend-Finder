@@ -233,6 +233,9 @@ export interface SocialChannel {
   total_likes: number | null;
   posts: number | null;
   views_7d: number | null;
+  audience: { country?: [string, number][]; age?: [string, number][]; gender?: [string, number][]; note?: string } | null;
+  account_insights: { days: number; reach?: number | null; views?: number | null; profile_views?: number | null;
+    accounts_engaged?: number | null; total_interactions?: number | null } | null;
 }
 
 export interface SocialsOverview {
@@ -266,6 +269,7 @@ export interface SocialPost {
   views_gained: number | null;
   views_24h: number | null;
   taken_at: string;
+  spark: [number, number][];  // [hours since posted, views], starting at [0, 0]
 }
 
 export interface SocialSnapshot {

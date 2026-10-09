@@ -1,16 +1,30 @@
-import { Check, Copy, ExternalLink, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { Check, Copy, ExternalLink, Loader2, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useSocialActions } from "../../api/hooks";
 import type { SocialChannel, SocialsOverview } from "../../api/types";
 
-/** The official-API connection, step by step: Instagram takes a token from Meta's dashboard, TikTok a login. */
-export function ConnectPanel({ channel, overview, onDone }: { channel: SocialChannel; overview: SocialsOverview;
-  onDone: () => void }) {
+// password managers must never fill these: they're an app's keys, not a login
+const NO_AUTOFILL = { autoComplete: "new-password", "data-1p-ignore": true, "data-lpignore": "true",
+  "data-form-type": "other", spellCheck: false } as const;
+
+/** The official-API connection, step by step, in a dialog: Instagram takes a token from Meta's dashboard,
+ * TikTok a login. */
+export function ConnectHelp({ channel, overview, onClose }: { channel: SocialChannel; overview: SocialsOverview;
+  onClose: () => void }) {
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [onClose]);
   return (
-    <div className="mt-4 rounded-xl border border-line bg-night-2/60 p-4 text-[13px] leading-relaxed">
-      {channel.platform === "instagram"
-        ? <InstagramSteps channel={channel} onDone={onDone} />
-        : <TikTokSteps channel={channel} overview={overview} />}
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div role="dialog" aria-modal aria-label="Connect the official API"
+        className="max-h-[88vh] w-full max-w-[680px] overflow-y-auto rounded-2xl border border-line bg-night-2 p-6 text-[13px] leading-relaxed shadow-2xl">
+        <button onClick={onClose} aria-label="Close" className="float-right grid h-8 w-8 place-items-center rounded-md text-mist hover:bg-panel hover:text-snow"><X size={16} /></button>
+        {channel.platform === "instagram"
+          ? <InstagramSteps channel={channel} onDone={onClose} />
+          : <TikTokSteps channel={channel} overview={overview} />}
+      </div>
     </div>
   );
 }
@@ -45,7 +59,7 @@ function InstagramSteps({ channel, onDone }: { channel: SocialChannel; onDone: (
           Paste it here. The app checks it belongs to @{channel.handle}, keeps it only on this computer, and renews it before it expires.
           <form className="mt-2 flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault();
             instagramToken.mutate({ id: channel.id, token: token.trim() }, { onSuccess: () => { setToken(""); onDone(); } }); }}>
-            <input className="field !h-9 min-w-[240px] flex-1" type="password" autoComplete="off" value={token}
+            <input className="field !h-9 min-w-[240px] flex-1" type="password" {...NO_AUTOFILL} name="ig-access-token" value={token}
               onChange={(e) => setToken(e.target.value)} placeholder="Instagram access token" aria-label="Instagram access token" />
             <button className="btn-lime !h-9" disabled={token.trim().length < 20 || instagramToken.isPending}>
               {instagramToken.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Connect</button>
@@ -72,8 +86,8 @@ function TikTokSteps({ channel, overview }: { channel: SocialChannel; overview: 
       <p className="font-medium">Connect @{channel.handle} through TikTok's official API</p>
       <p className="mt-1 text-[12.5px] text-mist">Free, about 15 minutes once. Only reading: the app never posts or logs in to your account.</p>
       <ol className="mt-3 space-y-2.5">
-        <Step n={1}>Open <Link href="https://developers.tiktok.com/apps/">TikTok for Developers</Link>, log in, and <b>Connect an app</b>. For the platform, pick <b>Desktop</b> (this app runs on your computer).</Step>
-        <Step n={2}>Add the products <b>Login Kit</b> and <b>Display API</b>, with the scopes <b>user.info.basic, user.info.profile, user.info.stats, video.list</b>.</Step>
+        <Step n={1}>Open your app on <Link href="https://developers.tiktok.com/apps/">TikTok for Developers</Link>. At the top, next to the app's name, switch from <b>Production</b> to <b>Sandbox</b> and create a sandbox (any name). Never "Submit for review": your own account doesn't need it.</Step>
+        <Step n={2}>In the sandbox: <b>Products → Add products</b>: <b>Login Kit</b> and <b>Display API</b>. In <b>Scopes</b>, tick <b>user.info.basic, user.info.profile, user.info.stats, video.list</b>. Where it asks for the platform, pick <b>Desktop</b>.</Step>
         <Step n={3}>
           In Login Kit, add this redirect URI exactly:
           <span className="mt-1.5 flex items-center gap-2">
@@ -82,13 +96,13 @@ function TikTokSteps({ channel, overview }: { channel: SocialChannel; overview: 
               {copied ? <Check size={13} /> : <Copy size={13} />}</button>
           </span>
         </Step>
-        <Step n={4}>Switch the app to <b>Sandbox</b>, and under <b>Target users</b> add your TikTok account <b>@{channel.handle}</b>. No app review is needed for your own account.</Step>
+        <Step n={4}>In the sandbox's settings, under <b>Target users</b>, add your TikTok account <b>@{channel.handle}</b>, then press <b>Save</b>.</Step>
         <Step n={5}>
           {app.set ? <>Your app's keys are saved ({app.hint}). To change them, paste new ones:</> : <>Paste the sandbox's <b>Client key</b> and <b>Client secret</b>:</>}
           <form className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]" onSubmit={(e) => { e.preventDefault();
             tiktokApp.mutate({ client_key: key.trim(), client_secret: secret.trim() }, { onSuccess: () => { setKey(""); setSecret(""); } }); }}>
-            <input className="field !h-9" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Client key" aria-label="Client key" />
-            <input className="field !h-9" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Client secret" aria-label="Client secret" />
+            <input className="field !h-9" {...NO_AUTOFILL} name="tiktok-client-key" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Client key" aria-label="Client key" />
+            <input className="field !h-9" type="password" {...NO_AUTOFILL} name="tiktok-client-secret" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Client secret" aria-label="Client secret" />
             <button className="btn-ghost !h-9 justify-center" disabled={!key.trim() || !secret.trim() || tiktokApp.isPending}>Save keys</button>
           </form>
           {tiktokApp.isError && <p role="alert" className="mt-2 text-[12.5px] text-bad">{(tiktokApp.error as Error).message}</p>}

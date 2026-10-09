@@ -232,6 +232,13 @@ async def posts(channel_id: str, window: Literal["7d", "30d", "all"] = "30d",
         return await svc.posts_out(s, ch, window, now_utc())
 
 
+@router.get("/channels/{channel_id}/timeline")
+async def timeline(channel_id: str, c: AppContext = Depends(ctx)) -> list[dict[str, Any]]:
+    svc, ch = _service(c), await _channel(c, channel_id)
+    async with c.sessionmaker() as s:
+        return await svc.timeline(s, ch)
+
+
 @router.get("/posts/{post_id}/history")
 async def history(post_id: str, c: AppContext = Depends(ctx)) -> list[dict[str, Any]]:
     svc, pid = _service(c), _uuid(post_id, "post")

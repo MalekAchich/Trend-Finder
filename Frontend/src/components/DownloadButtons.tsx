@@ -5,7 +5,7 @@ import { saveFile } from "../lib/download";
 type Kind = "video" | "audio";
 
 /** Two buttons: the video with its sound, or the sound alone. The first download of a video takes a few seconds. */
-export function DownloadButtons({ canonicalId }: { canonicalId: string }) {
+export function DownloadButtons({ canonicalId, dark }: { canonicalId: string; dark?: boolean }) {
   const [busy, setBusy] = useState<Kind | null>(null);
   const [error, setError] = useState<string | null>(null);
   const get = async (kind: Kind) => {
@@ -21,7 +21,8 @@ export function DownloadButtons({ canonicalId }: { canonicalId: string }) {
   };
   const button = (kind: Kind, label: string, title: string, Icon: typeof Download) => (
     <button type="button" onClick={() => get(kind)} disabled={busy !== null} title={title}
-      className="inline-flex h-7 items-center gap-1 rounded-md bg-paper-2 px-2 text-[11.5px] text-ink-2 transition hover:text-ink disabled:opacity-60">
+      className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] transition disabled:opacity-60 ${dark
+        ? "bg-panel text-mist hover:text-snow" : "bg-paper-2 text-ink-2 hover:text-ink"}`}>
       {busy === kind ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}{busy === kind ? "Getting it…" : label}
     </button>
   );

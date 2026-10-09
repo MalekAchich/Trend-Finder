@@ -133,8 +133,10 @@ class SocialSync:
             if last is None or now - last >= SNAPSHOT_GAP:
                 s.add(SocialChannelSnapshot(channel_id=channel_id, taken_at=now, followers=read.followers,
                                             total_likes=read.total_likes, posts=read.posts_count))
+            extra = {k: v for k, v in (("audience", read.audience), ("account_insights", read.account_insights))
+                     if v is not None}  # public reads don't have them: what the API gave last stays
             await s.execute(update(SocialChannel).where(SocialChannel.id == channel_id).values(
-                last_synced_at=now, last_error=problem))
+                last_synced_at=now, last_error=problem, **extra))
             await s.commit()
         if new and self.on_new_posts is not None:
             try:

@@ -19,6 +19,8 @@ METRIC_SETS = (
     ["reach", "likes", "comments", "saved"],
 )
 IMAGE_METRICS = ["views", "reach", "likes", "comments", "shares", "saved"]
+ACCOUNT_METRICS = ("reach", "views", "profile_views", "accounts_engaged", "total_interactions")
+MIN_FOLLOWERS_FOR_AUDIENCE = 100  # Meta's rule for follower demographics
 MAX_PAGES = 20  # 50 posts a page: far more than a 90-day window holds; a safety stop against a looping cursor
 
 
@@ -86,6 +88,49 @@ class InstagramApi:
             return {d.get("name"): _metric(d) for d in data.get("data") or [] if isinstance(d, dict)}
         return {}
 
+    async def account_insights(self, token: str, days: int = 28) -> dict[str, Any]:
+        """The account's last `days` days in totals (reach, views, profile visits, engaged accounts, interactions).
+        Metrics this account or API version doesn't have are left out."""
+        now = int(datetime.now().timestamp())
+        out: dict[str, Any] = {"days": days}
+        for metric in ACCOUNT_METRICS:
+            try:
+                data = await self._get("/me/insights", token, metric=metric, period="day", metric_type="total_value",
+                                       since=now - days * 86400, until=now)
+            except ReadError as e:
+                if e.code != "unavailable":
+                    raise
+                continue
+            for d in data.get("data") or []:
+                if isinstance(d, dict) and d.get("name") == metric:
+                    out[metric] = _metric(d)
+        return out
+
+    async def audience(self, token: str, followers: int | None) -> dict[str, Any]:
+        """Who follows: top countries, ages and genders. Meta only gives it from 100 followers on."""
+        if followers is not None and followers < MIN_FOLLOWERS_FOR_AUDIENCE:
+            return {"note": f"Instagram shows who your audience is from {MIN_FOLLOWERS_FOR_AUDIENCE} followers on "
+                            f"({followers} now)."}
+        out: dict[str, Any] = {}
+        for breakdown in ("country", "age", "gender"):
+            try:
+                data = await self._get("/me/insights", token, metric="follower_demographics", period="lifetime",
+                                       metric_type="total_value", breakdown=breakdown)
+            except ReadError as e:
+                if e.code != "unavailable":
+                    raise
+                continue
+            rows: list[list[Any]] = []
+            for d in data.get("data") or []:
+                for b in ((d.get("total_value") or {}).get("breakdowns") or []):
+                    for r in b.get("results") or []:
+                        label = ", ".join(r.get("dimension_values") or [])
+                        if label and isinstance(r.get("value"), int | float):
+                            rows.append([label, r["value"]])
+            if rows:
+                out[breakdown] = sorted(rows, key=lambda r: -r[1])[:12]
+        return out or {"note": "Instagram didn't give audience numbers for this account yet."}
+
     async def read(self, token: str, since: datetime) -> ChannelRead:
         me = await self.me(token)
         out = ChannelRead(handle=str(me.get("username") or ""), followers=me.get("followers_count"),
@@ -116,6 +161,12 @@ class InstagramApi:
                     avg_watch_s=watch / 1000 if watch is not None else None,  # milliseconds
                     total_watch_s=total / 1000 if total is not None else None))
             url = None if old else (page.get("paging") or {}).get("next")
+        try:  # account-level numbers: a refusal costs only them, never the posts
+            out.account_insights = await self.account_insights(token)
+            out.audience = await self.audience(token, out.followers)
+        except ReadError as e:
+            if e.code in ("expired", "revoked"):
+                raise
         return out
 
 

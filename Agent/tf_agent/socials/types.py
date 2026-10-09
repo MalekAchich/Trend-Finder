@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 ReadCode = Literal["expired", "revoked", "rate_limited", "unavailable", "not_professional"]
 
@@ -35,6 +35,8 @@ class ChannelRead:
     posts: list[PostRead] = field(default_factory=list)
     scopes: list[str] = field(default_factory=list)
     source: str = "api"  # api | public
+    audience: dict[str, Any] | None = None  # {"country": [["US", 40], ...], "age": [...], "gender": [...]} or {"note"}
+    account_insights: dict[str, Any] | None = None  # {"days": 28, "reach": n, "views": n, ...}
 
 
 class ReadError(Exception):
