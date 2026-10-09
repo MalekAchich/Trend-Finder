@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
+import type { SocialChannel, SocialPost, SocialSnapshot, SocialsOverview } from "./types";
 import type { AccountItem, Character, ManualVideo, CharacterDetail, FoundVideo, ModelChoice, ProviderPriority, ProviderStatus, ProviderUsage, Rating, RunDetail,
   RunHistoryRow, RunSummary, StartRun } from "./types";
 
@@ -186,5 +187,42 @@ export const useCharacterEdits = () => {
       api.patch<{ slug: string }>(`/api/characters/${v.slug}`, { name: v.name }) }),
     addImages: useMutation({ onSuccess: refresh, mutationFn: (v: { slug: string; files: File[] }) =>
       api.post<{ slug: string }>(`/api/characters/${v.slug}/images`, imagesForm(v.files)) }),
+  };
+};
+
+export const useSocials = () =>
+  useQuery({ queryKey: ["socials"], queryFn: () => api.get<SocialsOverview>("/api/socials"), refetchInterval: 60_000 });
+
+export const useSocialPosts = (channelId: string, window: "7d" | "30d" | "all") =>
+  useQuery({ queryKey: ["social-posts", channelId, window],
+    queryFn: () => api.get<SocialPost[]>(`/api/socials/channels/${channelId}/posts?window=${window}`) });
+
+export const usePostHistory = (postId: string | null) =>
+  useQuery({ queryKey: ["social-history", postId], enabled: !!postId,
+    queryFn: () => api.get<SocialSnapshot[]>(`/api/socials/posts/${postId}/history`) });
+
+export const useSocialReport = (slug: string | null) =>
+  useQuery({ queryKey: ["social-report", slug], enabled: !!slug,
+    queryFn: () => api.get<{ text: string | null }>(`/api/socials/report?character=${slug}`) });
+
+/** Adding, connecting, syncing or linking: every Socials view refreshes. */
+export const useSocialActions = () => {
+  const qc = useQueryClient();
+  const done = () => Promise.all(["socials", "social-posts", "social-history", "social-report"].map((k) =>
+    qc.invalidateQueries({ queryKey: [k] })));
+  return {
+    add: useMutation({ onSuccess: done, mutationFn: (v: { platform: string; handle: string; character: string }) =>
+      api.post<SocialChannel>("/api/socials/channels", v) }),
+    remove: useMutation({ onSuccess: done, mutationFn: (id: string) => api.del(`/api/socials/channels/${id}`) }),
+    disconnect: useMutation({ onSuccess: done, mutationFn: (id: string) =>
+      api.post<SocialChannel>(`/api/socials/channels/${id}/disconnect`) }),
+    sync: useMutation({ onSuccess: done, mutationFn: (id: string) =>
+      api.post<SocialChannel>(`/api/socials/channels/${id}/sync`) }),
+    instagramToken: useMutation({ onSuccess: done, mutationFn: (v: { id: string; token: string }) =>
+      api.post<SocialChannel>(`/api/socials/channels/${v.id}/instagram-token`, { token: v.token }) }),
+    tiktokApp: useMutation({ onSuccess: done, mutationFn: (v: { client_key: string; client_secret: string }) =>
+      api.put("/api/socials/tiktok-app", v) }),
+    link: useMutation({ onSuccess: done, mutationFn: (v: { id: string; inspired_by: string | null }) =>
+      api.patch(`/api/socials/posts/${v.id}`, { inspired_by: v.inspired_by }) }),
   };
 };

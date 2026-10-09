@@ -217,3 +217,64 @@ export interface ModelChoice {
   effort: string | null;
   efforts: string[];
 }
+
+/** One of our own posting channels and its latest numbers (Plan 9). */
+export interface SocialChannel {
+  id: string;
+  platform: "instagram" | "tiktok";
+  handle: string;
+  mode: "public" | "api";
+  connected_at: string | null;
+  last_synced_at: string | null;
+  last_error: string | null;
+  scopes: string[];
+  followers: number | null;
+  followers_7d: number | null;
+  total_likes: number | null;
+  posts: number | null;
+  views_7d: number | null;
+}
+
+export interface SocialsOverview {
+  characters: { slug: string; name: string; channels: SocialChannel[] }[];
+  tiktok_app: { set: boolean; hint: string | null; updated_at: string | null };
+  tiktok_redirect_uri: string;
+}
+
+export interface SocialPost {
+  id: string;
+  platform: "instagram" | "tiktok";
+  platform_id: string;
+  url: string;
+  canonical_id: string | null;
+  caption: string | null;
+  posted_at: string | null;
+  duration_s: number | null;
+  inspired_by: string | null;
+  thumbnail_url: string | null;
+  format: string | null;
+  tags: string[];
+  views: number | null;
+  reach: number | null;
+  likes: number | null;
+  comments: number | null;
+  shares: number | null;
+  saves: number | null;
+  avg_watch_s: number | null;
+  watch_through: number | null;
+  engagement: number | null;
+  views_gained: number | null;
+  views_24h: number | null;
+  taken_at: string;
+}
+
+export interface SocialSnapshot {
+  taken_at: string;
+  views: number | null;
+  reach: number | null;
+  likes: number | null;
+  comments: number | null;
+  shares: number | null;
+  saves: number | null;
+  avg_watch_s: number | null;
+}
