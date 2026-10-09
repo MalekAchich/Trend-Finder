@@ -50,7 +50,8 @@ async def build_context(settings: AppSettings | None = None) -> tuple[AppContext
                          downloads=Downloads(stack.ytdlp.save, s.media_dir / "downloads"))
     creds, instagram, tiktok = Credentials(s.secrets_dir), InstagramApi(), TikTokApi()
     context.socials = Socials(sm, SocialSync(sm, creds, instagram, tiktok, PublicReader(stack.browser)), creds,
-                              instagram, tiktok, thumbs_dir=s.media_dir / "thumbs", fetch_image=_http_image)
+                              instagram, tiktok, thumbs_dir=s.media_dir / "thumbs", fetch_image=_http_image,
+                              get_meta=stack.ytdlp.metadata)
     context.socials.start()  # every 3 hours, the first a minute after start
 
     async def cleanup() -> None:

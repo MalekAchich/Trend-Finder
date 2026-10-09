@@ -45,6 +45,7 @@ class Socials:
     thumbs_dir: Path
     fetch_image: Any
     redirect_uri: str = "http://127.0.0.1:8000/api/socials/tiktok/callback"
+    get_meta: Any = None  # url -> VideoItem (yt-dlp): a post's length when the platform's API doesn't give it
     clock: Any = time.time
     pending: dict[str, Pending] = field(default_factory=dict)
     _loop: asyncio.Task[None] | None = None
@@ -70,7 +71,27 @@ class Socials:
         async with self._locks.setdefault(channel_id, asyncio.Lock()):  # a click during the 3-hour sync: one read
             result = await self.sync.sync_channel(channel_id)
         await self._save_thumbnails(channel_id)
+        await self._fill_lengths(channel_id)
         return result
+
+    async def _fill_lengths(self, channel_id: uuid.UUID) -> None:
+        """Instagram's API gives no video length (needed for "watched through"): looked up once per post."""
+        if self.get_meta is None:
+            return
+        async with self.sm() as s:
+            posts = (await s.execute(select(SocialPost).where(SocialPost.channel_id == channel_id,
+                                                              SocialPost.duration_s.is_(None)))).scalars().all()
+        for p in posts:
+            try:
+                item = await self.get_meta(p.url)
+            except Exception as e:  # no length is fine: watched-through stays "–"
+                log.info("length of %s unknown: %s", p.url, e)
+                continue
+            if item.duration_s:
+                async with self.sm() as s:
+                    row = await s.get(SocialPost, p.id)
+                    row.duration_s = float(item.duration_s)
+                    await s.commit()
 
     async def sync_all(self) -> None:
         async with self.sm() as s:

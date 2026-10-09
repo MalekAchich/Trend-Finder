@@ -23,7 +23,7 @@ def read(handle="made_up_channel", views=500, source="api"):
     return ChannelRead(handle=handle, followers=140, posts_count=1, source=source, posts=[
         PostRead(platform_post_id="TESTOWN001", url="https://www.instagram.com/reel/TESTOWN001/",
                  posted_at=datetime.now(UTC) - timedelta(hours=10), views=views, likes=50, comments=5,
-                 duration_s=10, avg_watch_s=5.0 if source == "api" else None)])
+                 duration_s=None, avg_watch_s=5.0 if source == "api" else None)])  # Instagram gives no length
 
 
 class FakeInstagram:
@@ -72,8 +72,12 @@ async def setup(db_sessionmaker, tmp_path):
     async def image(url):
         raise httpx.ConnectError("no network in tests")
 
+    async def meta(url):
+        from types import SimpleNamespace
+        return SimpleNamespace(duration_s=20.0)
+
     socials = Socials(db_sessionmaker, SocialSync(db_sessionmaker, creds, ig, tt, FakePublic()), creds, ig, tt,
-                      thumbs_dir=tmp_path / "thumbs", fetch_image=image)
+                      thumbs_dir=tmp_path / "thumbs", fetch_image=image, get_meta=meta)
     ctx = AppContext(sessionmaker=db_sessionmaker, runs=None, learner=None, media_dir=tmp_path,
                      characters_dir=tmp_path, socials=socials)
     app = create_app(services=None, context=ctx)
@@ -118,6 +122,8 @@ async def test_an_instagram_token_is_checked_saved_and_turns_on_the_official_num
     assert wrong.status_code == 422 and "didn't accept" in wrong.json()["detail"]
     ok = (await http.post(f"/api/socials/channels/{ch['id']}/instagram-token", json={"token": SECRETS[0]})).json()
     assert ok["mode"] == "api" and "instagram_business_manage_insights" in ok["scopes"]
+    (post,) = (await http.get(f"/api/socials/channels/{ch['id']}/posts?window=all")).json()
+    assert post["duration_s"] == 20.0 and post["watch_through"] == 0.25  # length looked up once: 5 s of 20 s
     assert socials.creds.social_token(ch["id"])["access_token"] == SECRETS[0]
     off = (await http.post(f"/api/socials/channels/{ch['id']}/disconnect")).json()
     assert off["mode"] == "public" and socials.creds.social_token(ch["id"]) is None
