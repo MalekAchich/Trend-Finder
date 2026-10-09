@@ -221,7 +221,7 @@ export interface ModelChoice {
 /** One of our own posting channels and its latest numbers (Plan 9). */
 export interface SocialChannel {
   id: string;
-  platform: "instagram" | "tiktok";
+  platform: "instagram" | "tiktok" | "youtube";
   handle: string;
   mode: "public" | "api";
   connected_at: string | null;
@@ -237,18 +237,21 @@ export interface SocialChannel {
   audience: Partial<Record<"reached" | "engaged" | "followers",
     Partial<Record<"country" | "city" | "age" | "gender", [string, number][]>>>> | null;
   account_insights: { days: number; reach?: number | null; views?: number | null; profile_views?: number | null;
-    accounts_engaged?: number | null; total_interactions?: number | null } | null;
+    accounts_engaged?: number | null; total_interactions?: number | null; watch_minutes?: number | null;
+    subscribers_gained?: number | null } | null;
 }
 
 export interface SocialsOverview {
   characters: { slug: string; name: string; channels: SocialChannel[] }[];
   tiktok_app: { set: boolean; hint: string | null; updated_at: string | null };
+  google_app: { set: boolean; hint: string | null; updated_at: string | null };
   tiktok_redirect_uri: string;
+  youtube_redirect_uri: string;
 }
 
 export interface SocialPost {
   id: string;
-  platform: "instagram" | "tiktok";
+  platform: "instagram" | "tiktok" | "youtube";
   platform_id: string;
   url: string;
   canonical_id: string | null;
@@ -272,6 +275,7 @@ export interface SocialPost {
   views_24h: number | null;
   taken_at: string;
   spark: [number, number][];  // [hours since posted, views], starting at [0, 0]
+  audience: { country?: [string, number][] } | null;  // where this post's views come from (YouTube)
 }
 
 export interface SocialSnapshot {

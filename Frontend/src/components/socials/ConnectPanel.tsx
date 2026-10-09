@@ -21,9 +21,9 @@ export function ConnectHelp({ channel, overview, onClose }: { channel: SocialCha
       <div role="dialog" aria-modal aria-label="Connect the official API"
         className="max-h-[88vh] w-full max-w-[680px] overflow-y-auto rounded-2xl border border-line bg-night-2 p-6 text-[13px] leading-relaxed shadow-2xl">
         <button onClick={onClose} aria-label="Close" className="float-right grid h-8 w-8 place-items-center rounded-md text-mist hover:bg-panel hover:text-snow"><X size={16} /></button>
-        {channel.platform === "instagram"
-          ? <InstagramSteps channel={channel} onDone={onClose} />
-          : <TikTokSteps channel={channel} overview={overview} />}
+        {channel.platform === "instagram" ? <InstagramSteps channel={channel} onDone={onClose} />
+          : channel.platform === "youtube" ? <YouTubeSteps channel={channel} overview={overview} />
+            : <TikTokSteps channel={channel} overview={overview} />}
       </div>
     </div>
   );
@@ -113,6 +113,43 @@ function TikTokSteps({ channel, overview }: { channel: SocialChannel; overview: 
             <a href={`/api/socials/tiktok/connect?channel=${channel.id}`}
               className={`btn-lime !h-9 ${app.set ? "" : "pointer-events-none opacity-45"}`} aria-disabled={!app.set}>Connect with TikTok</a>
           </div>
+        </Step>
+      </ol>
+    </>
+  );
+}
+
+function YouTubeSteps({ channel, overview }: { channel: SocialChannel; overview: SocialsOverview }) {
+  const { googleApp } = useSocialActions();
+  const [id, setId] = useState("");
+  const [secret, setSecret] = useState("");
+  const app = overview.google_app;
+  return (
+    <>
+      <p className="font-medium">Connect @{channel.handle} through your Google account</p>
+      <p className="mt-1 text-[12.5px] text-mist">Free, about 10 minutes once. Read-only: the app can't upload, edit or delete anything.</p>
+      <ol className="mt-3 space-y-2.5">
+        <Step n={1}>Open <Link href="https://console.cloud.google.com/">Google Cloud Console</Link> and pick the project of your YouTube API key (top left). In <b>APIs &amp; Services → Library</b>, search <b>YouTube Analytics API</b> and press <b>Enable</b>.</Step>
+        <Step n={2}>Open <Link href="https://console.cloud.google.com/auth/overview">Google Auth Platform</Link> → <b>Get started</b>: app name <b>Trend Finder</b>, your email, audience <b>External</b>, then create.</Step>
+        <Step n={3}>In <b>Audience</b>, press <b>Publish app</b> (to "In production"). Left in "Testing", Google ends the connection every 7 days.</Step>
+        <Step n={4}>In <b>Clients → Create client</b>: application type <b>Desktop app</b>, name <b>Trend Finder</b>, create. Copy the <b>Client ID</b> and <b>Client secret</b>.</Step>
+        <Step n={5}>
+          {app.set ? <>Your Google app's keys are saved ({app.hint}). To change them, paste new ones:</> : <>Paste them here:</>}
+          <form className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]" onSubmit={(e) => { e.preventDefault();
+            googleApp.mutate({ client_id: id.trim(), client_secret: secret.trim() }, { onSuccess: () => { setId(""); setSecret(""); } }); }}>
+            <input className="field !h-9" {...NO_AUTOFILL} name="google-client-id" value={id} onChange={(e) => setId(e.target.value)} placeholder="Client ID" aria-label="Client ID" />
+            <input className="field !h-9" type="password" {...NO_AUTOFILL} name="google-client-secret" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Client secret" aria-label="Client secret" />
+            <button className="btn-ghost !h-9 justify-center" disabled={!id.trim() || !secret.trim() || googleApp.isPending}>Save keys</button>
+          </form>
+          {googleApp.isError && <p role="alert" className="mt-2 text-[12.5px] text-bad">{(googleApp.error as Error).message}</p>}
+        </Step>
+        <Step n={6}>
+          Press Connect and choose the Google account that owns <b>@{channel.handle}</b>. Google will say it hasn't verified the app (it's your own): press <b>Advanced → Go to Trend Finder</b>, then allow both permissions. The app refuses any other channel.
+          <div className="mt-2">
+            <a href={`/api/socials/youtube/connect?channel=${channel.id}`}
+              className={`btn-lime !h-9 ${app.set ? "" : "pointer-events-none opacity-45"}`} aria-disabled={!app.set}>Connect with Google</a>
+          </div>
+          <p className="mt-2 text-[12px] text-mist">It comes back to {overview.youtube_redirect_uri}: nothing to register for a Desktop app.</p>
         </Step>
       </ol>
     </>

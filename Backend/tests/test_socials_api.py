@@ -56,6 +56,25 @@ class FakeTikTok(TikTokApi):
         return ChannelRead(handle="made_up_tiktok", followers=12, posts_count=0, posts=[])
 
 
+class FakeYouTube:
+    who = "made-up-yt"
+
+    def authorize_url(self, client_id, redirect, state, verifier):
+        return f"https://accounts.invalid/auth?client_id={client_id}&redirect_uri={redirect}&state={state}"
+
+    async def exchange(self, app, code, verifier, redirect):
+        if code != "made-up-code":
+            raise ReadError("expired", "made-up bad code")
+        return {"access_token": SECRETS[2], "refresh_token": SECRETS[3], "expires_in": 3599,
+                "scope": "https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly"}
+
+    async def me(self, token):
+        return {"id": "UCmadeup", "handle": self.who}
+
+    async def read(self, token, since):
+        return ChannelRead(handle="made-up-yt", followers=12, posts_count=0, posts=[])
+
+
 class FakePublic:
     async def read(self, platform, handle, since):
         return read(handle, views=300, source="public")
@@ -76,8 +95,9 @@ async def setup(db_sessionmaker, tmp_path):
         from types import SimpleNamespace
         return SimpleNamespace(duration_s=20.0)
 
-    socials = Socials(db_sessionmaker, SocialSync(db_sessionmaker, creds, ig, tt, FakePublic()), creds, ig, tt,
-                      thumbs_dir=tmp_path / "thumbs", fetch_image=image, get_meta=meta)
+    yt = FakeYouTube()
+    socials = Socials(db_sessionmaker, SocialSync(db_sessionmaker, creds, ig, tt, FakePublic(), youtube=yt), creds, ig, tt,
+                      thumbs_dir=tmp_path / "thumbs", fetch_image=image, get_meta=meta, youtube=yt)
     ctx = AppContext(sessionmaker=db_sessionmaker, runs=None, learner=None, media_dir=tmp_path,
                      characters_dir=tmp_path, socials=socials)
     app = create_app(services=None, context=ctx)
@@ -193,3 +213,29 @@ async def test_tiktok_refuses_a_login_to_another_account(setup):
     assert "connected @made_up_developer, not @made_up_tiktok" in msg
     assert socials.creds.social_token(ch["id"]) is None
     assert (await http.get("/api/socials")).json()["characters"][0]["channels"][0]["mode"] == "public"
+
+
+
+async def test_youtube_connects_with_a_google_login_and_refuses_another_channel(setup):
+    http, socials, _ = setup
+    ch = (await http.post("/api/socials/channels", json={"platform": "youtube", "handle": "https://www.youtube.com/@Made-Up-YT",
+                                                          "character": "testy"})).json()
+    assert ch["handle"] == "made-up-yt"
+    assert (await http.get(f"/api/socials/youtube/connect?channel={ch['id']}")).status_code == 409  # no Google app yet
+    shown = (await http.put("/api/socials/google-app", json={"client_id": "1234-madeup.apps.googleusercontent.com",
+                                                             "client_secret": "made-up-google-secret"})).json()
+    assert shown["set"] is True and "made-up-google-secret" not in str(shown)
+
+    go = await http.get(f"/api/socials/youtube/connect?channel={ch['id']}")
+    q = parse_qs(urlparse(go.headers["location"]).query)
+    assert q["redirect_uri"] == ["http://127.0.0.1:8000/api/socials/youtube/callback"]
+    socials.youtube.who = "someone-else"
+    wrong = await http.get(f"/api/socials/youtube/callback?state={q['state'][0]}&code=made-up-code")
+    assert "connected @someone-else, not @made-up-yt" in parse_qs(urlparse(wrong.headers["location"]).query)["error"][0]
+    assert socials.creds.social_token(ch["id"]) is None
+    socials.youtube.who = "made-up-yt"
+    q2 = parse_qs(urlparse((await http.get(f"/api/socials/youtube/connect?channel={ch['id']}")).headers["location"]).query)
+    ok = await http.get(f"/api/socials/youtube/callback?state={q2['state'][0]}&code=made-up-code")
+    assert ok.headers["location"] == "/socials?connected=youtube"
+    row = [x for x in (await http.get("/api/socials")).json()["characters"][0]["channels"] if x["platform"] == "youtube"][0]
+    assert row["mode"] == "api" and row["scopes"] == ["youtube.readonly", "yt-analytics.readonly"]

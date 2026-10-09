@@ -48,6 +48,7 @@ export function PostCard({ post, number, slug }: { post: SocialPost; number: num
               {post.watch_through != null && <> ({percent(post.watch_through, 0)} of it)</>}</dd></div>
         )}
       </dl>
+      {post.audience?.country?.length ? <Countries rows={post.audience.country} /> : null}
       <RecreatedFrom post={post} slug={slug} />
       <div className="mt-2">{post.canonical_id && <DownloadButtons canonicalId={post.canonical_id} dark />}</div>
     </article>
@@ -98,5 +99,18 @@ function Sparkline({ points }: { points: [number, number][] }) {
     <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="mt-2 block h-[22px] w-full" aria-hidden>
       <path d={d} fill="none" stroke="var(--color-lime)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
     </svg>
+  );
+}
+
+const REGION = typeof Intl !== "undefined" && "DisplayNames" in Intl ? new Intl.DisplayNames(undefined, { type: "region" }) : null;
+
+/** Where this post's views come from: the top three countries, as shares. */
+function Countries({ rows }: { rows: [string, number][] }) {
+  const total = rows.reduce((n, r) => n + r[1], 0) || 1;
+  return (
+    <p className="mt-2 text-[11.5px] text-mist">Views from{" "}
+      {rows.slice(0, 3).map(([code, n], i) => (
+        <span key={code} className="text-snow">{i ? " · " : ""}{(/^[A-Z]{2}$/.test(code) && REGION?.of(code)) || code} {percent(n / total, 0)}</span>
+      ))}</p>
   );
 }

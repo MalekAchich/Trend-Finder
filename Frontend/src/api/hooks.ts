@@ -224,6 +224,8 @@ export const useSocialActions = () => {
       api.post<SocialChannel>(`/api/socials/channels/${id}/sync`) }),
     instagramToken: useMutation({ onSuccess: done, mutationFn: (v: { id: string; token: string }) =>
       api.post<SocialChannel>(`/api/socials/channels/${v.id}/instagram-token`, { token: v.token }) }),
+    googleApp: useMutation({ onSuccess: done, mutationFn: (v: { client_id: string; client_secret: string }) =>
+      api.put("/api/socials/google-app", v) }),
     tiktokApp: useMutation({ onSuccess: done, mutationFn: (v: { client_key: string; client_secret: string }) =>
       api.put("/api/socials/tiktok-app", v) }),
     link: useMutation({ onSuccess: done, mutationFn: (v: { id: string; inspired_by: string | null }) =>

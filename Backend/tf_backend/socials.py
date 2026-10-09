@@ -45,6 +45,8 @@ class Socials:
     thumbs_dir: Path
     fetch_image: Any
     redirect_uri: str = "http://127.0.0.1:8000/api/socials/tiktok/callback"
+    google_redirect_uri: str = "http://127.0.0.1:8000/api/socials/youtube/callback"
+    youtube: Any = None  # YouTubeChannel
     get_meta: Any = None  # url -> VideoItem (yt-dlp): a post's length when the platform's API doesn't give it
     clock: Any = time.time
     pending: dict[str, Pending] = field(default_factory=dict)
@@ -180,6 +182,7 @@ class Socials:
                 "thumbnail_url": (f"/api/media/thumbs/{self.thumb_file(p, ch.platform).name}"
                                   if self.thumb_file(p, ch.platform).is_file() else p.thumbnail_url),
                 "format": (p.study or {}).get("format"), "tags": (p.study or {}).get("tags") or [],
+                "audience": p.audience,
                 "views": last.views, "reach": last.reach, "likes": last.likes, "comments": last.comments,
                 "shares": last.shares, "saves": last.saves, "avg_watch_s": last.avg_watch_s,
                 "watch_through": (last.avg_watch_s / p.duration_s) if last.avg_watch_s and p.duration_s else None,

@@ -21,7 +21,8 @@ from tf_db.models import SocialChannel, SocialChannelSnapshot, SocialPost, Socia
 log = logging.getLogger(__name__)
 WINDOW = timedelta(days=90)  # posts this recent get a snapshot every sync; older ones keep their history
 SNAPSHOT_GAP = timedelta(minutes=30)  # a second sync this soon updates the last reading instead of adding one
-REFRESH_BEFORE = timedelta(days=7)  # refresh a token this long before it expires (TikTok's last a day: every sync)
+# refresh a token this long before it expires: Instagram's last 60 days; TikTok's a day and Google's an hour
+REFRESH_BEFORE = {"instagram": timedelta(days=7), "tiktok": timedelta(minutes=10), "youtube": timedelta(minutes=10)}
 
 
 class Reader(Protocol):
@@ -49,8 +50,9 @@ def post_key(platform_post_id: str, url: str) -> tuple[str, str | None]:
 class SocialSync:
     def __init__(self, sm: async_sessionmaker[AsyncSession], creds: Any, instagram: Any, tiktok: Any, public: Public,
                  clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-                 on_new_posts: Callable[[list[uuid.UUID]], Awaitable[None]] | None = None) -> None:
+                 on_new_posts: Callable[[list[uuid.UUID]], Awaitable[None]] | None = None, youtube: Any = None) -> None:
         self._sm, self.creds, self.instagram, self.tiktok, self.public = sm, creds, instagram, tiktok, public
+        self.youtube = youtube
         self._now, self.on_new_posts = clock, on_new_posts
 
     async def _token(self, ch: SocialChannel) -> str | None:
@@ -59,15 +61,16 @@ class SocialSync:
             return None
         now = self._now().timestamp()
         expires = float(tok.get("expires_at") or 0)
-        if expires and expires - now < REFRESH_BEFORE.total_seconds():
+        if expires and expires - now < REFRESH_BEFORE.get(ch.platform, timedelta(minutes=10)).total_seconds():
             if ch.platform == "instagram":
                 new = await self.instagram.refresh(tok["access_token"])
                 tok = {**tok, "access_token": new["access_token"], "expires_at": now + float(new.get("expires_in") or 0)}
-            else:
-                app = self.creds.tiktok_app()
+            else:  # TikTok and YouTube (Google): the app's keys and the refresh token
+                api, app = ((self.tiktok, self.creds.tiktok_app()) if ch.platform == "tiktok"
+                            else (self.youtube, self.creds.google_app()))
                 if app is None or not tok.get("refresh_token"):
-                    raise ReadError("expired", "TikTok: the app keys or the refresh token are missing")
-                new = await self.tiktok.refresh(app, tok["refresh_token"])
+                    raise ReadError("expired", "the app keys or the refresh token are missing")
+                new = await api.refresh(app, tok["refresh_token"])
                 tok = {**tok, "access_token": new["access_token"], "refresh_token": new.get("refresh_token",
                                                                                             tok["refresh_token"]),
                        "expires_at": now + float(new.get("expires_in") or 0)}
@@ -81,7 +84,7 @@ class SocialSync:
                 token = await self._token(ch)
                 if token is None:
                     raise ReadError("expired", "the connection's token is missing")
-                api = self.instagram if ch.platform == "instagram" else self.tiktok
+                api = {"instagram": self.instagram, "tiktok": self.tiktok, "youtube": self.youtube}[ch.platform]
                 return await api.read(token, since), None
             except ReadError as e:
                 problem = ("reconnect: " if e.code in ("expired", "revoked") else "") + e.message
@@ -115,7 +118,7 @@ class SocialSync:
                     await s.flush()
                     new.append(row.id)
                 # what a source knows fills in; nothing it lacks erases what another source gave
-                for field in ("caption", "posted_at", "thumbnail_url", "duration_s"):
+                for field in ("caption", "posted_at", "thumbnail_url", "duration_s", "audience"):
                     if getattr(p, field) is not None:
                         setattr(row, field, getattr(p, field))
                 row.url, row.canonical_id = p.url or row.url, cid or row.canonical_id

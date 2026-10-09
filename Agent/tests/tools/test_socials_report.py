@@ -22,7 +22,7 @@ async def seed(sm):
         slow = SocialPost(channel_id=ig.id, platform_post_id="TESTOWN001", url="u1", caption="slow made-up post",
                           posted_at=NOW - timedelta(days=5), duration_s=12)
         fast = SocialPost(channel_id=ig.id, platform_post_id="TESTOWN002", url="u2", posted_at=NOW - timedelta(hours=20),
-                          duration_s=10, inspired_by="instagram:TESTREEL050",
+                          duration_s=10, inspired_by="instagram:TESTREEL050", audience={"country": [["TN", 3], ["FR", 1]]},
                           study={"format": "gas-station dance in a 70s suit", "tags": ["dance", "ai"]})
         old = SocialPost(channel_id=ig.id, platform_post_id="TESTOWN000", url="u0", posted_at=NOW - timedelta(days=60))
         s.add_all([slow, fast, old])
@@ -45,6 +45,7 @@ async def test_the_report_ranks_recent_posts_by_views_per_hour_with_what_they_ar
     best, second = lines[4], lines[5]
     assert best.startswith("- Instagram: 2.0k views in 20 h (100/h), 10.0% engagement, reach 1.5k, avg watch 6.0 s of 10 s (60%)")
     assert "gas-station dance in a 70s suit" in best and "tags: dance, ai" in best
+    assert "views from TN 75%, FR 25%" in best
     assert "recreated from @made_up_source's video" in best
     assert "slow made-up post" in second and "engagement" in second and "99" not in text.split("best first")[1].split("slow")[0]
     assert len([ln for ln in lines if ln.startswith("- Instagram:")]) == 2  # the 60-day-old post isn't recent

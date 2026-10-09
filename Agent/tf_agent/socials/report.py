@@ -116,7 +116,9 @@ async def channel_report(sm: async_sessionmaker[AsyncSession], character_id: uui
         what = study.get("format") or (p.post.caption or "")[:80] or "–"
         tags = ", ".join((study.get("tags") or [])[:5])
         src = p.post.inspired_by
+        where = audience_line({"country": (p.post.audience or {}).get("country") or []})
         lines.append(f"- {PLATFORM.get(p.platform, p.platform)}: {', '.join(bits)} | {what}"
+                     + (f" | views from {where.removeprefix('countries ')}" if where else "")
                      + (f" | tags: {tags}" if tags else "")
                      + (f" | recreated from @{creators[src]}'s video" if src and creators.get(src)
                         else f" | recreated from {src}" if src else ""))

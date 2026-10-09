@@ -18,6 +18,7 @@ from tf_agent.socials.instagram_api import InstagramApi
 from tf_agent.socials.public import PublicReader
 from tf_agent.socials.sync import SocialSync
 from tf_agent.socials.tiktok_api import TikTokApi
+from tf_agent.socials.youtube import YouTubeChannel
 from tf_backend.downloads import Downloads
 from tf_backend.socials import Socials
 from tf_backend.previews import Previews
@@ -49,9 +50,11 @@ async def build_context(settings: AppSettings | None = None) -> tuple[AppContext
                          previews=Previews(stack.ytdlp.stream_url),
                          downloads=Downloads(stack.ytdlp.save, s.media_dir / "downloads"))
     creds, instagram, tiktok = Credentials(s.secrets_dir), InstagramApi(), TikTokApi()
-    context.socials = Socials(sm, SocialSync(sm, creds, instagram, tiktok, PublicReader(stack.browser)), creds,
+    youtube = YouTubeChannel(lambda: creds.get("youtube_api_key"))
+    context.socials = Socials(sm, SocialSync(sm, creds, instagram, tiktok, PublicReader(stack.browser, youtube),
+                                             youtube=youtube), creds,
                               instagram, tiktok, thumbs_dir=s.media_dir / "thumbs", fetch_image=_http_image,
-                              get_meta=stack.ytdlp.metadata)
+                              get_meta=stack.ytdlp.metadata, youtube=youtube)
     context.socials.start()  # every 3 hours, the first a minute after start
 
     async def cleanup() -> None:

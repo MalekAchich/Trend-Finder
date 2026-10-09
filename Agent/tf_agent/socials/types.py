@@ -24,6 +24,7 @@ class PostRead:
     saves: int | None = None
     avg_watch_s: float | None = None
     total_watch_s: float | None = None
+    audience: dict[str, Any] | None = None  # where this post's views come from (YouTube): {"country": [[code, n]]}
 
 
 @dataclass

@@ -38,12 +38,13 @@ def _uuid(raw: str, what: str) -> uuid.UUID:
 
 
 def clean_handle(raw: str) -> str:
-    """'@Made_Up', 'https://www.tiktok.com/@made_up?lang=en' or 'instagram.com/made_up/' -> 'made_up'."""
+    """'@Made_Up', 'https://www.tiktok.com/@made_up?lang=en', 'instagram.com/made_up/' or
+    'youtube.com/@Made-Up' -> 'made_up' / 'made-up'."""
     text = raw.strip()
-    m = re.search(r"(?:tiktok\.com/@|instagram\.com/)([A-Za-z0-9_.]+)", text)
+    m = re.search(r"(?:tiktok\.com/@|instagram\.com/|youtube\.com/@)([A-Za-z0-9_.\-]+)", text)
     handle = norm_handle(m.group(1) if m else text.lstrip("@").split("/")[0])
-    if not re.fullmatch(r"[a-z0-9_.]{1,30}", handle):
-        raise HTTPException(422, "that doesn't look like an Instagram or TikTok username")
+    if not re.fullmatch(r"[a-z0-9_.\-]{1,30}", handle):
+        raise HTTPException(422, "that doesn't look like a username or channel handle")
     return handle
 
 
@@ -68,12 +69,13 @@ async def overview(c: AppContext = Depends(ctx)) -> dict[str, Any]:
             mine = [x for x in channels if x.character_id == ch.id]
             out.append({"slug": ch.slug, "name": ch.name,
                         "channels": [await svc.channel_out(s, x, now) for x in mine]})
-    return {"characters": out, "tiktok_app": svc.creds.describe_socials()["tiktok_app"],
-            "tiktok_redirect_uri": svc.redirect_uri}
+    apps = svc.creds.describe_socials()
+    return {"characters": out, "tiktok_app": apps["tiktok_app"], "google_app": apps["google_app"],
+            "tiktok_redirect_uri": svc.redirect_uri, "youtube_redirect_uri": svc.google_redirect_uri}
 
 
 class ChannelIn(BaseModel):
-    platform: Literal["instagram", "tiktok"]
+    platform: Literal["instagram", "tiktok", "youtube"]
     handle: str = Field(min_length=1, max_length=200)
     character: str = Field(min_length=1, max_length=64)
 
@@ -223,6 +225,69 @@ async def tiktok_callback(state: str = "", code: str = "", error: str = "", erro
         await s.commit()
     await svc.sync_channel(pending.channel_id)
     return _back(connected="tiktok")
+
+
+class GoogleAppIn(BaseModel):
+    client_id: str = Field(min_length=10, max_length=300)
+    client_secret: str = Field(min_length=6, max_length=300)
+
+
+@router.put("/google-app", dependencies=[Depends(require_client_header)])
+async def google_app(body: GoogleAppIn, c: AppContext = Depends(ctx)) -> dict[str, Any]:
+    svc = _service(c)
+    svc.creds.save_google_app(body.client_id, body.client_secret)
+    return svc.creds.describe_socials()["google_app"]
+
+
+@router.get("/youtube/connect")
+async def youtube_connect(channel: str, c: AppContext = Depends(ctx)) -> RedirectResponse:
+    """Opens Google's consent page for the channel's Google account (read-only YouTube and YouTube Analytics)."""
+    svc, ch = _service(c), await _channel(c, channel)
+    app = svc.creds.google_app()
+    if ch.platform != "youtube":
+        raise HTTPException(422, "that's not a YouTube channel")
+    if app is None:
+        raise HTTPException(409, "add your Google app's client ID and secret first")
+    state, verifier = svc.begin_tiktok(ch.id)
+    return RedirectResponse(svc.youtube.authorize_url(app["client_id"], svc.google_redirect_uri, state, verifier), 302)
+
+
+@router.get("/youtube/callback")
+async def youtube_callback(state: str = "", code: str = "", error: str = "", c: AppContext = Depends(ctx)) -> RedirectResponse:
+    svc = _service(c)
+    pending = svc.finish_tiktok(state)
+    if pending is None:
+        return _back(error="That Google login link was already used or has expired. Press Connect again.")
+    if error or not code:
+        return _back(error=f"Google didn't connect: {error or 'no code came back'}")
+    app = svc.creds.google_app()
+    if app is None:
+        return _back(error="Your Google app's keys are missing. Add them, then press Connect again.")
+    try:
+        tok = await svc.youtube.exchange(app, code, pending.verifier, svc.google_redirect_uri)
+        who = (await svc.youtube.me(tok["access_token"]))["handle"].lower()
+    except ReadError as e:
+        return _back(error=f"Google didn't connect: {e.message}")
+    async with c.sessionmaker() as s:
+        row = await s.get(SocialChannel, pending.channel_id)
+    if row is None:
+        return _back(error="That channel was removed while connecting.")
+    if who and who != row.handle:  # another Google account's channel would file its numbers here
+        return _back(error=f"Google connected @{who}, not @{row.handle}. Pick the Google account that owns "
+                           f"@{row.handle}, then press Connect again.")
+    if not tok.get("refresh_token"):
+        return _back(error="Google didn't give a lasting connection. Press Connect again and allow everything.")
+    scopes = [x.rsplit("/", 1)[-1] for x in str(tok.get("scope") or "").split() if x]
+    now = time.time()
+    svc.creds.save_social_token(str(pending.channel_id), {
+        "access_token": tok["access_token"], "refresh_token": tok["refresh_token"],
+        "expires_at": now + float(tok.get("expires_in") or 0), "scopes": scopes})
+    async with c.sessionmaker() as s:
+        row = await s.get(SocialChannel, pending.channel_id)
+        row.mode, row.scopes, row.connected_at, row.last_error = "api", scopes, now_utc(), None
+        await s.commit()
+    await svc.sync_channel(pending.channel_id)
+    return _back(connected="youtube")
 
 
 @router.post("/channels/{channel_id}/sync", dependencies=[Depends(require_client_header)])

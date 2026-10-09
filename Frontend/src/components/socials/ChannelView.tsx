@@ -11,6 +11,7 @@ import { PostCard } from "./PostCard";
 export type Window = "7d" | "30d" | "all";
 const PROFILE: Record<string, (h: string) => string> = {
   instagram: (h) => `https://www.instagram.com/${h}/`, tiktok: (h) => `https://www.tiktok.com/@${h}`,
+  youtube: (h) => `https://www.youtube.com/@${h}`,
 };
 const WANTED_TIKTOK = ["user.info.basic", "user.info.profile", "user.info.stats", "video.list"];
 
@@ -72,7 +73,9 @@ export function ChannelView({ channel, overview, window, slug }: { channel: Soci
       )}
       {!api && <p className="mt-2 text-[12.5px] text-mist">{channel.platform === "instagram"
         ? "Public numbers: views, likes, comments. Connect the official API for reach, shares, saves, watch time and where your audience is from."
-        : "Public numbers: views, likes, comments, shares. Connect the official API for exact counts straight from TikTok."}</p>}
+        : channel.platform === "youtube"
+          ? "Public numbers: subscribers, views, likes, comments. Connect your Google account for views by country and city (per Short too), ages, genders and watch time."
+          : "Public numbers: views, likes, comments, shares. Connect the official API for exact counts straight from TikTok."}</p>}
 
       <Stats channel={channel} posts={list} window={window} />
       <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -101,14 +104,17 @@ function Stats({ channel, posts, window }: { channel: SocialChannel; posts: Soci
   const ins = channel.account_insights;
   const delta = channel.followers_7d ? formatDelta(channel.followers_7d) : null;
   const tiles: [string, string, string | null][] = [
-    ["Followers", compact(channel.followers), delta],
+    [channel.platform === "youtube" ? "Subscribers" : "Followers", compact(channel.followers), delta],
     [`Views, ${window === "all" ? "all time" : window === "7d" ? "7 days" : "30 days"}`, compact(posts.length ? views : null), null],
     ["Posts", compact(channel.posts ?? posts.length), null],
     ["Engagement", percent(eng.length ? eng.reduce((n, p) => n + p.engagement!, 0) / eng.length : null), null],
   ];
+  const through = percent(watch.length ? watch.reduce((n, p) => n + p.watch_through!, 0) / watch.length : null, 0);
   if (channel.platform === "instagram") {  // TikTok's API never gives watch time or reach: no empty tiles for them
-    tiles.push(["Watched through", percent(watch.length ? watch.reduce((n, p) => n + p.watch_through!, 0) / watch.length : null, 0), null],
-      [`Reach, ${ins?.days ?? 28} days`, compact(ins?.reach), null]);
+    tiles.push(["Watched through", through, null], [`Reach, ${ins?.days ?? 28} days`, compact(ins?.reach), null]);
+  } else if (channel.platform === "youtube") {  // YouTube has no reach; it has watch time
+    tiles.push(["Watched through", through, null],
+      [`Watch time, ${ins?.days ?? 28} days`, ins?.watch_minutes != null ? `${compact(ins.watch_minutes)} min` : "–", null]);
   }
   return (
     <dl className={`num mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 ${tiles.length > 4 ? "xl:grid-cols-6" : "xl:grid-cols-4"}`}>
@@ -126,7 +132,7 @@ function Stats({ channel, posts, window }: { channel: SocialChannel; posts: Soci
 const COUNTRY = typeof Intl !== "undefined" && "DisplayNames" in Intl ? new Intl.DisplayNames(undefined, { type: "region" }) : null;
 
 const REPORTS = [
-  { id: "reached", label: "Reached", hint: "where the people who saw your videos are (this month)" },
+  { id: "reached", label: "Reached", hint: "where the people who saw your videos are (recent weeks)" },
   { id: "engaged", label: "Engaged", hint: "where the people who liked, commented or shared are (this month)" },
   { id: "followers", label: "Followers", hint: "where your followers are" },
 ] as const;
@@ -147,7 +153,9 @@ function Audience({ channel }: { channel: SocialChannel }) {
   const message = channel.platform === "tiktok"
     ? "TikTok's API doesn't share where viewers are (TikTok Studio on your phone shows it)."
     : channel.mode !== "api" ? "Connect the official API to see where your viewers are: countries, cities, ages, genders."
-      : "Meta fills this in once enough accounts have seen your videos (around 100). Nothing to do: it appears on its own.";
+      : channel.platform === "youtube"
+        ? "YouTube fills this in once your views pass its privacy minimum. Nothing to do: it appears on its own."
+        : "Meta fills this in once enough accounts have seen your videos (around 100). Nothing to do: it appears on its own.";
   return (
     <div className="mt-3 rounded-xl border border-line bg-panel/40 p-3.5">
       <div className="flex flex-wrap items-center gap-2">

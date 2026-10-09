@@ -168,3 +168,28 @@ def tt_profile_capture() -> list[dict]:
                            "stats": {"playCount": 5300, "diggCount": 600, "commentCount": 21, "shareCount": 30,
                                      "collectCount": 8},
                            "video": {"duration": 12, "cover": "https://cover.invalid/t1.jpg"}}]}]
+
+
+# ---- YouTube (Plan 9): Data API and Analytics shapes, made up ----
+def yt_channel(handle: str = "@MadeUpChannel") -> dict:
+    return {"items": [{"id": "UCmadeupchannel000000001", "snippet": {"title": "Made Up", "customUrl": handle},
+                       "statistics": {"subscriberCount": "12", "videoCount": "2", "hiddenSubscriberCount": False},
+                       "contentDetails": {"relatedPlaylists": {"uploads": "UUmadeupchannel000000001"}}}]}
+
+
+def yt_playlist() -> dict:
+    return {"items": [{"contentDetails": {"videoId": "TestShort01"}}, {"contentDetails": {"videoId": "TestShort02"}}]}
+
+
+def yt_videos() -> dict:
+    return {"items": [
+        {"id": "TestShort01", "snippet": {"title": "made-up short one", "publishedAt": "2026-10-08T18:00:00Z",
+                                          "thumbnails": {"high": {"url": "https://cover.invalid/y1.jpg"}}},
+         "statistics": {"viewCount": "350", "likeCount": "20", "commentCount": "3"},
+         "contentDetails": {"duration": "PT12S"}},
+        {"id": "TestShort02", "snippet": {"title": "old made-up short", "publishedAt": "2026-05-01T18:00:00Z"},
+         "statistics": {"viewCount": "9"}, "contentDetails": {"duration": "PT30S"}}]}
+
+
+def yt_report(headers: list[str], rows: list[list]) -> dict:
+    return {"columnHeaders": [{"name": h} for h in headers], "rows": rows}

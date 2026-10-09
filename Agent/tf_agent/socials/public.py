@@ -32,10 +32,12 @@ class PublicReader:
     PATTERNS = {"instagram": ss.INSTAGRAM_PATTERN, "tiktok": ss.TIKTOK_CREATOR_PATTERN}
     URLS = {"instagram": ss.instagram_creator_url, "tiktok": ss.tiktok_creator_url}
 
-    def __init__(self, browser: Any) -> None:
-        self.browser = browser
+    def __init__(self, browser: Any, youtube: Any = None) -> None:
+        self.browser, self.youtube = browser, youtube
 
     async def read(self, platform: str, handle: str, since: datetime) -> ChannelRead:
+        if platform == "youtube" and self.youtube is not None:  # public numbers through the Data API key
+            return await self.youtube.read_public(handle, since)
         if platform not in self.PATTERNS:
             raise ReadError("unavailable", f"no public reader for {platform}")
         if self.browser is None:

@@ -25,7 +25,7 @@ export default function Socials() {
     setParams(next, { replace: true });
   };
   const connected = params.get("connected"), failed = params.get("error");
-  const free = (["instagram", "tiktok"] as const).filter((p) => !channels.some((c) => c.platform === p));
+  const free = (["instagram", "tiktok", "youtube"] as const).filter((p) => !channels.some((c) => c.platform === p));
 
   return (
     <section className="wrap pb-24 pt-10">
@@ -98,10 +98,10 @@ function Banner({ tone, children, onClose }: { tone: "ok" | "bad"; children: Rea
   );
 }
 
-function AddChannel({ slug, name, free, onAdded }: { slug: string; name: string; free: ("instagram" | "tiktok")[];
+function AddChannel({ slug, name, free, onAdded }: { slug: string; name: string; free: ("instagram" | "tiktok" | "youtube")[];
   onAdded: (id: string) => void }) {
   const { add } = useSocialActions();
-  const [platform, setPlatform] = useState<"instagram" | "tiktok">(free[0] ?? "instagram");
+  const [platform, setPlatform] = useState<"instagram" | "tiktok" | "youtube">(free[0] ?? "instagram");
   const [handle, setHandle] = useState("");
   if (!free.length) return null;
   const chosen = free.includes(platform) ? platform : free[0];
@@ -118,7 +118,7 @@ function AddChannel({ slug, name, free, onAdded }: { slug: string; name: string;
           ))}
         </div>
         <input className="field !h-[30px] min-w-[200px] flex-1" value={handle} onChange={(e) => setHandle(e.target.value)} autoComplete="off"
-          placeholder="@username or profile link" aria-label="Username or profile link" />
+          placeholder="@username, @handle or profile link" aria-label="Username or profile link" />
         <button className="btn-lime !h-[30px]" disabled={!handle.trim() || add.isPending}>
           {add.isPending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} {add.isPending ? "Reading…" : "Add"}</button>
       </div>

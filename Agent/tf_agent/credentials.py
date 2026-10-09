@@ -175,13 +175,30 @@ class Credentials:
         self._write(self._socials_dir / "tiktok_app.json", json.dumps(
             {"client_key": client_key, "client_secret": client_secret, "updated_at": _now()}))
 
+    def google_app(self) -> dict[str, str] | None:
+        data = self._read_json(self._socials_dir / "google_app.json")
+        return ({"client_id": data["client_id"], "client_secret": data["client_secret"]}
+                if data.get("client_id") and data.get("client_secret") else None)
+
+    def save_google_app(self, client_id: str, client_secret: str) -> None:
+        client_id, client_secret = client_id.strip(), client_secret.strip()
+        if not client_id or not client_secret:
+            raise ValueError("empty client id or secret")
+        self._write(self._socials_dir / "google_app.json", json.dumps(
+            {"client_id": client_id, "client_secret": client_secret, "updated_at": _now()}))
+
     def describe_socials(self) -> dict[str, Any]:
         """Never a secret: whether the TikTok app is set (with a masked hint of its key)."""
         app = self._read_json(self._socials_dir / "tiktok_app.json")
         key = str(app.get("client_key") or "")
+        g = self._read_json(self._socials_dir / "google_app.json")
+        gid = str(g.get("client_id") or "")
         return {"tiktok_app": {"set": bool(key and app.get("client_secret")),
                                "hint": f"••••{key[-4:]}" if len(key) >= 8 else None,
-                               "updated_at": app.get("updated_at")}}
+                               "updated_at": app.get("updated_at")},
+                "google_app": {"set": bool(gid and g.get("client_secret")),
+                               "hint": f"••••{gid.split('.')[0][-4:]}" if len(gid) >= 8 else None,
+                               "updated_at": g.get("updated_at")}}
 
     # ---- both ----
     def delete(self, item: str) -> None:
