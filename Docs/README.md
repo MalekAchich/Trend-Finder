@@ -28,7 +28,7 @@ In the app (one page):
 4. Saved videos fly into **Found videos** below (character → run → videos). Hover a card to preview it.
 5. Rate videos 👍/👎 with an optional note, and score the run 1–10. The next run starts by learning from that.
 
-The navbar also has **Characters** (what the agents see and learned, found videos by date), **Runs** (history and replays), **Settings** (live usage, provider priority, model choice per subscription, and **Accounts & keys**: the YouTube API key and the TikTok / Instagram / X scraping accounts) and **Socials** (coming later).
+The navbar also has **Characters** (what the agents see and learned, found videos by date), **Runs** (history and replays), **Settings** (live usage, provider priority, model choice per subscription, and **Accounts & keys**: the YouTube API key and the TikTok / Instagram / X scraping accounts) and **Socials** (our own channels: connect by handle, then Instagram's and TikTok's official APIs; every post's numbers over time; the channel report every judge reads, spec `Specs/2026-10-08-socials-page.md`).
 
 Everything also works from the terminal: `tf run nicolaiz --trend-url <url> --target <url>[=character]`, `tf runs`, `tf trends <run>`, `tf resume <run>`.
 
@@ -51,7 +51,7 @@ Everything also works from the terminal: `tf run nicolaiz --trend-url <url> --ta
 | 13 | [Code docs/08-infrastructure-and-repo.md](Code%20docs/08-infrastructure-and-repo.md) | Repo layout, Docker, env, machine constraints |
 | 14 | [Code docs/09-testing.md](Code%20docs/09-testing.md) | Test strategy |
 | 15 | [Code docs/claude-codex-auth-reference.md](Code%20docs/claude-codex-auth-reference.md) | Owner-supplied reference: Claude CLI + ChatGPT OAuth subscription auth |
-| 16 | [Research/monetization-rules.md](Research/monetization-rules.md) | Monetization and AI-content rules per platform (for the future Socials page) |
+| 16 | [Research/monetization-rules.md](Research/monetization-rules.md) | Monetization and AI-content rules per platform (for the Socials page) |
 
 ## Conventions
 

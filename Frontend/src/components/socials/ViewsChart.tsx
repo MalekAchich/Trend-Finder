@@ -31,7 +31,8 @@ export function ViewsChart({ posts }: { posts: SocialPost[] }) {
       Views over time appear after the second sync (every 3 hours).</p>;
   }
   const maxX = Math.max(1, ...series.flatMap((s) => s.points.map((p) => p[0])));
-  const maxY = niceMax(Math.max(1, ...series.flatMap((s) => s.points.map((p) => p[1]))));
+  const { max: maxY, step } = niceScale(Math.max(1, ...series.flatMap((s) => s.points.map((p) => p[1]))));
+  const ticks = Array.from({ length: Math.round(maxY / step) + 1 }, (_, i) => i * step);
   const x = (h: number) => PAD.l + (h / maxX) * (W - PAD.l - PAD.r);
   const y = (v: number) => H - PAD.b - (v / maxY) * (H - PAD.t - PAD.b);
   const at = (s: Series, h: number) => [...s.points].reverse().find((p) => p[0] <= h)?.[1] ?? null;
@@ -54,10 +55,10 @@ export function ViewsChart({ posts }: { posts: SocialPost[] }) {
       <div className="relative mt-2">
         <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="block w-full" role="img"
           aria-label="Views over time for each post" onPointerMove={move} onPointerLeave={() => setHover(null)}>
-          {[0, 0.25, 0.5, 0.75, 1].map((t) => (
-            <g key={t}>
-              <line x1={PAD.l} x2={W - PAD.r} y1={y(maxY * t)} y2={y(maxY * t)} stroke="var(--color-rule)" />
-              <text x={PAD.l - 8} y={y(maxY * t) + 4} textAnchor="end" className="num fill-[var(--color-ink-2)] text-[11px]">{compact(maxY * t)}</text>
+          {ticks.map((v) => (
+            <g key={v}>
+              <line x1={PAD.l} x2={W - PAD.r} y1={y(v)} y2={y(v)} stroke="var(--color-rule)" />
+              <text x={PAD.l - 8} y={y(v) + 4} textAnchor="end" className="num fill-[var(--color-ink-2)] text-[11px]">{compact(v)}</text>
             </g>
           ))}
           {[0, 0.5, 1].map((t) => (
@@ -100,9 +101,12 @@ export function ViewsChart({ posts }: { posts: SocialPost[] }) {
   );
 }
 
-function niceMax(v: number): number {
-  const p = 10 ** Math.floor(Math.log10(v));
-  return [1, 2, 2.5, 5, 10].map((m) => m * p).find((n) => n >= v) ?? v;
+/** Round gridlines (1, 2 or 5 × 10ⁿ apart, 3 to 6 of them) and the top of the scale on one of them. */
+export function niceScale(v: number): { max: number; step: number } {
+  const raw = v / 4;
+  const p = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 5, 10].map((m) => m * p).find((n) => n >= raw) ?? raw;
+  return { max: Math.ceil(v / step) * step, step };
 }
 
 function hoursLabel(h: number): string {

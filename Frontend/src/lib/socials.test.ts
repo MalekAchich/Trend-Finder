@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { niceScale } from "../components/socials/ViewsChart";
 import { ago, compact, engagementRate, formatDelta, percent, watchThrough } from "./socials";
 
 describe("socials numbers", () => {
@@ -22,5 +23,13 @@ describe("socials numbers", () => {
     expect(ago("2026-10-09T11:30:00Z", now)).toBe("30 min ago");
     expect(ago("2026-10-08T12:00:00Z", now)).toBe("24 h ago");
     expect(ago(null, now)).toBe("never");
+  });
+});
+
+describe("chart scale", () => {
+  it("puts gridlines on round numbers", () => {
+    expect(niceScale(3400)).toEqual({ max: 4000, step: 1000 });
+    expect(niceScale(5400)).toEqual({ max: 6000, step: 2000 });
+    expect(niceScale(380)).toEqual({ max: 400, step: 100 });
   });
 });

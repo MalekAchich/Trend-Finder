@@ -8,7 +8,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from tf_agent.socials.report import channel_report
 from tf_agent.socials.types import ReadError
@@ -17,7 +17,7 @@ from tf_agent.tools.types import CANONICAL_ID_PATTERN
 from tf_backend.api.deps import ctx, require_client_header
 from tf_backend.app_context import AppContext
 from tf_backend.socials import WINDOWS, Socials, now_utc
-from tf_db.models import Character, SocialChannel, SocialPost
+from tf_db.models import Character, Run, SocialChannel, SocialPost
 
 router = APIRouter(prefix="/socials", tags=["socials"])
 INSTAGRAM_SCOPES = ["instagram_business_basic", "instagram_business_manage_insights"]
@@ -59,7 +59,9 @@ async def _channel(c: AppContext, raw: str) -> SocialChannel:
 async def overview(c: AppContext = Depends(ctx)) -> dict[str, Any]:
     svc, now = _service(c), now_utc()
     async with c.sessionmaker() as s:
-        chars = (await s.execute(select(Character).order_by(Character.name))).scalars().all()
+        runs = func.count(Run.id)  # the character used most comes first (the page opens on it)
+        chars = (await s.execute(select(Character).outerjoin(Run, Run.character_id == Character.id)
+                                 .group_by(Character.id).order_by(runs.desc(), Character.name))).scalars().all()
         channels = (await s.execute(select(SocialChannel).order_by(SocialChannel.platform))).scalars().all()
         out = []
         for ch in chars:

@@ -10,4 +10,5 @@
 | [Plan 6](2026-10-06-plan-6-navbar-pages-polish.md) | Navbar + logo, Characters / Runs / Settings / Socials pages, model choice, usage, polish | Done |
 | [Plan 7](2026-10-07-plan-7-context-accounts-x.md) | One model per agent conversation, reasoning kept; Accounts & keys (YouTube API, TikTok/Instagram/X accounts); X platform; brand platform buttons; monetization rules | Done |
 | [Plan 8](2026-10-07-plan-8-manually-chosen-videos.md) | Manually chosen videos (references + targets) with cards; studies give niche, tags, trend type, audio | Done |
+| [Plan 9](2026-10-08-plan-9-socials.md) | Socials: our own Instagram / TikTok channels (official APIs + public numbers), numbers over time, the channel report as intel for the judges | Done |
 
