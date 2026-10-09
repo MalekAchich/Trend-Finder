@@ -76,7 +76,7 @@ async def test_each_sync_adds_one_snapshot_per_post_and_one_for_the_channel(db_s
     assert (first.posts, first.new_posts, first.error, first.source) == (1, 1, None, "api")
     (post,) = await rows(db_sessionmaker, SocialPost)
     assert post.platform_post_id == "TESTOWN001" and post.canonical_id == "instagram:TESTOWN001"
-    assert sorted(s.views for s in await rows(db_sessionmaker, SocialSnapshot)) == [100, 400]
+    assert sorted(s.views for s in await rows(db_sessionmaker, SocialSnapshot)) == [150, 400]  # the soon one updated
     assert len(await rows(db_sessionmaker, SocialChannelSnapshot)) == 2
 
 

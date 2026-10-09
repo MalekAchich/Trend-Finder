@@ -25,6 +25,9 @@ def create_app(services: Services | None = None, context: AppContext | None = No
             yield
             return
         from tf_backend.context_builder import build_context
+        from tf_backend.log_redact import install
+
+        install()  # after uvicorn set up its loggers: OAuth codes in URLs never reach the log
 
         ctx, sv, cleanup = await build_context()
         app.state.context, app.state.services = ctx, sv

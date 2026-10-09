@@ -20,7 +20,7 @@ from tf_db.models import SocialChannel, SocialChannelSnapshot, SocialPost, Socia
 
 log = logging.getLogger(__name__)
 WINDOW = timedelta(days=90)  # posts this recent get a snapshot every sync; older ones keep their history
-SNAPSHOT_GAP = timedelta(minutes=30)  # a second sync this soon adds nothing new
+SNAPSHOT_GAP = timedelta(minutes=30)  # a second sync this soon updates the last reading instead of adding one
 REFRESH_BEFORE = timedelta(days=7)  # refresh a token this long before it expires (TikTok's last a day: every sync)
 
 
@@ -121,18 +121,26 @@ class SocialSync:
                 row.url, row.canonical_id = p.url or row.url, cid or row.canonical_id
                 if row.posted_at is not None and row.posted_at < now - WINDOW:
                     continue
-                last = (await s.execute(select(SocialSnapshot.taken_at).where(SocialSnapshot.post_id == row.id)
+                last = (await s.execute(select(SocialSnapshot).where(SocialSnapshot.post_id == row.id)
                                         .order_by(SocialSnapshot.taken_at.desc()).limit(1))).scalar_one_or_none()
-                if last is None or now - last >= SNAPSHOT_GAP:
-                    s.add(SocialSnapshot(post_id=row.id, taken_at=now, views=p.views, reach=p.reach, likes=p.likes,
-                                         comments=p.comments, shares=p.shares, saves=p.saves,
-                                         avg_watch_s=p.avg_watch_s, total_watch_s=p.total_watch_s))
-            last = (await s.execute(select(SocialChannelSnapshot.taken_at).where(
+                numbers = dict(views=p.views, reach=p.reach, likes=p.likes, comments=p.comments, shares=p.shares,
+                               saves=p.saves, avg_watch_s=p.avg_watch_s, total_watch_s=p.total_watch_s)
+                if last is None or now - last.taken_at >= SNAPSHOT_GAP:
+                    s.add(SocialSnapshot(post_id=row.id, taken_at=now, **numbers))
+                else:  # "Sync now" soon after a read: the newest numbers replace that reading (one point per gap)
+                    for k, v in numbers.items():
+                        if v is not None:  # a public read never erases what the API gave (reach, watch time)
+                            setattr(last, k, v)
+                    last.taken_at = now
+            last_ch = (await s.execute(select(SocialChannelSnapshot).where(
                 SocialChannelSnapshot.channel_id == channel_id).order_by(SocialChannelSnapshot.taken_at.desc())
                 .limit(1))).scalar_one_or_none()
-            if last is None or now - last >= SNAPSHOT_GAP:
+            if last_ch is None or now - last_ch.taken_at >= SNAPSHOT_GAP:
                 s.add(SocialChannelSnapshot(channel_id=channel_id, taken_at=now, followers=read.followers,
                                             total_likes=read.total_likes, posts=read.posts_count))
+            else:
+                last_ch.taken_at, last_ch.followers = now, read.followers
+                last_ch.total_likes, last_ch.posts = read.total_likes, read.posts_count
             extra = {k: v for k, v in (("audience", read.audience), ("account_insights", read.account_insights))
                      if v is not None}  # public reads don't have them: what the API gave last stays
             await s.execute(update(SocialChannel).where(SocialChannel.id == channel_id).values(
