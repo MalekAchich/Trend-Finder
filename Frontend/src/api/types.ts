@@ -233,7 +233,9 @@ export interface SocialChannel {
   total_likes: number | null;
   posts: number | null;
   views_7d: number | null;
-  audience: { country?: [string, number][]; age?: [string, number][]; gender?: [string, number][]; note?: string } | null;
+  /** Meta's three reports (each by country, city, age, gender); a report is absent until Meta fills it. */
+  audience: Partial<Record<"reached" | "engaged" | "followers",
+    Partial<Record<"country" | "city" | "age" | "gender", [string, number][]>>>> | null;
   account_insights: { days: number; reach?: number | null; views?: number | null; profile_views?: number | null;
     accounts_engaged?: number | null; total_interactions?: number | null } | null;
 }

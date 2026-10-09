@@ -13,7 +13,8 @@ async def seed(sm):
     async with sm() as s:
         s.add(Video(canonical_id="instagram:TESTREEL050", platform="instagram",
                     url="https://www.instagram.com/reel/TESTREEL050/", creator_handle="made_up_source"))
-        ig = SocialChannel(character_id=char_id, platform="instagram", handle="made_up_channel", mode="api")
+        ig = SocialChannel(character_id=char_id, platform="instagram", handle="made_up_channel", mode="api",
+                           audience={"reached": {"country": [["US", 60], ["TN", 40]], "age": [["18-24", 10]]}})
         s.add(ig)
         await s.flush()
         s.add_all([SocialChannelSnapshot(channel_id=ig.id, taken_at=NOW - timedelta(days=8), followers=100, posts=1),
@@ -40,7 +41,8 @@ async def test_the_report_ranks_recent_posts_by_views_per_hour_with_what_they_ar
     lines = text.splitlines()
     assert lines[0].startswith("Your own channels (facts") and "not verdicts" in lines[0]
     assert lines[1] == "- Instagram @made_up_channel: 140 followers (+40 in 7 days), 2 posts."
-    best, second = lines[3], lines[4]
+    assert lines[2] == "  Reached (who saw the videos): countries US 60%, TN 40% · ages 18-24 100%"
+    best, second = lines[4], lines[5]
     assert best.startswith("- Instagram: 2.0k views in 20 h (100/h), 10.0% engagement, reach 1.5k, avg watch 6.0 s of 10 s (60%)")
     assert "gas-station dance in a 70s suit" in best and "tags: dance, ai" in best
     assert "recreated from @made_up_source's video" in best

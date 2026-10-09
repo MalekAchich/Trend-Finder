@@ -21,6 +21,9 @@ METRIC_SETS = (
 IMAGE_METRICS = ["views", "reach", "likes", "comments", "shares", "saved"]
 ACCOUNT_METRICS = ("reach", "views", "profile_views", "accounts_engaged", "total_interactions")
 MIN_FOLLOWERS_FOR_AUDIENCE = 100  # Meta's rule for follower demographics
+AUDIENCE_REPORTS = (("reached", "reached_audience_demographics", "this_month"),
+                    ("engaged", "engaged_audience_demographics", "this_month"),
+                    ("followers", "follower_demographics", None))
 MAX_PAGES = 20  # 50 posts a page: far more than a 90-day window holds; a safety stop against a looping cursor
 
 
@@ -107,29 +110,32 @@ class InstagramApi:
         return out
 
     async def audience(self, token: str, followers: int | None) -> dict[str, Any]:
-        """Who follows: top countries, ages and genders. Meta only gives it from 100 followers on."""
-        if followers is not None and followers < MIN_FOLLOWERS_FOR_AUDIENCE:
-            return {"note": f"Instagram shows who your audience is from {MIN_FOLLOWERS_FOR_AUDIENCE} followers on "
-                            f"({followers} now)."}
+        """Where the audience is and who it is, in Meta's three reports, each by country, city, age and gender:
+        `reached` (who saw the videos, this month), `engaged` (who reacted, this month) and `followers`.
+        Meta leaves a report empty until enough accounts are in it (about 100); followers need 100 followers."""
         out: dict[str, Any] = {}
-        for breakdown in ("country", "age", "gender"):
-            try:
-                data = await self._get("/me/insights", token, metric="follower_demographics", period="lifetime",
-                                       metric_type="total_value", breakdown=breakdown)
-            except ReadError as e:
-                if e.code != "unavailable":
-                    raise
+        for report, metric, timeframe in AUDIENCE_REPORTS:
+            if report == "followers" and followers is not None and followers < MIN_FOLLOWERS_FOR_AUDIENCE:
                 continue
-            rows: list[list[Any]] = []
-            for d in data.get("data") or []:
-                for b in ((d.get("total_value") or {}).get("breakdowns") or []):
-                    for r in b.get("results") or []:
-                        label = ", ".join(r.get("dimension_values") or [])
-                        if label and isinstance(r.get("value"), int | float):
-                            rows.append([label, r["value"]])
-            if rows:
-                out[breakdown] = sorted(rows, key=lambda r: -r[1])[:12]
-        return out or {"note": "Instagram didn't give audience numbers for this account yet."}
+            groups: dict[str, list[list[Any]]] = {}
+            for breakdown in ("country", "city", "age", "gender"):
+                params = dict(metric=metric, period="lifetime", metric_type="total_value", breakdown=breakdown)
+                if timeframe:
+                    params["timeframe"] = timeframe
+                try:
+                    data = await self._get("/me/insights", token, **params)
+                except ReadError as e:
+                    if e.code != "unavailable":
+                        raise
+                    continue
+                rows = [[", ".join(r.get("dimension_values") or []), r["value"]]
+                        for d in data.get("data") or [] for b in ((d.get("total_value") or {}).get("breakdowns") or [])
+                        for r in b.get("results") or [] if r.get("dimension_values") and isinstance(r.get("value"), int | float)]
+                if rows:
+                    groups[breakdown] = sorted(rows, key=lambda r: -r[1])[:12]
+            if groups:
+                out[report] = groups
+        return out
 
     async def read(self, token: str, since: datetime) -> ChannelRead:
         me = await self.me(token)

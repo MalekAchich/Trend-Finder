@@ -125,29 +125,56 @@ function Stats({ channel, posts, window }: { channel: SocialChannel; posts: Soci
 
 const COUNTRY = typeof Intl !== "undefined" && "DisplayNames" in Intl ? new Intl.DisplayNames(undefined, { type: "region" }) : null;
 
+const REPORTS = [
+  { id: "reached", label: "Reached", hint: "where the people who saw your videos are (this month)" },
+  { id: "engaged", label: "Engaged", hint: "where the people who liked, commented or shared are (this month)" },
+  { id: "followers", label: "Followers", hint: "where your followers are" },
+] as const;
+const GROUPS = [["country", "Countries"], ["city", "Cities"], ["age", "Ages"], ["gender", "Genders"]] as const;
+
+function place(group: string, label: string): string {
+  if (group === "country" && /^[A-Z]{2}$/.test(label)) return COUNTRY?.of(label) ?? label;
+  if (group === "gender") return ({ M: "Men", F: "Women", U: "Unknown" } as Record<string, string>)[label] ?? label;
+  return label;
+}
+
+/** Where the audience is and who it is: Instagram's reached / engaged / followers reports. */
 function Audience({ channel }: { channel: SocialChannel }) {
-  const a = channel.audience;
-  const groups: [string, [string, number][] | undefined][] = [["Countries", a?.country], ["Ages", a?.age], ["Genders", a?.gender]];
-  const shown = groups.filter(([, rows]) => rows?.length);
+  const a = channel.audience ?? {};
+  const available = REPORTS.filter((r) => a[r.id] && Object.keys(a[r.id]!).length);
+  const [pick, setPick] = useState<(typeof REPORTS)[number]["id"] | null>(null);
+  const report = REPORTS.find((r) => r.id === pick && available.includes(r)) ?? available[0];
   const message = channel.platform === "tiktok"
-    ? "TikTok doesn't share where your audience is from through this API (only in TikTok Studio)."
-    : channel.mode !== "api" ? "Connect the official API to see where your audience is from, their ages and genders."
-      : a?.note ?? "Appears after the next read.";
+    ? "TikTok's API doesn't share where viewers are (TikTok Studio on your phone shows it)."
+    : channel.mode !== "api" ? "Connect the official API to see where your viewers are: countries, cities, ages, genders."
+      : "Meta fills this in once enough accounts have seen your videos (around 100). Nothing to do: it appears on its own.";
   return (
     <div className="mt-3 rounded-xl border border-line bg-panel/40 p-3.5">
-      <p className="text-[12px] font-medium text-snow">Audience</p>
-      {shown.length === 0
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-[12px] font-medium text-snow">Audience</p>
+        {available.length > 0 && (
+          <div className="flex gap-1" role="tablist" aria-label="Audience report">
+            {available.map((r) => (
+              <button key={r.id} role="tab" aria-selected={r.id === report?.id} title={r.hint} onClick={() => setPick(r.id)}
+                className={`rounded-full px-2.5 py-0.5 text-[11.5px] ${r.id === report?.id ? "bg-snow text-night" : "text-mist hover:text-snow"}`}>{r.label}</button>
+            ))}
+          </div>
+        )}
+        {report && <span className="text-[11.5px] text-mist">{report.hint}</span>}
+      </div>
+      {!report
         ? <p className="mt-1 text-[12.5px] text-mist">{message}</p>
-        : <div className="mt-2 grid gap-5 md:grid-cols-3">
-            {shown.map(([title, rows]) => {
-              const total = rows!.reduce((n, r) => n + r[1], 0) || 1;
+        : <div className="mt-3 grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+            {GROUPS.filter(([g]) => a[report.id]![g]?.length).map(([g, title]) => {
+              const rows = a[report.id]![g]!;
+              const total = rows.reduce((n, r) => n + r[1], 0) || 1;
               return (
-                <div key={title}>
+                <div key={g}>
                   <p className="text-[11.5px] text-mist">{title}</p>
                   <ul className="mt-1.5 space-y-1">
-                    {rows!.slice(0, 6).map(([label, n]) => (
-                      <li key={label} className="grid grid-cols-[minmax(0,7rem)_1fr_2.5rem] items-center gap-2 text-[12px]">
-                        <span className="truncate">{title === "Countries" && /^[A-Z]{2}$/.test(label) ? COUNTRY?.of(label) ?? label : label === "M" ? "Men" : label === "F" ? "Women" : label === "U" ? "Unknown" : label}</span>
+                    {rows.slice(0, 6).map(([label, n]) => (
+                      <li key={label} className="grid grid-cols-[minmax(0,8rem)_1fr_2.5rem] items-center gap-2 text-[12px]">
+                        <span className="truncate" title={place(g, label)}>{place(g, label)}</span>
                         <span className="h-1.5 rounded-full bg-night"><span className="block h-full rounded-full bg-lime" style={{ width: `${(n / total) * 100}%` }} /></span>
                         <span className="num text-right text-mist">{percent(n / total, 0)}</span>
                       </li>

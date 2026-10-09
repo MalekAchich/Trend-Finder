@@ -28,6 +28,17 @@ def fmt(n: float | None) -> str:
     return f"{n:.0f}"
 
 
+def audience_line(groups: dict) -> str | None:
+    """'countries US 40%, TN 25% · ages 18-24 50%': the top of each breakdown, as shares."""
+    parts = []
+    for key, name in (("country", "countries"), ("city", "cities"), ("age", "ages"), ("gender", "genders")):
+        rows = groups.get(key) or []
+        total = sum(r[1] for r in rows) or 1
+        if rows:
+            parts.append(f"{name} " + ", ".join(f"{label} {value / total:.0%}" for label, value in rows[:3]))
+    return " · ".join(parts) or None
+
+
 def age(hours: float) -> str:
     return f"{hours:.0f} h" if hours < 48 else f"{hours / 24:.0f} days"
 
@@ -69,6 +80,10 @@ async def channel_report(sm: async_sessionmaker[AsyncSession], character_id: uui
             lines.append(f"- {PLATFORM.get(ch.platform, ch.platform)} @{ch.handle}: "
                          f"{fmt(latest.followers if latest else None)} followers{growth}, "
                          f"{fmt(latest.posts if latest else None)} posts.")
+            for report, label in (("reached", "Reached (who saw the videos)"), ("engaged", "Engaged"),
+                                  ("followers", "Followers")):
+                if (where := audience_line((ch.audience or {}).get(report) or {})):
+                    lines.append(f"  {label}: {where}")
             rows = (await s.execute(select(SocialPost).where(SocialPost.channel_id == ch.id,
                                                              SocialPost.posted_at >= now - RECENT))).scalars().all()
             for p in rows:

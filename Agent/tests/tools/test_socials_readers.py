@@ -110,19 +110,28 @@ def test_public_pages_give_followers_and_the_numbers_they_show():
     assert (tt.posts[0].views, tt.posts[0].reach) == (5300, None)  # public pages have no reach: unknown, not 0
 
 
-async def test_instagram_audience_waits_for_100_followers_and_reads_breakdowns_after():
+async def test_instagram_audience_comes_in_three_reports_by_country_city_age_and_gender():
+    asked = []
+
     def handler(r: httpx.Request):
         q = dict(r.url.params)
-        if r.url.path == "/me/insights" and q["metric"] == "follower_demographics":
-            rows = {"country": [(["US"], 40), (["TN"], 25)], "age": [(["18-24"], 50)], "gender": [(["M"], 60)]}
-            return httpx.Response(200, json={"data": [{"name": "follower_demographics", "total_value": {"breakdowns": [
+        if r.url.path == "/me/insights" and q["metric"].endswith("demographics"):
+            asked.append((q["metric"], q["breakdown"], q.get("timeframe")))
+            rows = {"country": [(["US"], 40), (["TN"], 25)], "city": [(["Tunis, Tunisia"], 9)], "age": [(["18-24"], 50)],
+                    "gender": [(["M"], 60)]}
+            if q["metric"] == "engaged_audience_demographics":
+                return httpx.Response(200, json={"data": [{"name": q["metric"], "total_value": {"breakdowns": []}}]})
+            return httpx.Response(200, json={"data": [{"name": q["metric"], "total_value": {"breakdowns": [
                 {"results": [{"dimension_values": d, "value": v} for d, v in rows[q["breakdown"]]]}]}}]})
         if r.url.path == "/me/insights":
             return httpx.Response(200, json={"data": [{"name": q["metric"], "total_value": {"value": 900}}]})
         return httpx.Response(404)
     api = InstagramApi(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
-    assert "100 followers" in (await api.audience("t", 12))["note"]
-    who = await api.audience("t", 140)
-    assert who["country"] == [["US", 40], ["TN", 25]] and who["age"] == [["18-24", 50]] and who["gender"] == [["M", 60]]
+    young = await api.audience("t", 12)  # under 100 followers: reached/engaged are still asked, followers aren't
+    assert set(young) == {"reached"} and not any(m == "follower_demographics" for m, _, _ in asked)
+    assert young["reached"]["country"] == [["US", 40], ["TN", 25]] and young["reached"]["city"] == [["Tunis, Tunisia", 9]]
+    assert ("reached_audience_demographics", "country", "this_month") in asked
+    grown = await api.audience("t", 140)
+    assert set(grown) == {"reached", "followers"}  # an empty report (engaged here) is left out, not shown as zeros
     totals = await api.account_insights("t")
     assert totals["reach"] == 900 and totals["days"] == 28
