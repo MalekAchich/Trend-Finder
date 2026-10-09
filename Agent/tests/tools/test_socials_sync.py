@@ -118,3 +118,18 @@ async def test_a_channel_with_no_posts_yet_and_a_failing_one_never_stop_the_rest
     results = await sync(db_sessionmaker, creds, FakeApi(), FakePublic(error=True)).sync_all()
     assert set(results) == {"made_up_channel", "made_up_other"}
     assert all(r.error == "the public page didn't load" for r in results.values())
+
+
+
+async def test_a_renamed_account_brings_its_new_username_with_the_official_api(db_sessionmaker, tmp_path):
+    cid, creds = await setup(db_sessionmaker, tmp_path)
+    renamed = channel_read()
+    renamed.handle = "Made.Up.Channel"
+    await sync(db_sessionmaker, creds, FakeApi([renamed]), FakePublic()).sync_channel(cid)
+    (ch,) = await rows(db_sessionmaker, SocialChannel)
+    assert ch.handle == "made.up.channel"
+    public = channel_read(source="public")
+    public.handle = "someone_else"  # a public read only echoes the handle it was given: never renames
+    await sync(db_sessionmaker, creds, FakeApi(error="expired"), FakePublic(public),
+               NOW + timedelta(hours=3)).sync_channel(cid)
+    assert (await rows(db_sessionmaker, SocialChannel))[0].handle == "made.up.channel"

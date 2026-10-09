@@ -15,7 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tf_agent.socials.types import ChannelRead, ReadError
-from tf_agent.tools.normalize import canonical_id
+from tf_agent.tools.normalize import canonical_id, norm_handle
 from tf_db.models import SocialChannel, SocialChannelSnapshot, SocialPost, SocialSnapshot
 
 log = logging.getLogger(__name__)
@@ -143,6 +143,11 @@ class SocialSync:
                 last_ch.total_likes, last_ch.posts = read.total_likes, read.posts_count
             extra = {k: v for k, v in (("audience", read.audience), ("account_insights", read.account_insights))
                      if v is not None}  # public reads don't have them: what the API gave last stays
+            # the official API reads the account itself: a renamed account brings its new username along
+            renamed = norm_handle(read.handle) if read.source == "api" and read.handle else None
+            if renamed and renamed != ch.handle and not (await s.execute(select(SocialChannel.id).where(
+                    SocialChannel.platform == ch.platform, SocialChannel.handle == renamed))).first():
+                extra["handle"] = renamed
             await s.execute(update(SocialChannel).where(SocialChannel.id == channel_id).values(
                 last_synced_at=now, last_error=problem, **extra))
             await s.commit()
