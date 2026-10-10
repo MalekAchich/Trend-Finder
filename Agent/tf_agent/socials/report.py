@@ -84,7 +84,7 @@ async def channel_report(sm: async_sessionmaker[AsyncSession], character_id: uui
                                   ("followers", "Followers")):
                 if (where := audience_line((ch.audience or {}).get(report) or {})):
                     lines.append(f"  {label}: {where}")
-            rows = (await s.execute(select(SocialPost).where(SocialPost.channel_id == ch.id,
+            rows = (await s.execute(select(SocialPost).where(SocialPost.channel_id == ch.id, SocialPost.removed_at.is_(None),
                                                              SocialPost.posted_at >= now - RECENT))).scalars().all()
             for p in rows:
                 snap = (await s.execute(select(SocialSnapshot).where(SocialSnapshot.post_id == p.id)

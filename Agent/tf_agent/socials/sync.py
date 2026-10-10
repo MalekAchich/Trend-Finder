@@ -108,8 +108,10 @@ class SocialSync:
             return SyncResult(0, 0, problem, None)
         new: list[uuid.UUID] = []
         async with self._sm() as s:
+            seen: set[str] = set()
             for p in read.posts:
                 key, cid = post_key(p.platform_post_id, p.url)
+                seen.add(key)
                 row = (await s.execute(select(SocialPost).where(SocialPost.channel_id == channel_id,
                                                                 SocialPost.platform_post_id == key))).scalar_one_or_none()
                 if row is None:
@@ -122,6 +124,7 @@ class SocialSync:
                     if getattr(p, field) is not None:
                         setattr(row, field, getattr(p, field))
                 row.url, row.canonical_id = p.url or row.url, cid or row.canonical_id
+                row.removed_at = None  # listed again: it's there
                 if row.posted_at is not None and row.posted_at < now - WINDOW:
                     continue
                 last = (await s.execute(select(SocialSnapshot).where(SocialSnapshot.post_id == row.id)
@@ -135,6 +138,10 @@ class SocialSync:
                         if v is not None:  # a public read never erases what the API gave (reach, watch time)
                             setattr(last, k, v)
                     last.taken_at = now
+            if read.source == "api":  # the official list is complete: a recent post missing from it was deleted
+                await s.execute(update(SocialPost).where(
+                    SocialPost.channel_id == channel_id, SocialPost.platform_post_id.not_in(seen),
+                    SocialPost.removed_at.is_(None), SocialPost.posted_at >= now - WINDOW).values(removed_at=now))
             last_ch = (await s.execute(select(SocialChannelSnapshot).where(
                 SocialChannelSnapshot.channel_id == channel_id).order_by(SocialChannelSnapshot.taken_at.desc())
                 .limit(1))).scalar_one_or_none()

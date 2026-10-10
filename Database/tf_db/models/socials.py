@@ -45,6 +45,7 @@ class SocialPost(Base):
     inspired_by: Mapped[str | None] = mapped_column(String(64))  # the found / manual video it recreates (owner's link)
     study: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # what it is (format, tags): never a verdict
     audience: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # where its views come from, when the platform says
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # gone from the platform (deleted)
     created_at: Mapped[datetime] = _created()
 
 

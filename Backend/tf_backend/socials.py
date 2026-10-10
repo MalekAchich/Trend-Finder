@@ -152,7 +152,7 @@ class Socials:
 
     async def posts_out(self, s: AsyncSession, ch: SocialChannel, window: str, now: datetime) -> list[dict[str, Any]]:
         span = WINDOWS[window]
-        q = select(SocialPost).where(SocialPost.channel_id == ch.id)
+        q = select(SocialPost).where(SocialPost.channel_id == ch.id, SocialPost.removed_at.is_(None))
         rows = (await s.execute(q.order_by(SocialPost.posted_at.desc().nulls_last()))).scalars().all()
         out = []
         for p in rows:

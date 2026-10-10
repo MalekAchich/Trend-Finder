@@ -32,6 +32,7 @@ Emit = Callable[..., Awaitable[None]]
 LIKES_TO_PLAYS = 25  # when a platform hides plays (Instagram search), likes x 25 is a typical reach estimate
 MIN_AGE_H = 6.0  # a 1-hour-old video's plays/hour isn't meaningful yet
 SECOND_DEGREE_MIN_PLAYS = 1_000_000
+FIRST_ROUND_THEMES = 3  # of a round's max_queries searches
 # the platforms' own accounts re-post other people's hits: big numbers, but not creators to follow (run 3)
 PLATFORM_ACCOUNTS = frozenset({"instagram", "creators", "reels", "tiktok", "tiktokcreators", "youtube", "youtubeshorts",
                                "x", "twitter"})
@@ -322,7 +323,8 @@ class Lookalike:
                     and h not in PLATFORM_ACCOUNTS:
                 creators[platform].append(h)
         self.followed |= {(p, h) for p, hs in creators.items() for h in hs}
-        first = theme_queries(studies, self.g.max_queries) if self.round_no == 1 else []
+        # round 1: a few core themes, the rest of its searches from the leads (search angles vary per run)
+        first = theme_queries(studies, FIRST_ROUND_THEMES) if self.round_no == 1 else []
         queries = [q for q in dict.fromkeys([*first, *map(_query, more_queries)])
                    if q and q != "ai" and q not in self.searched][:self.g.max_queries]
         self.searched |= set(queries)

@@ -136,3 +136,28 @@ async def test_a_run_describes_our_own_new_posts_once(db_sessionmaker, tmp_path)
         post = (await s.execute(select(SocialPost))).scalar_one()
     assert post.study and post.study.get("format") and world.studies >= studies + 1
     assert "fit_score" not in post.study  # a description, never a verdict
+
+
+async def test_runs_dig_into_past_kept_creators_and_the_references_search_angles(db_sessionmaker, tmp_path):
+    from tf_db.models import Finding, FindingScore, Run, Video
+
+    orch, run_id, src, _ = await seeded(db_sessionmaker, tmp_path, min_score=0)
+    async with db_sessionmaker() as s:
+        run = await s.get(Run, run_id)
+        earlier = Run(character_id=run.character_id, character_version_id=run.character_version_id, state="review_ready",
+                      settings={}, inputs={})
+        s.add(earlier)
+        s.add(Video(canonical_id="instagram:TESTREEL090", platform="instagram",
+                    url="https://www.instagram.com/reel/TESTREEL090/", creator_handle="kept_before"))
+        await s.flush()
+        f = Finding(run_id=earlier.id, canonical_id="instagram:TESTREEL090", status="analyzed", source="agent")
+        s.add(f)
+        await s.flush()
+        s.add(FindingScore(finding_id=f.id, overall=90))
+        run.inputs = {"trend_studies": {"https://www.instagram.com/reel/TESTREEL001/": {
+            "format": "made-up format", "search_angles": ["made up angle one", "made up angle two"]}}}
+        await s.commit()
+    await orch.execute(run_id)
+    assert ("instagram_creator", "kept_before") in src.calls  # the creator of a video kept in an earlier run
+    searched = {q for t, q in src.calls if t == "instagram_search"}
+    assert {"ai made up angle one", "ai made up angle two"} <= searched  # the references' own search angles

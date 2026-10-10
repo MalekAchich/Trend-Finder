@@ -73,6 +73,7 @@ OWNER = {"id": "owner", "role": "owner", "platform": None}
 
 
 STUDY_PARALLEL = 2  # reference videos studied at once (each is downloaded and analysed)
+HISTORY_CREATORS = 24  # creators of the owner's kept videos from earlier runs, best first, that a run may follow
 OWN_POSTS_PER_RUN = 6  # our own channels' new posts described per run (once each)
 LEAD_CLOSENESS = 8.0  # a judged video this close to the references (of 10) leads the next lookalike round
 STUDY_DETAIL = 12  # how many reference studies the planner reads in full (the rest feed the summary)
@@ -505,7 +506,8 @@ class Orchestrator:
 
         async with self._sm() as s:
             todo = (await s.execute(select(SocialPost).join(SocialChannel, SocialChannel.id == SocialPost.channel_id)
-                                    .where(SocialChannel.character_id == ch.character_id, SocialPost.study.is_(None))
+                                    .where(SocialChannel.character_id == ch.character_id, SocialPost.study.is_(None),
+                                           SocialPost.removed_at.is_(None))
                                     .order_by(SocialPost.posted_at.desc().nulls_last()).limit(OWN_POSTS_PER_RUN))
                     ).scalars().all()
         for post in todo:
@@ -767,7 +769,7 @@ class Orchestrator:
                     await s.commit()
                 await self._set_state(run_id, "discovering", round=len(rounds) + 1)
                 _, exclude, _ = await self._lookalike_seeds(ch)  # fresh: includes everything judged so far
-                more_creators, more_queries = await self._lookalike_leads(run_id)
+                more_creators, more_queries = await self._lookalike_leads(run_id, ch.character_id, studies)
                 picks, stats = await finder.discover(seeds, studies, exclude, more_creators, more_queries)
                 rounds.append(stats)
                 await self._save_inputs(run_id, lookalike=stats, lookalike_rounds=rounds)
@@ -800,22 +802,35 @@ class Orchestrator:
                 await self.queue.enqueue(run_id, None, "analyze", scope={"finding_id": str(finding_id),
                                                                          "canonical_id": p.item.canonical_id})
 
-    async def _lookalike_leads(self, run_id: uuid.UUID) -> tuple[list[tuple[str, str]], list[str]]:
-        """Where the next round digs: the creators and themes of this run's judged videos that came closest to the
-        references (closeness 8+ of 10), kept or not."""
+    async def _lookalike_leads(self, run_id: uuid.UUID, character_id: uuid.UUID, studies: list[dict[str, Any]]
+                               ) -> tuple[list[tuple[str, str]], list[str]]:
+        """Where a round digs, so runs don't retrace each other:
+        - creators: of this run's judged videos closest to the references (closeness 8+), then of the videos the
+          owner kept in earlier runs, best first (they make what the owner wants);
+        - searches: the themes of this run's closest finds, then the references' own search angles (written when
+          each was studied), in an order that differs from run to run.
+        Each round takes what it hasn't followed or searched yet (the finder remembers)."""
         async with self._sm() as s:
             rows = (await s.execute(select(Video.platform, Video.creator_handle, FindingScore).join(
                 Finding, Finding.canonical_id == Video.canonical_id).join(
                 FindingScore, FindingScore.finding_id == Finding.id).where(
                 Finding.run_id == run_id, Finding.source != "owner", FindingScore.fit_breakdown.is_not(None)))).all()
+            earlier = (await s.execute(select(Video.platform, Video.creator_handle).join(
+                Finding, Finding.canonical_id == Video.canonical_id).join(
+                FindingScore, FindingScore.finding_id == Finding.id).join(Run, Run.id == Finding.run_id).where(
+                Run.character_id == character_id, Run.id != run_id, Finding.status == "analyzed",
+                Finding.source != "owner").order_by(FindingScore.overall.desc().nulls_last()))).all()
         close = [(p, h, sc) for p, h, sc in rows if float((sc.fit_breakdown or {}).get("niche") or 0) >= LEAD_CLOSENESS]
         close.sort(key=lambda r: -(r[2].overall or 0))
-        creators = list(dict.fromkeys((p, h) for p, h, _ in close if h))
+        creators = list(dict.fromkeys([(p, h) for p, h, _ in close if h]
+                                      + [(p, h) for p, h in earlier if h][:HISTORY_CREATORS]))
         themes: list[str] = []
         for _, _, sc in close:
             themes += [x for x in (sc.trend_type, sc.niche_guess) if x]
             themes += [f"ai {t}" for t in (sc.tags or [])[:3]]
-        return creators, list(dict.fromkeys(themes))[:12]
+        angles = list(dict.fromkeys(str(a) for st in studies for a in (st.get("search_angles") or []) if a))
+        random.Random(str(run_id)).shuffle(angles)  # a different slice of the angles leads each run
+        return creators, list(dict.fromkeys(themes[:8] + angles))
 
     async def _lookalike_seeds(self, ch: LoadedCharacter) -> tuple[list[Any], set[str], list[Path]]:
         """The owner's references and this character's targets (and their covers, for the look check); everything

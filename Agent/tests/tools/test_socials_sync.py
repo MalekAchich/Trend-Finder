@@ -133,3 +133,20 @@ async def test_a_renamed_account_brings_its_new_username_with_the_official_api(d
     await sync(db_sessionmaker, creds, FakeApi(error="expired"), FakePublic(public),
                NOW + timedelta(hours=3)).sync_channel(cid)
     assert (await rows(db_sessionmaker, SocialChannel))[0].handle == "made.up.channel"
+
+
+
+async def test_a_post_deleted_on_the_platform_is_marked_removed_and_back_if_it_returns(db_sessionmaker, tmp_path):
+    cid, creds = await setup(db_sessionmaker, tmp_path)
+    two = channel_read()
+    two.posts.append(PostRead(platform_post_id="TESTOWN002", url="https://www.instagram.com/reel/TESTOWN002/",
+                              posted_at=NOW - timedelta(hours=5), views=3))
+    await sync(db_sessionmaker, creds, FakeApi([two]), FakePublic()).sync_channel(cid)
+    await sync(db_sessionmaker, creds, FakeApi([channel_read()]), FakePublic(), NOW + timedelta(hours=1)).sync_channel(cid)
+    gone = {p.platform_post_id: p.removed_at for p in await rows(db_sessionmaker, SocialPost)}
+    assert gone["TESTOWN002"] == NOW + timedelta(hours=1) and gone["TESTOWN001"] is None
+    await sync(db_sessionmaker, creds, FakeApi(error="expired"), FakePublic(channel_read(source="public")),
+               NOW + timedelta(hours=2)).sync_channel(cid)  # a public read never removes anything
+    assert {p.platform_post_id: p.removed_at for p in await rows(db_sessionmaker, SocialPost)}["TESTOWN002"] is not None
+    await sync(db_sessionmaker, creds, FakeApi([two]), FakePublic(), NOW + timedelta(hours=3)).sync_channel(cid)
+    assert all(p.removed_at is None for p in await rows(db_sessionmaker, SocialPost))  # listed again: it's back
