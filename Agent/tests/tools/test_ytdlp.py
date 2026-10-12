@@ -111,6 +111,50 @@ async def test_download_returns_file_path(tmp_path):
     assert path == tmp_path / "abc.mp4" and path.read_bytes() == b"video"
 
 
+async def test_a_download_cut_off_midway_is_tried_again(tmp_path):
+    calls = []
+
+    def extract(url, opts, download):
+        calls.append(url)
+        if len(calls) == 1:  # the CDN dropped the connection (run 01a13242)
+            raise RuntimeError("ERROR: [download] Got error: Downloaded 2228224 bytes, expected 3214097 bytes")
+        target = tmp_path / "abc.mp4"
+        target.write_bytes(b"video")
+        return {"id": "abc", "requested_downloads": [{"filepath": str(target)}]}
+
+    path = await YtDlp(extractor=extract, retry_pause_s=0).download("https://youtu.be/TestShort01", tmp_path)
+    assert path.read_bytes() == b"video" and len(calls) == 2
+
+
+async def test_a_missing_video_isnt_tried_again(tmp_path):
+    calls = []
+
+    def extract(url, opts, download):
+        calls.append(url)
+        raise RuntimeError("ERROR: This video is not available")
+
+    with pytest.raises(ToolFailure) as ei:
+        await YtDlp(extractor=extract, retry_pause_s=0).download("https://youtu.be/TestShort01", tmp_path)
+    assert ei.value.error.code == "not_found" and len(calls) == 1
+
+
+async def test_an_instagram_post_link_is_read_as_a_reel(tmp_path):
+    seen = []
+
+    def extract(url, opts, download):
+        seen.append(url)
+        target = tmp_path / "TESTPOST01.mp4"
+        target.write_bytes(b"video")
+        return {"id": "TESTPOST01", "requested_downloads": [{"filepath": str(target)}]}
+
+    yt = YtDlp(extractor=extract)
+    await yt.download("https://www.instagram.com/p/TESTPOST01/?igsh=abc", tmp_path)
+    await yt.download("https://www.instagram.com/reel/TESTREEL01/", tmp_path)
+    await yt.download("https://www.tiktok.com/@creator_a/video/1000000000000000001", tmp_path)
+    assert seen == ["https://www.instagram.com/reel/TESTPOST01/", "https://www.instagram.com/reel/TESTREEL01/",
+                    "https://www.tiktok.com/@creator_a/video/1000000000000000001"]
+
+
 @pytest.mark.live
 async def test_live_shorts_metadata():
     v = await YtDlp().metadata("https://www.youtube.com/shorts/TestShort01")

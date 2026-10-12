@@ -52,6 +52,16 @@ def _default_extract(url: str, opts: dict[str, Any], download: bool) -> dict[str
         return ydl.extract_info(url, download=download)
 
 
+INSTAGRAM_POST = re.compile(r"^https?://(?:www\.)?instagram\.com/p/([A-Za-z0-9_-]+)")
+
+
+def readable_url(url: str) -> str:
+    """An Instagram post link (/p/) as its reel link: with the logged-in account's cookies yt-dlp can't read the
+    /p/ form of a video that its /reel/ form downloads fine (same id)."""
+    m = INSTAGRAM_POST.match(url)
+    return f"https://www.instagram.com/reel/{m.group(1)}/" if m else url
+
+
 def classify_ytdlp_error(message: str) -> ToolErrorCode:
     m = message.lower()
     if "login required" in m or "cookies" in m or "log in" in m:
@@ -123,8 +133,9 @@ def info_to_video_item(info: dict[str, Any]) -> VideoItem:
 class YtDlp:
     def __init__(self, timeout_s: float = 45.0, max_parallel: int = 2, cookies_file: Path | None = None,
                  extractor: Extractor | None = None, cookies_for: CookiesFor | None = None,
-                 convert_video: Callable[[Path], Awaitable[Path]] = to_h264) -> None:
+                 convert_video: Callable[[Path], Awaitable[Path]] = to_h264, retry_pause_s: float = 3.0) -> None:
         self.timeout_s = timeout_s
+        self.retry_pause_s = retry_pause_s
         self.cookies_file = cookies_file
         self.cookies_for = cookies_for
         self._extract = extractor or _default_extract
@@ -148,6 +159,7 @@ class YtDlp:
         return opts
 
     async def _run(self, url: str, opts: dict[str, Any], download: bool, timeout_s: float) -> dict[str, Any]:
+        url = readable_url(url)
         future = asyncio.get_running_loop().run_in_executor(self._pool, self._extract, url, opts, download)
         try:
             return await asyncio.wait_for(future, timeout_s)  # on timeout a queued job is cancelled
@@ -189,7 +201,14 @@ class YtDlp:
         dest_dir.mkdir(parents=True, exist_ok=True)
         fmt = DOWNLOAD_FORMAT.replace("720", str(max_height))
         opts = self._opts(url, format=fmt, merge_output_format="mp4", outtmpl=str(dest_dir / "%(id)s.%(ext)s"))
-        info = await self._run(url, opts, True, self.timeout_s * 4)
+        try:
+            info = await self._run(url, opts, True, self.timeout_s * 4)
+        except ToolFailure as e:
+            # a connection dropped midway ("Downloaded 2228224 bytes, expected 3214097") usually works next time
+            if e.error.code != "platform_unavailable" or "timed out" in e.error.message:
+                raise
+            await asyncio.sleep(self.retry_pause_s)
+            info = await self._run(url, opts, True, self.timeout_s * 4)
         files = [d.get("filepath") for d in info.get("requested_downloads") or [] if d.get("filepath")]
         if not files or not Path(files[0]).is_file():
             raise ToolFailure("platform_unavailable", "download produced no file")
