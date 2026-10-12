@@ -165,3 +165,60 @@ def test_the_planner_gets_a_summary_and_every_reference_unjudged():
     detail = lines[lines.index("Each reference:") + 1:]
     assert len(detail) == STUDY_DETAIL and detail[0].startswith("- skit | f0")
     assert not any("/10" in ln for ln in lines) and "Never question them" in lines[0]
+
+
+# ---- D-60: references belong to a character; another character's never seed this one's runs ----
+async def test_links_given_with_a_run_are_that_characters_references(db_sessionmaker, tmp_path):
+    from tf_agent.manual import ManualVideos
+
+    orch = await build(db_sessionmaker, tmp_path, World())
+    await orch.create_run("testy", settings(trend_urls=[TREND], freshness="day"))
+    (card,) = await ManualVideos(db_sessionmaker).list()
+    assert card["is_reference"] and card["reference_for"]["slug"] == "testy"
+
+
+async def test_lookalike_seeds_skip_another_characters_references(db_sessionmaker, tmp_path):
+    from tf_agent.characters.folders import load_character
+    from tf_db.models import Character, ManualVideo, Video
+
+    orch = await build(db_sessionmaker, tmp_path, World())
+    ch = await load_character(db_sessionmaker, "testy")
+    made_up = {"mine": "tiktok:7400000000000000011", "shared": "tiktok:7400000000000000012",
+               "theirs": "tiktok:7400000000000000013"}
+    async with db_sessionmaker() as s:
+        other = Character(slug="other-one", name="Other", folder_path="/made-up")
+        s.add(other)
+        await s.flush()
+        owner = {"mine": ch.character_id, "shared": None, "theirs": other.id}
+        for key, cid in made_up.items():
+            url = f"https://www.tiktok.com/@made_up_{key}/video/{cid.split(':')[1]}"
+            s.add(Video(canonical_id=cid, platform="tiktok", url=url, creator_handle=f"made_up_{key}"))
+            s.add(ManualVideo(url=url, canonical_id=cid, platform="tiktok", is_reference=True, status="ready",
+                              reference_character_id=owner[key]))
+        await s.commit()
+    seeds, exclude, _ = await orch._lookalike_seeds(ch)
+    assert {s.canonical_id for s in seeds} == {made_up["mine"], made_up["shared"]}
+    assert made_up["theirs"] in exclude  # still never shown as a find: it's one of the owner's picks
+
+
+# ---- D-61: a character's main platform: every judge aims for it ----
+def test_the_goal_line_names_the_main_platform():
+    from tf_agent.orchestrator.run import main_platform_line
+
+    line = main_platform_line("Testy", "youtube")
+    assert "YouTube Shorts" in line and "Testy" in line and "adaptation idea" in line
+    assert main_platform_line("Testy", None) is None
+
+
+async def test_judges_read_the_main_platform(db_sessionmaker, tmp_path):
+    from tf_agent.characters.folders import load_character
+    from tf_db.models import Character
+
+    orch = await build(db_sessionmaker, tmp_path, World())
+    run_id = await orch.create_run("testy", settings())
+    async with db_sessionmaker() as s:
+        await s.execute(update(Character).where(Character.slug == "testy").values(main_platform="youtube"))
+        await s.commit()
+        run = await s.get(Run, run_id)
+    brief = (await orch._judge_brief(await load_character(db_sessionmaker, "testy"), run)).brief
+    assert "posts mainly on YouTube Shorts" in brief

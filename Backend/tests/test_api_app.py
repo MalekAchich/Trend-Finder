@@ -145,6 +145,18 @@ async def test_characters_are_image_folders_synced_on_read(http):
     assert (await http.get(chars[0]["image_url"])).status_code == 200
 
 
+async def test_a_characters_main_platform_is_saved_and_shown(http):
+    chars = (await http.get("/api/characters")).json()
+    assert chars[0]["main_platform"] is None
+    r = await http.put("/api/characters/testy/main-platform", json={"platform": "youtube"})
+    assert r.status_code == 200
+    assert (await http.get("/api/characters")).json()[0]["main_platform"] == "youtube"
+    assert (await http.put("/api/characters/testy/main-platform", json={"platform": "myspace"})).status_code == 422
+    assert (await http.put("/api/characters/nobody/main-platform", json={"platform": "tiktok"})).status_code == 404
+    assert (await http.put("/api/characters/testy/main-platform", json={"platform": None})).status_code == 200
+    assert (await http.get("/api/characters")).json()[0]["main_platform"] is None
+
+
 async def test_start_a_run_with_inputs(http, ctx):
     await http.get("/api/characters")
     body = {"character": "testy", "platforms": ["tiktok"], "freshness": "day", "minutes": 30,

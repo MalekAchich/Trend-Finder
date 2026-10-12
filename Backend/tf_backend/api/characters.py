@@ -1,7 +1,7 @@
 """Characters are the image folders in CHARACTERS_DIR (synced on every read) and the runs made for them.
 Adding a character, renaming one or adding images edits those folders, then syncs."""
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from datetime import UTC, datetime, timedelta
 
@@ -50,7 +50,8 @@ async def list_characters(c: AppContext = Depends(ctx)) -> list[dict[str, Any]]:
                                  .order_by(CharacterVersion.version.desc()).limit(1))).scalar_one()
             runs = (await s.execute(select(func.count()).select_from(Run).where(Run.character_id == ch.id))).scalar_one()
             out.append({"slug": ch.slug, "name": ch.name, "image_url": image_url(c, v.canonical_image_path),
-                        "images": [u for u in (image_url(c, p) for p in v.images or []) if u], "runs": runs})
+                        "images": [u for u in (image_url(c, p) for p in v.images or []) if u], "runs": runs,
+                        "main_platform": ch.main_platform})
     return out
 
 
@@ -83,6 +84,22 @@ async def more_images(slug: str, images: list[UploadFile] = File(...), c: AppCon
 
 class RenameIn(BaseModel):
     name: str
+
+
+class MainPlatformIn(BaseModel):
+    platform: Literal["tiktok", "instagram", "youtube", "x"] | None  # None: no main platform
+
+
+@router.put("/{slug}/main-platform", dependencies=[Depends(require_client_header)])
+async def set_main_platform(slug: str, body: MainPlatformIn, c: AppContext = Depends(ctx)) -> dict[str, Any]:
+    """Where the character must succeed most (D-61): every judge of its runs aims for that platform."""
+    async with c.sessionmaker() as s:
+        ch = (await s.execute(select(Character).where(Character.slug == slug))).scalar_one_or_none()
+        if ch is None:
+            raise HTTPException(404, f"unknown character {slug!r}")
+        ch.main_platform = body.platform
+        await s.commit()
+    return {"slug": slug, "main_platform": body.platform}
 
 
 @router.patch("/{slug}", dependencies=[Depends(require_client_header)])

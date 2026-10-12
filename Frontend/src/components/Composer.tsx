@@ -1,6 +1,6 @@
 import { ChevronDown, Link2, Settings2, Sparkles, Square, Play, X } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { useManualActions, useManualVideos } from "../api/hooks";
+import { useManualActions, useManualVideos, useSetMainPlatform } from "../api/hooks";
 import type { Character, ManualVideo, Platform, StartRun } from "../api/types";
 import { BrandLogo } from "./brand";
 import { PLATFORM_LABEL, PlatformIcon, platformOf, shortUrl } from "./ui";
@@ -27,13 +27,16 @@ export function Composer({ characters, selected, onSelect, running, starting, er
   const toggle = (k: "trending" | "targets") => setOpen((o) => ({ ...o, [k]: !o[k] }));
   const manual = useManualActions();
   const saved = useManualVideos(null).data?.items ?? [];
-  const refs = saved.filter((v) => v.is_reference);
+  // this character's references and the ones shared by every character
+  const refs = saved.filter((v) => v.is_reference && (!v.reference_for || v.reference_for.slug === selected));
   const targets = saved.filter((v) => v.target);
   const [platforms, setPlatforms] = useState<Platform[]>(["tiktok", "instagram", "youtube"]);
   const [freshness, setFreshness] = useState<StartRun["freshness"]>("month");
   const [minVideos, setMinVideos] = useState(10);
   const [localError, setLocalError] = useState<string | null>(null);
-  const name = characters.find((c) => c.slug === selected)?.name;
+  const current = characters.find((c) => c.slug === selected);
+  const name = current?.name;
+  const setMain = useSetMainPlatform();
 
   const togglePlatform = (p: Platform) =>
     setPlatforms((ps) => (ps.includes(p) ? ps.filter((x) => x !== p) : [...ps, p]));
@@ -73,6 +76,20 @@ export function Composer({ characters, selected, onSelect, running, starting, er
               );
             })}
           </div>
+          {current && (
+            <label className="mt-5 flex flex-wrap items-center gap-2 text-[12.5px] text-mist">
+              Main platform
+              <select className="field !h-8 !w-auto" value={current.main_platform ?? ""} disabled={setMain.isPending}
+                aria-label={`${current.name}'s main platform`}
+                onChange={(e) => setMain.mutate({ slug: current.slug, platform: (e.target.value || null) as Platform | null })}>
+                <option value="">None</option>
+                {(Object.keys(PLATFORM_LABEL) as Platform[]).map((p) =>
+                  <option key={p} value={p}>{p === "youtube" ? "YouTube Shorts" : PLATFORM_LABEL[p]}</option>)}
+              </select>
+              {current.main_platform && <span className="basis-full text-[11.5px]">Every judge scores how {current.name}'s version would do there.</span>}
+              {setMain.isError && <span role="alert" className="basis-full text-bad">{(setMain.error as Error).message}</span>}
+            </label>
+          )}
         </div>
 
         <div className="min-w-0">
@@ -82,16 +99,17 @@ export function Composer({ characters, selected, onSelect, running, starting, er
               onClick={onShowManual}>Manually chosen videos</button>.</p>
           <div className="overflow-hidden rounded-xl border border-line bg-[color-mix(in_oklch,var(--color-panel)_45%,var(--color-night))]">
             <Section id="trending" icon={<Sparkles size={18} />} open={open.trending}
-              title="Trend references" subtitle="Videos the agents study to learn what works and find more like them"
+              title="Trend references" subtitle={`Videos the agents study to learn what works and find more like them${name ? `, for ${name}` : ""}`}
               state={refs.length ? `${refs.length} saved` : "None yet"} onToggle={() => toggle("trending")}>
               <LinkInput placeholder="Paste a TikTok, Instagram, YouTube or X link and press Enter" label="Reference video link"
-                onAdd={(urls) => manual.add.mutateAsync({ urls, reference: true, target: null })} />
+                onAdd={(urls) => manual.add.mutateAsync({ urls, reference: true, reference_for: selected, target: null })} />
               {refs.length > 0 && (
                 <ul className="mt-4 flex flex-wrap gap-2">
                   {refs.map((v) => (
                     <li key={v.id} className="chip !text-snow" title={v.problem ?? undefined}>
                       <SavedState video={v} /><PlatformIcon platform={v.platform} />
                       <span className="max-w-[240px] truncate">{shortUrl(v.url)}</span>
+                      {!v.reference_for && <span className="text-[11px] text-mist" title="Shared by every character">all</span>}
                       <button aria-label={`Remove ${v.url} from references`} disabled={manual.setRoles.isPending || manual.remove.isPending}
                         onClick={() => v.target ? manual.setRoles.mutate({ id: v.id, is_reference: false }) : manual.remove.mutate(v.id)}
                         className="-mr-1 rounded-full p-0.5 hover:bg-white/10"><X size={13} /></button>

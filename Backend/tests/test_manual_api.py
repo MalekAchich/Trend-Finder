@@ -71,12 +71,18 @@ async def test_add_check_edit_and_remove(http):
     bad = await http.patch(f"/api/manual-videos/{vid}", json={"is_reference": False, "target": None})
     assert bad.status_code == 422
     assert (await http.post(f"/api/manual-videos/{items[BAD]['id']}/check")).status_code == 202
+    mine = await http.patch(f"/api/manual-videos/{vid}", json={"reference_for": "testy"})  # D-60
+    assert mine.status_code == 200
+    card = next(i for i in (await http.get("/api/manual-videos")).json()["items"] if i["id"] == vid)
+    assert card["reference_for"]["slug"] == "testy" and card["target"]["slug"] == "testy"  # target untouched
+    assert (await http.patch(f"/api/manual-videos/{vid}", json={"reference_for": "nobody"})).status_code == 422
     assert (await http.delete(f"/api/manual-videos/{vid}")).status_code == 200
     assert (await http.delete(f"/api/manual-videos/{vid}")).status_code == 404
 
 
 @pytest.mark.parametrize("body", [{"urls": ["https://example.invalid/x"]}, {"urls": []},
-                                  {"urls": [TT], "target": "nobody"}, {"urls": [TT] * 101}])
+                                  {"urls": [TT], "target": "nobody"}, {"urls": [TT], "reference_for": "nobody"},
+                                  {"urls": [TT] * 101}])
 async def test_bad_adds_are_refused(http, body):
     assert (await http.post("/api/manual-videos", json=body)).status_code == 422
 

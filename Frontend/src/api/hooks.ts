@@ -1,11 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type { SocialChannel, SocialPost, SocialSnapshot, SocialsOverview } from "./types";
-import type { AccountItem, Character, ManualVideo, CharacterDetail, FoundVideo, ModelChoice, ProviderPriority, ProviderStatus, ProviderUsage, Rating, RunDetail,
+import type { AccountItem, Character, ManualVideo, Platform, CharacterDetail, FoundVideo, ModelChoice, ProviderPriority, ProviderStatus, ProviderUsage, Rating, RunDetail,
   RunHistoryRow, RunSummary, StartRun } from "./types";
 
 export const useCharacters = () =>
   useQuery({ queryKey: ["characters"], queryFn: () => api.get<Character[]>("/api/characters") });
+
+export function useSetMainPlatform() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { slug: string; platform: Platform | null }) =>
+      api.put(`/api/characters/${v.slug}/main-platform`, { platform: v.platform }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["characters"] }),
+  });
+}
 
 export const useProviders = () =>
   useQuery({ queryKey: ["providers"], queryFn: () => api.get<ProviderStatus[]>("/api/providers"), refetchInterval: 60_000 });
@@ -97,10 +106,10 @@ export function useManualActions() {
   const done = () => qc.invalidateQueries({ queryKey: ["manual-videos"] });
   return {
     add: useMutation({
-      mutationFn: (v: { urls: string[]; reference: boolean; target: string | null }) =>
+      mutationFn: (v: { urls: string[]; reference: boolean; reference_for?: string | null; target: string | null }) =>
         api.post<{ added: number }>("/api/manual-videos", v), onSuccess: done }),
     setRoles: useMutation({
-      mutationFn: (v: { id: string; is_reference?: boolean; target?: string | null }) => {
+      mutationFn: (v: { id: string; is_reference?: boolean; reference_for?: string | null; target?: string | null }) => {
         const { id, ...body } = v;
         return api.patch(`/api/manual-videos/${id}`, body);
       }, onSuccess: done }),

@@ -44,6 +44,7 @@ class Character(Base):
     name: Mapped[str] = mapped_column(String(128))
     folder_path: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
+    main_platform: Mapped[str | None] = mapped_column(String(16))  # where it must succeed most (D-61)
     created_at: Mapped[datetime] = _created()
 
 
@@ -81,6 +82,9 @@ class ManualVideo(Base):
     canonical_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     platform: Mapped[str] = mapped_column(String(16))
     is_reference: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    # whose reference it is (D-60); None: every character's
+    reference_character_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID_T, ForeignKey("characters.id", ondelete="SET NULL"))
     target_character_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID_T, ForeignKey("characters.id", ondelete="SET NULL"))
     status: Mapped[str] = mapped_column(String(16), default="checking", server_default="checking")

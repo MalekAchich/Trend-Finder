@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -81,8 +81,10 @@ class ManualVideos:
                 .on_conflict_do_nothing(index_elements=[Target.character_id, Target.canonical_id]))
 
     # ---- adding ----
-    async def add(self, urls: list[str], *, reference: bool, target: str | None = None) -> list[uuid.UUID]:
-        """Saves the links (all or none). Returns the videos that need checking (new ones)."""
+    async def add(self, urls: list[str], *, reference: bool, target: str | None = None,
+                  reference_for: str | None = None) -> list[uuid.UUID]:
+        """Saves the links (all or none). Returns the videos that need checking (new ones). A reference is
+        `reference_for` one character's, or every character's without one (D-60)."""
         clean = list(dict.fromkeys(u.strip() for u in urls if u.strip()))
         if not clean:
             return []
@@ -97,17 +99,20 @@ class ManualVideos:
         new: list[uuid.UUID] = []
         async with self._sm() as s:
             char_id = await self._character_id(s, target) if target else None
+            ref_id = await self._character_id(s, reference_for) if reference and reference_for else None
             for url in clean:
                 cid = canonical_id(url)
                 q = select(ManualVideo).where(ManualVideo.canonical_id == cid if cid else ManualVideo.url == url)
                 row = (await s.execute(q)).scalar_one_or_none()
                 if row is None:
                     row = ManualVideo(url=url, canonical_id=cid, platform=platform_of(url), is_reference=reference,
-                                      target_character_id=char_id, status="checking")
+                                      reference_character_id=ref_id, target_character_id=char_id, status="checking")
                     s.add(row)
                     await s.flush()
                     new.append(row.id)
                 else:
+                    if reference:
+                        row.reference_character_id = _merged_owner(row, ref_id)
                     row.is_reference = row.is_reference or reference
                     if char_id is not None:
                         row.target_character_id = char_id
@@ -157,6 +162,8 @@ class ManualVideos:
             dup = (await s.execute(select(ManualVideo).where(ManualVideo.canonical_id == item.canonical_id,
                                                              ManualVideo.id != video_id))).scalar_one_or_none()
             if dup is not None:  # a short link that turned out to be a video already in the list: merge into it
+                if row.is_reference:
+                    dup.reference_character_id = _merged_owner(dup, row.reference_character_id)
                 dup.is_reference = dup.is_reference or row.is_reference
                 dup.target_character_id = row.target_character_id or dup.target_character_id
                 await s.delete(row)
@@ -173,7 +180,8 @@ class ManualVideos:
             await s.commit()
 
     # ---- editing ----
-    async def set_roles(self, video_id: uuid.UUID, *, is_reference: bool | None = None, target: Any = UNSET) -> None:
+    async def set_roles(self, video_id: uuid.UUID, *, is_reference: bool | None = None, target: Any = UNSET,
+                        reference_for: Any = UNSET) -> None:
         async with self._sm() as s:
             row = await s.get(ManualVideo, video_id)
             if row is None:
@@ -182,6 +190,8 @@ class ManualVideos:
                 row.is_reference = is_reference
             if target is not UNSET:
                 row.target_character_id = await self._character_id(s, target) if target else None
+            if reference_for is not UNSET:
+                row.reference_character_id = await self._character_id(s, reference_for) if reference_for else None
             if not row.is_reference and row.target_character_id is None:
                 raise InputError("a video must be a reference, a target, or both (remove it instead)")
             await self._sync_target(s, row)
@@ -203,13 +213,14 @@ class ManualVideos:
 
     # ---- reading ----
     async def references_for(self, character_id: uuid.UUID) -> list[Reference]:
-        """Every usable reference, with this character's study when it exists (studied once, then reused)."""
+        """Every usable reference of this character (its own and every character's), with this character's study
+        when it exists (studied once, then reused)."""
         async with self._sm() as s:
             rows = (await s.execute(
                 select(ManualVideo, ReferenceStudy.study).outerjoin(
                     ReferenceStudy, (ReferenceStudy.manual_video_id == ManualVideo.id)
                     & (ReferenceStudy.character_id == character_id))
-                .where(ManualVideo.is_reference, ManualVideo.status != "problem")
+                .where(ManualVideo.is_reference, ManualVideo.status != "problem", for_character(character_id))
                 .order_by(ManualVideo.created_at))).all()
         return [Reference(m.id, m.url, study) for m, study in rows]
 
@@ -230,6 +241,7 @@ class ManualVideos:
                                     .outerjoin(Video, Video.canonical_id == ManualVideo.canonical_id)
                                     .outerjoin(Character, Character.id == ManualVideo.target_character_id)
                                     .order_by(ManualVideo.created_at.desc()))).all()
+            names = {c.id: c for c in (await s.execute(select(Character))).scalars()}
             ids = [m.id for m, _, _ in rows]
             studies: dict[uuid.UUID, dict[str, Any]] = {}
             q = select(ReferenceStudy).where(ReferenceStudy.manual_video_id.in_(ids)).order_by(
@@ -262,10 +274,26 @@ class ManualVideos:
                 "views": (v.metrics or {}).get("views") if v else None,
                 "likes": (v.metrics or {}).get("likes") if v else None, "duration_s": v.duration_s if v else None,
                 "posted_at": v.posted_at.isoformat() if v and v.posted_at else None,
-                "is_reference": m.is_reference, "target": target, "study": _no_verdict(studies.get(m.id)),
+                "is_reference": m.is_reference, "target": target,
+                "reference_for": ({"slug": names[m.reference_character_id].slug,
+                                   "name": names[m.reference_character_id].name}
+                                  if m.is_reference and m.reference_character_id in names else None), "study": _no_verdict(studies.get(m.id)),
                 "added_at": m.created_at.isoformat() if m.created_at else None,
             })
         return out
+
+
+def for_character(character_id: uuid.UUID) -> Any:
+    """References that count for this character: its own and every character's."""
+    return or_(ManualVideo.reference_character_id.is_(None), ManualVideo.reference_character_id == character_id)
+
+
+def _merged_owner(row: ManualVideo, wanted: uuid.UUID | None) -> uuid.UUID | None:
+    """Whose reference a video is once it's added again as one: the same character's stays it; wanted by a
+    second character (or by every character), it becomes every character's."""
+    if not row.is_reference:
+        return wanted
+    return row.reference_character_id if row.reference_character_id == wanted else None
 
 
 def _no_verdict(study: dict[str, Any] | None) -> dict[str, Any] | None:

@@ -8,6 +8,7 @@ import { HoverPreview } from "./HoverPreview";
 import { PLATFORM_LABEL, PlatformIcon, formatViews } from "./ui";
 
 type Filter = "all" | "references" | "targets";
+const EVERY = "*"; // a reference for every character
 
 /** The owner's manually chosen videos: references (intel for the agents), targets, or both. */
 export function ManualPanel({ characters, slug }: { characters: Character[]; slug: string | null }) {
@@ -97,13 +98,17 @@ function ManualCard({ video, characters }: { video: ManualVideo; characters: Cha
           </div>
         )}
         <div className="flex flex-wrap items-center gap-1.5">
-          <button onClick={() => setRoles.mutate({ id: video.id, is_reference: !video.is_reference })}
-            disabled={busy || (video.is_reference && !video.target)} aria-pressed={video.is_reference}
-            title={video.is_reference && !video.target
-              ? "Reference: the agents study it to learn the trend and find more like it. To stop using it, pick a target or remove it."
-              : "Reference: the agents study it to learn the trend and find more like it (for every character)"}
-            className={`h-7 rounded-md px-2 text-[11.5px] transition ${video.is_reference ? "bg-ink text-white" : "bg-paper-2 text-ink-2 hover:text-ink"}`}>
-            Reference</button>
+          <select value={!video.is_reference ? "" : video.reference_for?.slug ?? EVERY} disabled={busy}
+            aria-label="Reference for a character"
+            title="Reference: the agents study it to learn the trend and find more like it, in that character's runs"
+            onChange={(e) => setRoles.mutate(e.target.value === "" ? { id: video.id, is_reference: false }
+              : { id: video.id, is_reference: true, reference_for: e.target.value === EVERY ? null : e.target.value })}
+            className={`h-7 min-w-0 flex-1 rounded-md px-1.5 text-[11.5px] outline-none ${video.is_reference ? "bg-ink text-white" : "bg-paper-2 text-ink-2"}`}>
+            {/* it must stay useful for something: no "not a reference" without a target */}
+            <option value="" disabled={!video.target}>Not a reference</option>
+            <option value={EVERY}>Reference: every character</option>
+            {characters.map((c) => <option key={c.slug} value={c.slug}>Reference: {c.name}</option>)}
+          </select>
           <select value={video.target?.slug ?? ""} disabled={busy} aria-label="Target for a character"
             onChange={(e) => setRoles.mutate({ id: video.id, target: e.target.value || null })}
             className={`h-7 min-w-0 flex-1 rounded-md px-1.5 text-[11.5px] outline-none ${video.target ? "bg-lime text-night" : "bg-paper-2 text-ink-2"}`}>

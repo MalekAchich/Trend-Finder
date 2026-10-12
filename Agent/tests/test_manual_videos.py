@@ -141,3 +141,51 @@ async def test_references_for_a_character_say_which_need_studying(db_sessionmake
         await s.commit()
     refs = await mv.references_for(char_id)
     assert {(r.url, r.study is not None) for r in refs} == {(TT, True), (YT, False)}  # problems are skipped
+
+
+# ---- D-60: a reference belongs to one character (or, left open, to every character) ----
+async def other_character(sm, slug="brute"):
+    from tf_db.models import Character
+    async with sm() as s:
+        c = Character(slug=slug, name="B", folder_path="/y")
+        s.add(c)
+        await s.commit()
+        return c.id
+
+
+async def test_a_reference_for_one_character_isnt_used_for_another(db_sessionmaker, tmp_path):
+    char_id, *_ = await make_run(db_sessionmaker, n_tasks=0)
+    brute_id = await other_character(db_sessionmaker)
+    mv = service(db_sessionmaker, tmp_path)
+    (mine,) = await mv.add([TT], reference=True, reference_for="brute")
+    (shared,) = await mv.add([YT], reference=True)  # no character given: every character's
+    assert {r.url for r in await mv.references_for(brute_id)} == {TT, YT}
+    assert {r.url for r in await mv.references_for(char_id)} == {YT}
+    cards = {c["url"]: c for c in await mv.list()}
+    assert cards[TT]["reference_for"] == {"slug": "brute", "name": "B"} and cards[YT]["reference_for"] is None
+
+
+async def test_a_references_character_can_change(db_sessionmaker, tmp_path):
+    char_id, *_ = await make_run(db_sessionmaker, n_tasks=0)
+    await other_character(db_sessionmaker)
+    mv = service(db_sessionmaker, tmp_path)
+    (vid,) = await mv.add([TT], reference=True, reference_for="brute")
+    await mv.set_roles(vid, reference_for="nicolaiz")
+    assert {r.url for r in await mv.references_for(char_id)} == {TT}
+    await mv.set_roles(vid, reference_for=None)  # back to every character
+    (card,) = await mv.list()
+    assert card["is_reference"] and card["reference_for"] is None
+    with pytest.raises(InputError):
+        await mv.set_roles(vid, reference_for="nobody")
+    with pytest.raises(InputError):
+        await mv.add([YT], reference=True, reference_for="nobody")
+
+
+async def test_adding_the_same_reference_for_another_character_shares_it(db_sessionmaker, tmp_path):
+    await make_run(db_sessionmaker, n_tasks=0)
+    await other_character(db_sessionmaker)
+    mv = service(db_sessionmaker, tmp_path)
+    await mv.add([TT], reference=True, reference_for="brute")
+    await mv.add([TT], reference=True, reference_for="nicolaiz")  # wanted by both: no longer one character's
+    (card,) = await mv.list()
+    assert card["reference_for"] is None

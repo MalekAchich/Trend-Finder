@@ -117,6 +117,18 @@ def reference_lines(studies: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+MAIN_PLATFORM = {"youtube": "YouTube Shorts", "tiktok": "TikTok", "instagram": "Instagram Reels", "x": "X"}
+
+
+def main_platform_line(name: str, platform: str | None) -> str | None:
+    """The owner's goal for the character (D-61): every judge aims for that platform."""
+    where = MAIN_PLATFORM.get(platform or "")
+    if where is None:
+        return None
+    return (f"Main platform: {name} posts mainly on {where} and must succeed there most. Judge every video by how "
+            f"well {name}'s version would do on {where}, and write every adaptation idea for {where}.")
+
+
 class InputError(ValueError):
     """A run input the owner gave can't be used (bad URL, unknown character)."""
 
@@ -289,7 +301,7 @@ class Orchestrator:
         ch = await load_character(self._sm, slug)
         targets = await self._validate_inputs(settings)
         manual = ManualVideos(self._sm)  # links given with a run join the owner's manually chosen videos
-        await manual.add(list(settings.trend_urls), reference=True)
+        await manual.add(list(settings.trend_urls), reference=True, reference_for=slug)
         for t in settings.targets:
             await manual.add([str(t["url"]).strip()], reference=False, target=str(t["character"]).strip())
         async with self._sm() as s:
@@ -329,8 +341,13 @@ class Orchestrator:
         await self.blackboard.record_event(run_id, "run.state", {"state": state, "stop_reason": stop_reason})
 
     async def _judge_brief(self, ch: LoadedCharacter, run: Run) -> LoadedCharacter:
-        """What every judge of a run sees: the character, the owner's references and how our own channels did."""
+        """What every judge of a run sees: the character, where it must succeed most, the owner's references and how
+        our own channels did."""
         ch = with_references(ch, run)
+        async with self._sm() as s:
+            main = (await s.execute(select(Character.main_platform).where(Character.id == ch.character_id))).scalar()
+        if (goal := main_platform_line(ch.name, main)):
+            ch = replace(ch, brief=ch.brief + "\n\n" + goal)
         try:
             report = await channel_report(self._sm, ch.character_id, datetime.now(UTC))
         except Exception as e:  # the channels' numbers never cost a run
@@ -833,22 +850,25 @@ class Orchestrator:
         return creators, list(dict.fromkeys(themes[:8] + angles))
 
     async def _lookalike_seeds(self, ch: LoadedCharacter) -> tuple[list[Any], set[str], list[Path]]:
-        """The owner's references and this character's targets (and their covers, for the look check); everything
-        already chosen or found is excluded."""
+        """This character's references (its own and every character's, D-60) and targets (and their covers, for
+        the look check); everything already chosen or found is excluded."""
         async with self._sm() as s:
             # every known reference seeds discovery, even one whose study failed: its creator is still worth following
             rows = (await s.execute(select(ManualVideo))).scalars().all()
             found = (await s.execute(select(Finding.canonical_id).join(Run, Run.id == Finding.run_id).where(
                 Run.character_id == ch.character_id))).scalars().all()
+        def mine(m: ManualVideo) -> bool:
+            return (m.is_reference and m.reference_character_id in (None, ch.character_id)) \
+                or m.target_character_id == ch.character_id
+
         seeds = []
         for m in rows:
-            if m.canonical_id and (m.is_reference or m.target_character_id == ch.character_id):
+            if m.canonical_id and mine(m):
                 item = await self.store.get_video(m.canonical_id)
                 if item is not None:
                     seeds.append(item)
         exclude = {m.canonical_id for m in rows if m.canonical_id} | set(found)
-        covers = [Path(m.thumbnail_path) for m in rows if m.thumbnail_path and m.status == "ready"
-                  and (m.is_reference or m.target_character_id == ch.character_id)]
+        covers = [Path(m.thumbnail_path) for m in rows if m.thumbnail_path and m.status == "ready" and mine(m)]
         return seeds, exclude, covers
 
     async def _round_has_plan(self, run_id: uuid.UUID, number: int) -> bool:

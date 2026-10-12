@@ -10,6 +10,8 @@ export interface Character {
   image_url: string | null;
   images: string[];
   runs: number;
+  /** where the character must succeed most; every judge aims for it */
+  main_platform: Platform | null;
 }
 
 export interface CharacterRead {
@@ -123,6 +125,8 @@ export interface ManualVideo {
   duration_s: number | null;
   posted_at: string | null;
   is_reference: boolean;
+  /** whose reference it is; null: every character's */
+  reference_for: { slug: string; name: string } | null;
   target: { slug: string; name: string; state: "waiting" | "analysed"; run_id: string | null; adaptation: string | null } | null;
   study: ReferenceStudy | null;
   added_at: string | null;

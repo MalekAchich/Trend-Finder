@@ -55,13 +55,15 @@ async def list_videos(character: str | None = None, c: AppContext = Depends(ctx)
 class AddIn(BaseModel):
     urls: list[str] = Field(min_length=1, max_length=MAX_ADD)
     reference: bool = True
+    reference_for: str | None = Field(None, max_length=64)  # a character's slug; none: every character's
     target: str | None = Field(None, max_length=64)
 
 
 @router.post("", status_code=201, dependencies=[Depends(require_client_header)])
 async def add_videos(body: AddIn, c: AppContext = Depends(ctx)) -> dict[str, Any]:
     try:
-        ids = await _service(c).add(body.urls, reference=body.reference, target=body.target)
+        ids = await _service(c).add(body.urls, reference=body.reference, target=body.target,
+                                    reference_for=body.reference_for)
     except InputError as e:
         raise HTTPException(422, str(e)) from e
     _check_later(c, ids)
@@ -70,14 +72,16 @@ async def add_videos(body: AddIn, c: AppContext = Depends(ctx)) -> dict[str, Any
 
 class RolesIn(BaseModel):
     is_reference: bool | None = None
+    reference_for: str | None = Field(None, max_length=64)
     target: str | None = Field(None, max_length=64)
 
 
 @router.patch("/{video_id}", dependencies=[Depends(require_client_header)])
 async def set_roles(video_id: str, body: RolesIn, c: AppContext = Depends(ctx)) -> dict[str, str]:
     kw: dict[str, Any] = {"is_reference": body.is_reference}
-    if "target" in body.model_fields_set:
-        kw["target"] = body.target
+    for key in ("target", "reference_for"):  # sent as null: cleared; left out: unchanged
+        if key in body.model_fields_set:
+            kw[key] = getattr(body, key)
     try:
         await _service(c).set_roles(_id(video_id), **kw)
     except KeyError:
