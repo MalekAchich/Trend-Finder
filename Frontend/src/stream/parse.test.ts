@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { endsStream, parseEvent } from "./parse";
+import { endsStream, lostConnection, parseEvent } from "./parse";
 
 describe("parseEvent", () => {
   it("reads server events and ignores the browser's own connection-error events", () => {
@@ -7,6 +7,14 @@ describe("parseEvent", () => {
     expect(parseEvent({ data: JSON.stringify(e) } as MessageEvent)).toEqual(e);
     expect(parseEvent(new Event("error") as unknown as MessageEvent)).toBeNull();
     expect(parseEvent({ data: "not json" } as MessageEvent)).toBeNull();
+  });
+});
+
+describe("lostConnection", () => {
+  it("is the browser's own error, not the run's events named \"error\" (run 01a13242 showed Reconnecting… while live)", () => {
+    const e = { id: 9916, type: "error", payload: { message: "couldn't study a reference" }, created_at: "" };
+    expect(lostConnection({ data: JSON.stringify(e) } as MessageEvent)).toBe(false);
+    expect(lostConnection(new Event("error"))).toBe(true);
   });
 });
 

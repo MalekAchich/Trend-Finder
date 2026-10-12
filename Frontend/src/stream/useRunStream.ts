@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FoundVideo, RunAgent, StreamEvent } from "../api/types";
-import { endsStream, parseEvent } from "./parse";
+import { endsStream, lostConnection, parseEvent } from "./parse";
 import { applyEvents, initialStream, type StreamState } from "./reduce";
 
 export const EVENT_TYPES = [
@@ -41,6 +41,7 @@ export function useRunStream(runId: string | null, seed: RunAgent[], onLiveSave?
     const onEvent = (raw: MessageEvent) => {
       const e = parseEvent(raw);
       if (!e) return;
+      setConnected(true);  // an event arrived: the connection is up, whatever came before
       pending.push(e);
       if (!frame) frame = requestAnimationFrame(flush);
       if (e.type === "video.saved" && Date.parse(e.created_at) > openedAt - 4000) saveRef.current?.(e.payload.video);
@@ -51,7 +52,7 @@ export function useRunStream(runId: string | null, seed: RunAgent[], onLiveSave?
     };
     for (const t of EVENT_TYPES) source.addEventListener(t, onEvent as EventListener);
     source.onopen = () => setConnected(true);
-    source.onerror = () => setConnected(false);
+    source.onerror = (e) => { if (lostConnection(e)) setConnected(false); };
     return () => {
       source.close();
       if (frame) cancelAnimationFrame(frame);

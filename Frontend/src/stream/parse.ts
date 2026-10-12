@@ -11,6 +11,10 @@ export function parseEvent(raw: MessageEvent): StreamEvent | null {
   }
 }
 
+/** EventSource's onerror fires both when the connection drops and for the run's own events named "error" (an
+ * agent's failure, which carries data): only the first means the page lost the server. */
+export const lostConnection = (e: Event) => typeof (e as MessageEvent).data !== "string";
+
 const FINAL = ["review_ready", "stopped", "failed"];
 
 /** The run is over: the server ends the stream, so the page must stop EventSource's automatic reconnects. */
