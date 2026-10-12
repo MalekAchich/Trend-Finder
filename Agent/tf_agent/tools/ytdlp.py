@@ -133,9 +133,10 @@ def info_to_video_item(info: dict[str, Any]) -> VideoItem:
 class YtDlp:
     def __init__(self, timeout_s: float = 45.0, max_parallel: int = 2, cookies_file: Path | None = None,
                  extractor: Extractor | None = None, cookies_for: CookiesFor | None = None,
-                 convert_video: Callable[[Path], Awaitable[Path]] = to_h264, retry_pause_s: float = 3.0) -> None:
+                 convert_video: Callable[[Path], Awaitable[Path]] = to_h264,
+                 retry_pauses_s: tuple[float, ...] = (5.0, 15.0)) -> None:
         self.timeout_s = timeout_s
-        self.retry_pause_s = retry_pause_s
+        self.retry_pauses_s = retry_pauses_s
         self.cookies_file = cookies_file
         self.cookies_for = cookies_for
         self._extract = extractor or _default_extract
@@ -201,14 +202,16 @@ class YtDlp:
         dest_dir.mkdir(parents=True, exist_ok=True)
         fmt = DOWNLOAD_FORMAT.replace("720", str(max_height))
         opts = self._opts(url, format=fmt, merge_output_format="mp4", outtmpl=str(dest_dir / "%(id)s.%(ext)s"))
-        try:
-            info = await self._run(url, opts, True, self.timeout_s * 4)
-        except ToolFailure as e:
-            # a connection dropped midway ("Downloaded 2228224 bytes, expected 3214097") usually works next time
-            if e.error.code != "platform_unavailable" or "timed out" in e.error.message:
-                raise
-            await asyncio.sleep(self.retry_pause_s)
-            info = await self._run(url, opts, True, self.timeout_s * 4)
+        for pause in (*self.retry_pauses_s, None):
+            try:
+                info = await self._run(url, opts, True, self.timeout_s * 4)
+                break
+            except ToolFailure as e:
+                # a connection dropped midway ("Downloaded 2228224 bytes, expected 3214097") or a page TikTok refused
+                # right after usually works a little later
+                if pause is None or e.error.code != "platform_unavailable" or "timed out" in e.error.message:
+                    raise
+                await asyncio.sleep(pause)
         files = [d.get("filepath") for d in info.get("requested_downloads") or [] if d.get("filepath")]
         if not files or not Path(files[0]).is_file():
             raise ToolFailure("platform_unavailable", "download produced no file")

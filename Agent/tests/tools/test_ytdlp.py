@@ -118,12 +118,14 @@ async def test_a_download_cut_off_midway_is_tried_again(tmp_path):
         calls.append(url)
         if len(calls) == 1:  # the CDN dropped the connection (run 01a13242)
             raise RuntimeError("ERROR: [download] Got error: Downloaded 2228224 bytes, expected 3214097 bytes")
+        if len(calls) == 2:  # and TikTok refused the quick retry
+            raise RuntimeError("ERROR: [TikTok] 1: Unexpected response from webpage request")
         target = tmp_path / "abc.mp4"
         target.write_bytes(b"video")
         return {"id": "abc", "requested_downloads": [{"filepath": str(target)}]}
 
-    path = await YtDlp(extractor=extract, retry_pause_s=0).download("https://youtu.be/TestShort01", tmp_path)
-    assert path.read_bytes() == b"video" and len(calls) == 2
+    path = await YtDlp(extractor=extract, retry_pauses_s=(0, 0)).download("https://youtu.be/TestShort01", tmp_path)
+    assert path.read_bytes() == b"video" and len(calls) == 3
 
 
 async def test_a_missing_video_isnt_tried_again(tmp_path):
@@ -134,7 +136,7 @@ async def test_a_missing_video_isnt_tried_again(tmp_path):
         raise RuntimeError("ERROR: This video is not available")
 
     with pytest.raises(ToolFailure) as ei:
-        await YtDlp(extractor=extract, retry_pause_s=0).download("https://youtu.be/TestShort01", tmp_path)
+        await YtDlp(extractor=extract, retry_pauses_s=(0, 0)).download("https://youtu.be/TestShort01", tmp_path)
     assert ei.value.error.code == "not_found" and len(calls) == 1
 
 
