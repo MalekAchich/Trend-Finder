@@ -66,7 +66,7 @@ def build_tool_stack(settings: AppSettings, sessionmaker: async_sessionmaker[Asy
                      seen_filter: SeenFilter | None = None, on_items: ItemsSink | None = None) -> ToolStack:
     searx = SearxClient(settings.searxng_url)
     creds = Credentials(settings.secrets_dir)
-    ytdlp = YtDlp(cookies_for=creds.cookies_file)
+    ytdlp = YtDlp(cookies_for=creds.cookies_file, on_login_refused=creds.mark_expired)
     browser = BrowserSessions(creds, max_pages=settings.browser_pages, firefox_bin=settings.firefox_bin)
     quota = DbQuota(sessionmaker) if sessionmaker is not None else MemoryQuota()
     youtube_api = YouTubeApi(lambda: creds.get("youtube_api_key"), quota)

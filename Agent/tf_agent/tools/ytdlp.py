@@ -134,8 +134,10 @@ class YtDlp:
     def __init__(self, timeout_s: float = 45.0, max_parallel: int = 2, cookies_file: Path | None = None,
                  extractor: Extractor | None = None, cookies_for: CookiesFor | None = None,
                  convert_video: Callable[[Path], Awaitable[Path]] = to_h264,
-                 retry_pauses_s: tuple[float, ...] = (5.0, 15.0)) -> None:
+                 retry_pauses_s: tuple[float, ...] = (5.0, 15.0),
+                 on_login_refused: Callable[[str], None] | None = None) -> None:
         self.timeout_s = timeout_s
+        self.on_login_refused = on_login_refused  # a reading account's login the platform no longer accepts
         self.retry_pauses_s = retry_pauses_s
         self.cookies_file = cookies_file
         self.cookies_for = cookies_for
@@ -169,7 +171,12 @@ class YtDlp:
         except ToolFailure:
             raise
         except Exception as e:  # yt_dlp.utils.DownloadError and friends
-            raise ToolFailure(classify_ytdlp_error(str(e)), str(e).splitlines()[0][:300]) from e
+            code = classify_ytdlp_error(str(e))
+            # YouTube still asking to sign in although the reading account's cookies went along: they're expired
+            if code == "login_required" and "not a bot" in str(e) and opts.get("cookiefile") \
+                    and platform_of(url) == "youtube" and self.on_login_refused is not None:
+                self.on_login_refused("youtube")
+            raise ToolFailure(code, str(e).splitlines()[0][:300]) from e
 
     async def metadata(self, url: str) -> VideoItem:
         info = await self._run(url, self._opts(url, skip_download=True), False, self.timeout_s)

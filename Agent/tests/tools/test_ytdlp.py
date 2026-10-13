@@ -157,6 +157,27 @@ async def test_an_instagram_post_link_is_read_as_a_reel(tmp_path):
                     "https://www.tiktok.com/@creator_a/video/1000000000000000001"]
 
 
+async def test_youtube_refusing_the_reading_accounts_login_marks_it_expired(tmp_path):
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n")
+    refused = []
+
+    def extract(url, opts, download):
+        assert opts["cookiefile"] == str(cookies)
+        raise RuntimeError("ERROR: [youtube] TestShort01: Sign in to confirm you're not a bot. Use --cookies")
+
+    yt = YtDlp(extractor=extract, cookies_for=lambda p: cookies if p == "youtube" else None,
+               on_login_refused=refused.append)
+    with pytest.raises(ToolFailure) as ei:
+        await yt.metadata("https://www.youtube.com/shorts/TestShort01")
+    assert ei.value.error.code == "login_required" and refused == ["youtube"]
+
+    no_account = YtDlp(extractor=extract, cookies_for=lambda p: None, on_login_refused=refused.append)
+    with pytest.raises(ToolFailure):
+        await no_account.metadata("https://www.youtube.com/shorts/TestShort01")
+    assert refused == ["youtube"]  # without a login there's nothing to mark
+
+
 @pytest.mark.live
 async def test_live_shorts_metadata():
     v = await YtDlp().metadata("https://www.youtube.com/shorts/TestShort01")

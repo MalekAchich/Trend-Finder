@@ -1,4 +1,4 @@
-"""Settings, Accounts & keys: the YouTube API key and the scraping-account logins (TikTok, Instagram, X).
+"""Settings, Accounts & keys: the YouTube API key and the scraping-account logins (TikTok, Instagram, X, YouTube).
 
 Secrets go in and never come out: responses carry only whether something is set, a masked hint and dates. Logins
 open a real browser window on this machine; the owner logs in there and only the session is kept.

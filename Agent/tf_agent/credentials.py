@@ -41,6 +41,13 @@ SESSIONS = {
                               # TikTok One's own login cookies end in "_ads" (seen on a real login, 2026-10-07)
                               proof=("sessionid_ads", "sid_tt_ads", "sid_guard_ads", "sid_ucp_v1_ads"),
                               browser="firefox"),
+    # YouTube asks downloads from this machine to sign in ("confirm you're not a bot"); only yt-dlp uses this login.
+    # Google refuses sign-ins inside automated windows, so it's the owner's real Firefox; YouTube's own login cookies
+    # show the login reached youtube.com
+    "youtube": SessionSpec("youtube", "YouTube scraping account",
+                           "https://accounts.google.com/ServiceLogin?service=youtube"
+                           "&continue=https%3A%2F%2Fwww.youtube.com%2F", None, "youtube.com",
+                           proof=("LOGIN_INFO", "__Secure-3PSID", "SAPISID"), browser="firefox"),
 }
 
 

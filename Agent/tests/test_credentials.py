@@ -58,8 +58,12 @@ def test_session_saved_as_state_and_cookies_txt(tmp_path):
 
 
 def test_every_session_platform_has_a_login_cookie():
-    assert set(SESSIONS) == {"tiktok", "instagram", "x", "tiktok_one"}
+    assert set(SESSIONS) == {"tiktok", "instagram", "x", "tiktok_one", "youtube"}
     assert SESSIONS["tiktok_one"].cookie is None  # saved when the owner closes the window
+    # YouTube asks downloads from this machine to sign in ("confirm you're not a bot", run 01a13242): a reading
+    # account logged in through real Firefox (Google refuses sign-ins in automated windows)
+    yt = SESSIONS["youtube"]
+    assert yt.browser == "firefox" and yt.domain == "youtube.com" and "LOGIN_INFO" in yt.proof
     assert SESSIONS["x"].cookie == "auth_token" and SESSIONS["tiktok"].cookie == "sessionid"
 
 
@@ -90,3 +94,16 @@ def test_channel_tokens_and_the_tiktok_app_stay_private(tmp_path):
     assert c.social_token("chan-1") is None
     with pytest.raises(ValueError):
         c.save_social_token("../escape", {"access_token": "x"})
+
+
+def test_a_youtube_login_gives_yt_dlp_its_cookies(tmp_path):
+    from tf_agent.tools.browser import logged_in
+
+    c = Credentials(tmp_path)
+    assert c.cookies_file("youtube") is None
+    only_google = {"cookies": [{"name": "SID", "value": "made-up", "domain": ".google.com"}]}
+    assert not logged_in(only_google, SESSIONS["youtube"])  # not on YouTube yet
+    state = {"cookies": [{"name": "LOGIN_INFO", "value": "made-up", "domain": ".youtube.com", "path": "/"}]}
+    assert logged_in(state, SESSIONS["youtube"])
+    c.save_session("youtube", state)
+    assert "LOGIN_INFO" in c.cookies_file("youtube").read_text()
