@@ -191,6 +191,13 @@ def test_instagram_creator_is_the_username_not_the_display_name():
     assert info_to_video_item(info).creator.handle == "creator_g"
 
 
+def test_instagrams_made_up_title_is_never_taken_for_the_caption():
+    base = {"id": "TESTREEL003", "extractor_key": "Instagram", "webpage_url": "https://www.instagram.com/reel/TESTREEL003/",
+            "channel": "creator_h", "title": "Video by creator_h"}
+    assert info_to_video_item({**base, "description": "Made-up caption #testtag"}).caption == "Made-up caption #testtag"
+    assert info_to_video_item(base).caption is None  # no caption written: yt-dlp's "Video by …" isn't one
+
+
 async def test_save_gives_the_video_with_sound_or_the_sound_alone(tmp_path):
     seen = []
 

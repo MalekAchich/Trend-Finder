@@ -97,7 +97,8 @@ def info_to_video_item(info: dict[str, Any]) -> VideoItem:
     platform, vid = cid.split(":", 1)
     if platform == "youtube":
         url = f"https://www.youtube.com/shorts/{vid}"
-    caption = info.get("description") or info.get("title") or None
+    # Instagram's title is yt-dlp's own "Video by <user>", never the creator's text
+    caption = info.get("description") or (None if platform == "instagram" else info.get("title")) or None
     tags: list[str] = []
     for t in _HASHTAG_RE.findall(caption or "") + list(info.get("tags") or []):
         n = norm_hashtag(str(t))

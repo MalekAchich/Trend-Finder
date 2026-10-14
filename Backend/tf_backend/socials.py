@@ -73,27 +73,32 @@ class Socials:
         async with self._locks.setdefault(channel_id, asyncio.Lock()):  # a click during the 3-hour sync: one read
             result = await self.sync.sync_channel(channel_id)
         await self._save_thumbnails(channel_id)
-        await self._fill_lengths(channel_id)
+        await self._fill_details(channel_id)
         return result
 
-    async def _fill_lengths(self, channel_id: uuid.UUID) -> None:
-        """Instagram's API gives no video length (needed for "watched through"): looked up once per post."""
+    async def _fill_details(self, channel_id: uuid.UUID) -> None:
+        """What a source leaves out, looked up once per post on the post's own page: Instagram's API gives no
+        video length (needed for "watched through"), a public Reels grid no caption. A post with no caption
+        gets "" so it isn't looked up again."""
         if self.get_meta is None:
             return
         async with self.sm() as s:
-            posts = (await s.execute(select(SocialPost).where(SocialPost.channel_id == channel_id,
-                                                              SocialPost.duration_s.is_(None)))).scalars().all()
+            posts = (await s.execute(select(SocialPost).where(
+                SocialPost.channel_id == channel_id,
+                SocialPost.duration_s.is_(None) | SocialPost.caption.is_(None)))).scalars().all()
         for p in posts:
             try:
                 item = await self.get_meta(p.url)
             except Exception as e:  # no length is fine: watched-through stays "–"
-                log.info("length of %s unknown: %s", p.url, e)
+                log.info("details of %s unknown: %s", p.url, e)
                 continue
-            if item.duration_s:
-                async with self.sm() as s:
-                    row = await s.get(SocialPost, p.id)
+            async with self.sm() as s:
+                row = await s.get(SocialPost, p.id)
+                if row.duration_s is None and item.duration_s:
                     row.duration_s = float(item.duration_s)
-                    await s.commit()
+                if row.caption is None:
+                    row.caption = item.caption or ""
+                await s.commit()
 
     async def sync_all(self) -> None:
         async with self.sm() as s:

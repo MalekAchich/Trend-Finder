@@ -93,7 +93,7 @@ async def setup(db_sessionmaker, tmp_path):
 
     async def meta(url):
         from types import SimpleNamespace
-        return SimpleNamespace(duration_s=20.0)
+        return SimpleNamespace(duration_s=20.0, caption=None)
 
     yt = FakeYouTube()
     socials = Socials(db_sessionmaker, SocialSync(db_sessionmaker, creds, ig, tt, FakePublic(), youtube=yt), creds, ig, tt,
@@ -147,6 +147,41 @@ async def test_an_instagram_token_is_checked_saved_and_turns_on_the_official_num
     assert socials.creds.social_token(ch["id"])["access_token"] == SECRETS[0]
     off = (await http.post(f"/api/socials/channels/{ch['id']}/disconnect")).json()
     assert off["mode"] == "public" and socials.creds.social_token(ch["id"]) is None
+
+
+async def test_a_caption_the_public_page_leaves_out_is_read_once_from_the_post_itself(setup):
+    from types import SimpleNamespace
+    http, socials, _ = setup
+    looked_up = []
+
+    async def meta(url):  # the profile's Reels grid gives no captions; the post's own page does
+        looked_up.append(url)
+        return SimpleNamespace(duration_s=20.0, caption="Made-up caption #testtag")
+
+    socials.get_meta = meta
+    ch = (await http.post("/api/socials/channels", json={"platform": "instagram", "handle": "made_up_channel",
+                                                          "character": "testy"})).json()
+    await http.post(f"/api/socials/channels/{ch['id']}/sync")
+    (post,) = (await http.get(f"/api/socials/channels/{ch['id']}/posts?window=all")).json()
+    assert post["caption"] == "Made-up caption #testtag" and post["duration_s"] == 20.0
+    assert looked_up == ["https://www.instagram.com/reel/TESTOWN001/"]  # once, not on every sync
+
+
+async def test_a_post_with_no_caption_is_looked_up_only_once(setup):
+    from types import SimpleNamespace
+    http, socials, _ = setup
+    looked_up = []
+
+    async def meta(url):
+        looked_up.append(url)
+        return SimpleNamespace(duration_s=20.0, caption=None)  # posted without a caption
+
+    socials.get_meta = meta
+    ch = (await http.post("/api/socials/channels", json={"platform": "instagram", "handle": "made_up_channel",
+                                                          "character": "testy"})).json()
+    await http.post(f"/api/socials/channels/{ch['id']}/sync")
+    (post,) = (await http.get(f"/api/socials/channels/{ch['id']}/posts?window=all")).json()
+    assert post["caption"] == "" and len(looked_up) == 1
 
 
 async def test_tiktok_login_round_trip_and_its_refusals(setup):
