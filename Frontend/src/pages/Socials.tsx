@@ -1,9 +1,10 @@
-import { ChevronDown, Loader2, Plus, X } from "lucide-react";
+import { ChevronDown, Loader2, Plus, RefreshCw, X } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useSocialActions, useSocialReport, useSocials } from "../api/hooks";
 import { ChannelView, type Window } from "../components/socials/ChannelView";
 import { PLATFORM_LABEL, PlatformIcon } from "../components/ui";
+import { syncAllMessage } from "../lib/socials";
 
 const WINDOWS: { id: Window; label: string }[] = [{ id: "7d", label: "7 days" }, { id: "30d", label: "30 days" }, { id: "all", label: "All" }];
 
@@ -16,6 +17,8 @@ export default function Socials() {
   const current = chars.find((c) => c.slug === slug);
   const channels = current?.channels ?? [];
   const [adding, setAdding] = useState(false);
+  const { syncAll } = useSocialActions();
+  const allChannels = chars.reduce((n, c) => n + c.channels.length, 0);
   const selected = channels.find((c) => c.id === params.get("ch")) ?? channels[0];
   const window = (["7d", "30d", "all"].includes(params.get("w") ?? "") ? params.get("w") : "30d") as Window;
   const set = (values: Record<string, string | null>) => {
@@ -42,7 +45,16 @@ export default function Socials() {
             ))}
           </div>
         )}
+        {allChannels > 0 && (
+          <button className="btn-ghost ml-auto" onClick={() => syncAll.mutate()} disabled={syncAll.isPending}
+            title="Read every channel of every character now">
+            {syncAll.isPending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            {syncAll.isPending ? `Reading all ${allChannels} channels…` : "Sync all"}</button>
+        )}
       </div>
+      {syncAll.data && <Banner tone={syncAll.data.failed.length ? "bad" : "ok"} onClose={() => syncAll.reset()}>
+        {syncAllMessage(syncAll.data, (p) => PLATFORM_LABEL[p as "tiktok"] ?? p)}</Banner>}
+      {syncAll.isError && <Banner tone="bad" onClose={() => syncAll.reset()}>{(syncAll.error as Error).message}</Banner>}
       {connected && <Banner tone="ok" onClose={() => set({})}>{PLATFORM_LABEL[connected as "tiktok"] ?? connected} is connected through the official API.</Banner>}
       {failed && <Banner tone="bad" onClose={() => set({})}>{failed}</Banner>}
       {overview.isLoading && <p className="mt-8 text-[13px] text-mist">Loading…</p>}
@@ -50,12 +62,12 @@ export default function Socials() {
       {current && overview.data && (
         <>
           <div className="mt-7 flex flex-wrap items-center gap-3 border-b border-line pb-4">
-            <div className="flex gap-1 rounded-xl bg-panel/60 p-1" role="tablist" aria-label="Channel">
+            <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl bg-panel/60 p-1" role="tablist" aria-label="Channel">
               {channels.map((c) => {
                 const on = c.id === selected?.id && !adding;
                 return (
                   <button key={c.id} role="tab" aria-selected={on} onClick={() => { setAdding(false); set({ ch: c.id }); }}
-                    className={`flex h-9 items-center gap-2 rounded-lg px-3.5 text-[13px] transition ${on ? "bg-snow font-medium text-night" : "text-mist hover:text-snow"}`}>
+                    className={`flex h-9 shrink-0 items-center gap-2 rounded-lg px-3.5 text-[13px] transition ${on ? "bg-snow font-medium text-night" : "text-mist hover:text-snow"}`}>
                     <PlatformIcon platform={c.platform} size={13} /> @{c.handle}
                     {c.mode === "api" && <span className={`h-1.5 w-1.5 rounded-full ${on ? "bg-lime-deep" : "bg-lime"}`} title="Official API" />}
                   </button>

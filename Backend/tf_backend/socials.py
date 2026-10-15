@@ -100,14 +100,21 @@ class Socials:
                     row.caption = item.caption or ""
                 await s.commit()
 
-    async def sync_all(self) -> None:
+    async def sync_all(self) -> tuple[int, dict[uuid.UUID, str]]:
+        """Every channel of every character, one after another: (how many, {channel: what went wrong})."""
         async with self.sm() as s:
             ids = (await s.execute(select(SocialChannel.id))).scalars().all()
+        failed: dict[uuid.UUID, str] = {}
         for cid in ids:
             try:
-                await self.sync_channel(cid)
+                result = await self.sync_channel(cid)
             except Exception as e:  # one channel never stops the others
                 log.warning("socials sync of %s failed: %s", cid, e)
+                failed[cid] = str(e) or type(e).__name__
+                continue
+            if result.error and result.source is None:  # nothing could be read
+                failed[cid] = result.error
+        return len(ids), failed
 
     def start(self) -> None:
         async def loop() -> None:

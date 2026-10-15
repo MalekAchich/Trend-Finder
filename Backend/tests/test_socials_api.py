@@ -184,6 +184,34 @@ async def test_a_post_with_no_caption_is_looked_up_only_once(setup):
     assert post["caption"] == "" and len(looked_up) == 1
 
 
+async def test_sync_all_reads_every_channel_of_every_character_and_names_the_ones_that_failed(setup, db_sessionmaker, tmp_path):
+    http, socials, _ = setup
+    async with db_sessionmaker() as s:
+        s.add(Character(slug="testy-two", name="Testy Two", folder_path=str(tmp_path)))
+        await s.commit()
+    one = (await http.post("/api/socials/channels", json={"platform": "instagram", "handle": "made_up_channel",
+                                                           "character": "testy"})).json()
+    two = (await http.post("/api/socials/channels", json={"platform": "tiktok", "handle": "made_up_broken",
+                                                           "character": "testy-two"})).json()
+
+    class HalfBroken(FakePublic):
+        async def read(self, platform, handle, since):
+            if handle == "made_up_broken":
+                raise ReadError("unavailable", "made-up page that didn't load")
+            return await super().read(platform, handle, since)
+
+    socials.sync.public = HalfBroken()
+    out = await http.post("/api/socials/sync")
+    assert out.status_code == 200
+    body = out.json()
+    assert body["channels"] == 2
+    assert body["failed"] == [{"id": two["id"], "character": "Testy Two", "platform": "tiktok",
+                               "handle": "made_up_broken", "error": "made-up page that didn't load"}]
+    channels = {c["id"]: c for ch in (await http.get("/api/socials")).json()["characters"] for c in ch["channels"]}
+    assert channels[one["id"]]["last_error"] is None and channels[two["id"]]["last_error"]
+    assert (await http.post("/api/socials/sync", headers={"x-trendfinder-client": ""})).status_code == 403
+
+
 async def test_tiktok_login_round_trip_and_its_refusals(setup):
     http, socials, _ = setup
     ch = (await http.post("/api/socials/channels", json={"platform": "tiktok", "handle": "made_up_tiktok",

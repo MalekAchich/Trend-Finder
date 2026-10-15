@@ -1,3 +1,5 @@
+import type { SyncAllResult } from "../api/types";
+
 /** Numbers for the Socials page: unknown is "–", never 0 (a platform that doesn't give a number didn't say 0). */
 
 export function compact(n: number | null | undefined): string {
@@ -48,4 +50,13 @@ export function ago(iso: string | null | undefined, now = Date.now()): string {
 export function postNumbers(posts: { id: string; posted_at: string | null }[]): Map<string, number> {
   const order = [...posts].filter((p) => p.posted_at).sort((a, b) => Date.parse(a.posted_at!) - Date.parse(b.posted_at!));
   return new Map(order.map((p, i) => [p.id, i + 1]));
+}
+
+/** What "Sync all" says when it's done: everything read, or which channels couldn't be. */
+export function syncAllMessage(r: SyncAllResult, label: (platform: string) => string): string {
+  const read = r.channels - r.failed.length;
+  if (!r.channels) return "No channels to read yet.";
+  if (!r.failed.length) return `All ${r.channels} channel${r.channels === 1 ? "" : "s"} read.`;
+  const names = r.failed.map((f) => `${f.character}'s ${label(f.platform)} @${f.handle} (${f.error})`).join("; ");
+  return `Read ${read} of ${r.channels} channels. Couldn't read ${names}.`;
 }

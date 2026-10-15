@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { niceTop } from "../components/socials/MiniChart";
-import { ago, compact, engagementRate, formatDelta, percent, watchThrough } from "./socials";
+import { ago, compact, engagementRate, formatDelta, percent, syncAllMessage, watchThrough } from "./socials";
 
 describe("socials numbers", () => {
   it("unknown is a dash, never zero", () => {
@@ -29,5 +29,16 @@ describe("socials numbers", () => {
 describe("chart scale", () => {
   it("puts gridlines on round numbers", () => {
     expect([niceTop(176), niceTop(638), niceTop(3400), niceTop(1)]).toEqual([200, 1000, 5000, 1]);
+  });
+});
+
+describe("sync all", () => {
+  const label = (p: string) => ({ tiktok: "TikTok", youtube: "YouTube" } as Record<string, string>)[p] ?? p;
+  it("says everything was read, or names what wasn't", () => {
+    expect(syncAllMessage({ channels: 9, failed: [] }, label)).toBe("All 9 channels read.");
+    expect(syncAllMessage({ channels: 0, failed: [] }, label)).toBe("No channels to read yet.");
+    expect(syncAllMessage({ channels: 3, failed: [{ id: "1", character: "Made Up", platform: "tiktok",
+      handle: "made_up_one", error: "made-up page that didn't load" }] }, label))
+      .toBe("Read 2 of 3 channels. Couldn't read Made Up's TikTok @made_up_one (made-up page that didn't load).");
   });
 });

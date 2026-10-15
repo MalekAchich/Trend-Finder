@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { SocialChannel, SocialPost, SocialSnapshot, SocialsOverview } from "./types";
+import type { SocialChannel, SocialPost, SocialSnapshot, SocialsOverview, SyncAllResult } from "./types";
 import type { AccountItem, Character, ManualVideo, Platform, CharacterDetail, FoundVideo, ModelChoice, ProviderPriority, ProviderStatus, ProviderUsage, Rating, RunDetail,
   RunHistoryRow, RunSummary, StartRun } from "./types";
 
@@ -231,6 +231,7 @@ export const useSocialActions = () => {
       api.post<SocialChannel>(`/api/socials/channels/${id}/disconnect`) }),
     sync: useMutation({ onSuccess: done, mutationFn: (id: string) =>
       api.post<SocialChannel>(`/api/socials/channels/${id}/sync`) }),
+    syncAll: useMutation({ onSuccess: done, mutationFn: () => api.post<SyncAllResult>("/api/socials/sync") }),
     instagramToken: useMutation({ onSuccess: done, mutationFn: (v: { id: string; token: string }) =>
       api.post<SocialChannel>(`/api/socials/channels/${v.id}/instagram-token`, { token: v.token }) }),
     googleApp: useMutation({ onSuccess: done, mutationFn: (v: { client_id: string; client_secret: string }) =>

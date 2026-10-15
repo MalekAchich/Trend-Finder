@@ -292,3 +292,7 @@ export interface SocialSnapshot {
   saves: number | null;
   avg_watch_s: number | null;
 }
+
+/** POST /api/socials/sync: every channel read; the ones that couldn't be, named. */
+export type SyncAllResult = { channels: number;
+  failed: { id: string; character: string; platform: string; handle: string; error: string }[] };

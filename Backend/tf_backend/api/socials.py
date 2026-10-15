@@ -299,6 +299,17 @@ async def sync_now(channel_id: str, c: AppContext = Depends(ctx)) -> dict[str, A
                 "synced": result.posts, "source": result.source}
 
 
+@router.post("/sync", dependencies=[Depends(require_client_header)])
+async def sync_all(c: AppContext = Depends(ctx)) -> dict[str, Any]:
+    """Every channel of every character now; the ones that couldn't be read are named."""
+    count, failed = await _service(c).sync_all()
+    async with c.sessionmaker() as s:
+        rows = (await s.execute(select(SocialChannel, Character.name).join(Character)
+                                .where(SocialChannel.id.in_(failed)))).all() if failed else []
+    return {"channels": count, "failed": [{"id": str(ch.id), "character": name, "platform": ch.platform,
+                                           "handle": ch.handle, "error": failed[ch.id]} for ch, name in rows]}
+
+
 @router.get("/channels/{channel_id}/posts")
 async def posts(channel_id: str, window: Literal["7d", "30d", "all"] = "30d",
                 c: AppContext = Depends(ctx)) -> list[dict[str, Any]]:
